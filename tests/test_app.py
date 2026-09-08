@@ -28,7 +28,7 @@ class AuditTrackRelationalTests(unittest.TestCase):
             "process": "Gestión de Préstamos",
             "area": "Riesgo & Créditos",
             "period": "2026",
-            "auditor": "Luciana Gamarra",
+            "auditor": "Auditoría Interna",
             "summary": "Resumen de prueba."
         }
         findings_hierarchy = [

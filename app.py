@@ -176,7 +176,7 @@ def update_action_plan_route(plan_id):
     target_date = data.get("target_date")
     evidence_file = data.get("evidence_file")
     action_owner = data.get("action_owner")
-    user_name = data.get("user_name") or "Luciana Gamarra"
+    user_name = data.get("user_name") or "Auditoría Interna"
 
     updated = update_action_plan(plan_id, status, progress_pct, notes, target_date, evidence_file, action_owner, user_name)
     if updated:

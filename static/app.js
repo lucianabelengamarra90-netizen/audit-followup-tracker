@@ -421,7 +421,7 @@ function openNewActionPlanModal(preselectedFindingId = null) {
     proposalSelect.disabled = true;
 
     if (el("modalPlanActionText")) el("modalPlanActionText").value = "";
-    if (el("modalPlanOwner")) el("modalPlanOwner").value = "Luciana Gamarra";
+    if (el("modalPlanOwner")) el("modalPlanOwner").value = "Auditoría Interna";
     if (el("modalPlanTargetDate")) el("modalPlanTargetDate").value = new Date().toISOString().slice(0, 10);
     if (el("modalPlanProgress")) el("modalPlanProgress").value = 0;
     if (el("modalPlanNotes")) el("modalPlanNotes").value = "";
@@ -891,7 +891,7 @@ async function openFindingDrawer(findingId) {
         if (el("drawerReportName")) el("drawerReportName").textContent = `${f.report_title} (${f.report_code})`;
         if (el("drawerFileName")) el("drawerFileName").textContent = f.source_filename || "Informe.xlsx";
         if (el("drawerArea")) el("drawerArea").textContent = f.responsible_area || "Operaciones";
-        if (el("drawerOwner")) el("drawerOwner").textContent = f.action_owner || "Luciana Gamarra";
+        if (el("drawerOwner")) el("drawerOwner").textContent = f.action_owner || "Auditoría Interna";
 
         if (el("drawerSituationText")) el("drawerSituationText").textContent = f.situation || f.title;
         if (el("drawerRiskText")) el("drawerRiskText").textContent = f.risk || "Riesgo de control interno.";

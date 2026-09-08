@@ -170,7 +170,7 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
     process = (report_data.get("process") or "Proceso General").strip()
     area = (report_data.get("area") or "Operaciones").strip()
     period = (report_data.get("period") or "2026").strip()
-    auditor = (report_data.get("auditor") or "Luciana Gamarra").strip()
+    auditor = (report_data.get("auditor") or "Auditoría Interna").strip()
     summary = (report_data.get("summary") or "").strip()
 
     cursor.execute("""
@@ -848,7 +848,7 @@ def seed_relational_demo_data():
         "process": "Inventarios y Control de Stock",
         "area": "Tiendas / Stock",
         "period": "Ene-Jun 2026",
-        "auditor": "Luciana Gamarra",
+        "auditor": "Auditoría Interna",
         "summary": "Revisión integral de saldos de proveedores, rotación de activos y diferencias en recuentos físicos."
     }
 

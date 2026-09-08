@@ -261,7 +261,7 @@ def parse_docx_audittrack_structure(file_path, filename):
             "process": "Faltantes y Sobrantes de Inventario",
             "area": "Tiendas y Logística",
             "period": "Ene-Jun 2026",
-            "auditor": "Luciana Gamarra",
+            "auditor": "Auditoría Interna",
             "summary": f"Informe {filename} procesado en AuditTrack."
         },
         "findings": relational_findings
@@ -286,7 +286,7 @@ def parse_audit_report(file_path, filename):
             "process": "Control Interno de Operaciones",
             "area": "Operaciones / Stock",
             "period": "2026",
-            "auditor": "Luciana Gamarra",
+            "auditor": "Auditoría Interna",
             "summary": f"Informe {filename} ingestado en AuditTrack."
         },
         "findings": [
