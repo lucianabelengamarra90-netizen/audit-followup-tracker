@@ -1,16 +1,26 @@
 // ============================================================
-// AUDITTRACK - FRONTEND CONTROLLER (EXACT REPLICATION & WORKFLOW)
+// AUDITTRACK - FRONTEND CONTROLLER (ESTRUCTURA RELACIONAL INTEGRADA)
 // ============================================================
 
-let currentItems = [];
+let currentFindings = [];
+let currentProposals = [];
+let currentActionPlans = [];
 let currentReports = [];
+let currentDashboardStats = null;
+let currentKpiIndicators = [];
+
 let activeFilters = {
     report: "",
     area: "",
     status: "",
     risk: "",
-    search: ""
+    search: "",
+    overdue: false,
+    no_plan: false
 };
+
+let chartInstances = {};
+let selectedReportDetail = null;
 
 function el(id) { return document.getElementById(id); }
 
@@ -46,48 +56,57 @@ function switchTab(tabName) {
     });
 
     if (tabName === "informes") loadReports();
-    if (tabName === "propuestas") renderProposalsTab(currentItems);
-    if (tabName === "planes") renderActionPlansTab(currentItems);
-    if (tabName === "tableros") loadDashboardKPIs();
+    if (tabName === "hallazgos") renderAuditTrackTable(currentFindings);
+    if (tabName === "propuestas") renderProposalsTab();
+    if (tabName === "planes") renderActionPlansTab();
+    if (tabName === "tableros") loadDashboardTab();
+    if (tabName === "indicadores") loadKpiIndicatorsTab();
 }
 
 // ============================================================
-// DATA LOADING & FILTERING
+// DATA LOADING
 // ============================================================
 
-async function loadAuditTrackData() {
+async function loadAllData() {
     try {
-        const response = await fetch("/findings");
-        if (!response.ok) return;
-        const data = await response.json();
-        currentItems = data.findings || [];
-        
-        populateFilterDropdowns(currentItems);
-        renderAuditTrackTable(currentItems);
-        renderProposalsTab(currentItems);
-        renderActionPlansTab(currentItems);
-        updateSidebarMetrics(currentItems);
+        const [resF, resP, resPA, resR] = await Promise.all([
+            fetch("/findings"),
+            fetch("/proposals"),
+            fetch("/action-plans"),
+            fetch("/reports")
+        ]);
+
+        if (resF.ok) currentFindings = (await resF.json()).findings || [];
+        if (resP.ok) currentProposals = (await resP.json()).proposals || [];
+        if (resPA.ok) currentActionPlans = (await resPA.json()).action_plans || [];
+        if (resR.ok) currentReports = (await resR.json()).reports || [];
+
+        populateFilterDropdowns();
+        renderAuditTrackTable(currentFindings);
+        renderProposalsTab();
+        renderActionPlansTab();
+        updateSidebarMetrics();
     } catch (err) {
-        console.error("Error cargando datos de AuditTrack:", err);
+        console.error("Error cargando estructura relacional de AuditTrack:", err);
     }
 }
 
-function populateFilterDropdowns(items) {
+function populateFilterDropdowns() {
     const reportSelect = el("filterReportSelect");
     const areaSelect = el("filterAreaSelect");
 
     if (reportSelect) {
-        const reports = Array.from(new Set(items.map(i => i.report_title).filter(Boolean))).sort();
-        const currentVal = reportSelect.value;
+        const reports = Array.from(new Set(currentFindings.map(i => i.report_title).filter(Boolean))).sort();
+        const cur = reportSelect.value;
         reportSelect.innerHTML = `<option value="">Todos los informes</option>` +
-            reports.map(r => `<option value="${escapeHtml(r)}"${r === currentVal ? " selected" : ""}>${escapeHtml(r)}</option>`).join("");
+            reports.map(r => `<option value="${escapeHtml(r)}"${r === cur ? " selected" : ""}>${escapeHtml(r)}</option>`).join("");
     }
 
     if (areaSelect) {
-        const areas = Array.from(new Set(items.map(i => i.responsible_area).filter(Boolean))).sort();
-        const currentVal = areaSelect.value;
+        const areas = Array.from(new Set(currentFindings.map(i => i.responsible_area).filter(Boolean))).sort();
+        const cur = areaSelect.value;
         areaSelect.innerHTML = `<option value="">Todas las áreas</option>` +
-            areas.map(a => `<option value="${escapeHtml(a)}"${a === currentVal ? " selected" : ""}>${escapeHtml(a)}</option>`).join("");
+            areas.map(a => `<option value="${escapeHtml(a)}"${a === cur ? " selected" : ""}>${escapeHtml(a)}</option>`).join("");
     }
 }
 
@@ -96,13 +115,12 @@ function applyFilters() {
     activeFilters.area = el("filterAreaSelect")?.value || "";
     activeFilters.status = el("filterStatusSelect")?.value || "";
     activeFilters.risk = el("filterRiskSelect")?.value || "";
-    
-    filterAndRenderTable();
+    filterAndRenderAll();
 }
 
 function onGlobalSearch(query) {
     activeFilters.search = (query || "").trim();
-    filterAndRenderTable();
+    filterAndRenderAll();
 }
 
 function clearFilters() {
@@ -112,57 +130,52 @@ function clearFilters() {
     if (el("filterRiskSelect")) el("filterRiskSelect").value = "";
     if (el("globalSearchInput")) el("globalSearchInput").value = "";
 
-    activeFilters = { report: "", area: "", status: "", risk: "", search: "" };
-    filterAndRenderTable();
+    activeFilters = { report: "", area: "", status: "", risk: "", search: "", overdue: false, no_plan: false };
+    filterAndRenderAll();
 }
 
 function toggleFilterBar() {
     const bar = el("filterBarContainer");
-    if (bar) {
-        bar.style.display = bar.style.display === "none" ? "flex" : "none";
-    }
+    if (bar) bar.style.display = bar.style.display === "none" ? "flex" : "none";
 }
 
-function filterAndRenderTable() {
-    let filtered = [...currentItems];
+function filterAndRenderAll() {
+    let filteredF = [...currentFindings];
 
     if (activeFilters.report) {
-        filtered = filtered.filter(i => (i.report_title || "").toLowerCase() === activeFilters.report.toLowerCase());
+        filteredF = filteredF.filter(i => (i.report_title || "").toLowerCase() === activeFilters.report.toLowerCase());
     }
-
     if (activeFilters.area) {
-        filtered = filtered.filter(i => (i.responsible_area || "").toLowerCase() === activeFilters.area.toLowerCase());
+        filteredF = filteredF.filter(i => (i.responsible_area || "").toLowerCase() === activeFilters.area.toLowerCase());
     }
-
     if (activeFilters.status) {
-        filtered = filtered.filter(i => (i.status || "").toLowerCase() === activeFilters.status.toLowerCase());
+        filteredF = filteredF.filter(i => (i.status || "").toLowerCase() === activeFilters.status.toLowerCase());
     }
-
     if (activeFilters.risk) {
-        filtered = filtered.filter(i => (i.severity || "").toLowerCase() === activeFilters.risk.toLowerCase());
+        filteredF = filteredF.filter(i => (i.severity || "").toLowerCase() === activeFilters.risk.toLowerCase());
     }
-
     if (activeFilters.search) {
         const q = activeFilters.search.toLowerCase();
-        filtered = filtered.filter(i =>
+        filteredF = filteredF.filter(i =>
             (i.code || "").toLowerCase().includes(q) ||
             (i.title || "").toLowerCase().includes(q) ||
             (i.situation || "").toLowerCase().includes(q) ||
-            (i.proposal || "").toLowerCase().includes(q) ||
             (i.responsible_area || "").toLowerCase().includes(q) ||
             (i.report_title || "").toLowerCase().includes(q) ||
-            (i.source_filename || "").toLowerCase().includes(q) ||
             (i.action_owner || "").toLowerCase().includes(q)
         );
     }
+    if (activeFilters.no_plan) {
+        filteredF = filteredF.filter(i => (i.action_plans_count || 0) === 0);
+    }
 
-    renderAuditTrackTable(filtered);
-    renderProposalsTab(filtered);
-    renderActionPlansTab(filtered);
+    renderAuditTrackTable(filteredF);
+    renderProposalsTab();
+    renderActionPlansTab();
 }
 
 // ============================================================
-// MAIN TABLE RENDERER (ÁREA PRIMERO, HALLAZGO Y PROPUESTA AL LADO)
+// 1. MAIN TABLE (ÁREA PRIMERO + TRAZABILIDAD DESPLEGABLE CON FLECHA)
 // ============================================================
 
 function renderAuditTrackTable(items) {
@@ -171,15 +184,16 @@ function renderAuditTrackTable(items) {
     if (!tbody) return;
 
     if (countSpan) {
-        countSpan.textContent = `Mostrando ${items.length} de ${currentItems.length} registros`;
+        countSpan.textContent = `Mostrando ${items.length} de ${currentFindings.length} hallazgos`;
     }
 
     if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #64748b; padding: 36px;">No hay datos registrados aún. Subí tu informe de auditoría en la pestaña <strong>Informes</strong> arriba.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #64748b; padding: 36px;">No hay hallazgos con los filtros aplicados. Cargar informe en la pestaña <strong>Informes</strong> arriba.</td></tr>`;
         return;
     }
 
-    tbody.innerHTML = items.map(item => {
+    let html = "";
+    items.forEach((item, index) => {
         const riskPill = item.severity === "Alto"
             ? `<span class="pill pill-alto">Alto</span>`
             : item.severity === "Medio"
@@ -189,27 +203,39 @@ function renderAuditTrackTable(items) {
         const statusSlug = (item.status || "Pendiente").toLowerCase().replace(/\s+/g, "-");
         const statusPill = `<span class="pill pill-${statusSlug}">${escapeHtml(item.status)}</span>`;
 
-        // File icon check
         const filename = item.source_filename || "Informe.xlsx";
         const fileExt = filename.includes(".") ? filename.split(".").pop().toLowerCase() : "xlsx";
         let fileIcon = "📊";
         if (fileExt === "pdf") fileIcon = "📄";
         if (fileExt === "docx") fileIcon = "📝";
 
-        const proposalText = item.proposal
-            ? `<div style="color: #15803D; font-weight: 500;">💡 ${escapeHtml(item.proposal)}</div>`
-            : `<button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="transitionToProposal('${item.id}')">+ Definir Propuesta</button>`;
+        // Propuesta vinculada pareada
+        const firstProp = (item.proposals && item.proposals.length > 0) ? item.proposals[0] : null;
+        const linkedCell = firstProp
+            ? `<a href="#" style="color:#0055D4; font-weight:600;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(firstProp.code)}</a>`
+            : `<span style="color:#94A3B8; font-size:11px;">Sin propuesta</span>`;
 
-        return `
-            <tr>
-                <td style="font-weight: 700; color: #1E293B;">${escapeHtml(item.responsible_area || 'Operaciones')}</td>
-                <td class="id-cell">${escapeHtml(item.code)}</td>
+        const propText = firstProp
+            ? `<div style="color: #16A34A; font-weight: 500;">💡 ${escapeHtml(firstProp.proposal_text || firstProp.title)}</div>`
+            : `<button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">+ Agregar Propuesta</button>`;
+
+        const rowId = `row-finding-${index}`;
+
+        html += `
+            <tr id="${rowId}">
                 <td>
-                    <strong style="color: #0F172A;">${escapeHtml(item.title)}</strong>
-                    <div style="font-size: 11px; color: #64748B; margin-top: 3px;">${escapeHtml(item.situation || item.title)}</div>
+                    <button type="button" class="expand-btn" onclick="toggleTraceRow('${rowId}', '${item.id}')">►</button>
                 </td>
-                <td>${proposalText}</td>
-                <td>${escapeHtml(item.report_title)}</td>
+                <td style="font-weight: 700; color: #1E293B;">${escapeHtml(item.responsible_area || 'Operaciones')}</td>
+                <td>
+                    <a href="#" class="id-cell" style="color: #0055D4; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(item.code)}</a>
+                </td>
+                <td>
+                    <strong style="color: #0F172A; cursor:pointer;" onclick="openFindingDrawer('${item.id}')">${escapeHtml(item.title)}</strong>
+                    <div style="font-size: 11px; color: #64748B; margin-top: 3px;">${escapeHtml(item.situation)}</div>
+                </td>
+                <td>${linkedCell}</td>
+                <td>${propText}</td>
                 <td>
                     <div class="file-cell">
                         <span class="file-icon">${fileIcon}</span>
@@ -219,276 +245,491 @@ function renderAuditTrackTable(items) {
                 <td>${riskPill}</td>
                 <td>${statusPill}</td>
                 <td><strong>${escapeHtml(item.action_owner || 'Sin asignar')}</strong></td>
-                <td>${escapeHtml(item.target_date || '30/09/2026')}</td>
                 <td>
-                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                        <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="transitionToActionPlan('${item.id}')">📋 Plan Acción</button>
-                        <button class="btn-link" style="font-size: 14px; text-decoration: none;" onclick="openEditModal('${item.id}')">⚙️</button>
+                    <div style="display: flex; gap: 4px;">
+                        <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openNewActionPlanModal('${item.id}')">📋 + Plan</button>
+                        <button class="btn-link" style="font-size: 14px; text-decoration: none;" onclick="openFindingDrawer('${item.id}')">👁️ Ver</button>
                     </div>
+                </td>
+            </tr>
+            <tr id="${rowId}-nested" class="nested-trace-row" style="display: none;">
+                <td colspan="11">
+                    <div class="nested-trace-box" id="${rowId}-nested-content">
+                        <!-- Carga dinámica de la jerarquía completa -->
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+
+    tbody.innerHTML = html;
+}
+
+function toggleTraceRow(rowId, findingId) {
+    const btn = document.querySelector(`#${rowId} .expand-btn`);
+    const nestedTr = el(`${rowId}-nested`);
+    const contentBox = el(`${rowId}-nested-content`);
+
+    if (!nestedTr || !contentBox) return;
+
+    if (nestedTr.style.display === "none") {
+        nestedTr.style.display = "table-row";
+        if (btn) btn.textContent = "▼";
+
+        const item = currentFindings.find(f => f.id === findingId);
+        if (!item) return;
+
+        let propsHtml = "";
+        if (item.proposals && item.proposals.length > 0) {
+            propsHtml = item.proposals.map(p => {
+                let plansHtml = "";
+                if (p.action_plans && p.action_plans.length > 0) {
+                    plansHtml = p.action_plans.map(pa => `
+                        <div style="background:#FFFFFF; border:1px solid #CBD5E1; border-radius:6px; padding:8px 12px; margin-top:6px; font-size:12px;">
+                            <strong>📋 Plan ${escapeHtml(pa.code)}:</strong> ${escapeHtml(pa.action_text)}
+                            <div style="font-size:11px; color:#64748B; margin-top:2px;">
+                                Responsable: <strong>${escapeHtml(pa.action_owner)}</strong> · Fecha: <strong>${escapeHtml(pa.target_date)}</strong> · Avance: <strong>${pa.progress_pct}%</strong> · Estado: <span class="pill pill-${(pa.status||'en-proceso').toLowerCase()}">${escapeHtml(pa.status)}</span>
+                            </div>
+                        </div>
+                    `).join("");
+                } else {
+                    plansHtml = `<div style="font-size:11px; color:#94A3B8; margin-top:4px;">Sin planes de acción creados aún.</div>`;
+                }
+
+                return `
+                    <div style="background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px; padding:10px 14px; margin-bottom:8px;">
+                        <strong style="color:#0055D4;">💡 Propuesta ${escapeHtml(p.code)}:</strong> ${escapeHtml(p.proposal_text || p.title)}
+                        <div style="margin-top:6px;">${plansHtml}</div>
+                    </div>
+                `;
+            }).join("");
+        } else {
+            propsHtml = `<div style="font-size:12px; color:#64748B;">No hay propuestas de mejora registradas para este hallazgo.</div>`;
+        }
+
+        contentBox.innerHTML = `
+            <div style="font-size:12px;">
+                <strong style="color:#0F172A; text-transform:uppercase;">Cadena de Trazabilidad Relacional (${escapeHtml(item.code)})</strong>
+                <div style="margin-top:8px;">${propsHtml}</div>
+            </div>
+        `;
+    } else {
+        nestedTr.style.display = "none";
+        if (btn) btn.textContent = "►";
+    }
+}
+
+// ============================================================
+// 2. PROPUESTAS DE MEJORA TAB
+// ============================================================
+
+function renderProposalsTab() {
+    const tbody = el("proposalsTableBody");
+    if (!tbody) return;
+
+    const total = currentProposals.length;
+    const noPlan = currentProposals.filter(p => (p.action_plans_count || 0) === 0).length;
+    const inProcess = currentProposals.filter(p => (p.status || "").toLowerCase() === "en proceso").length;
+    const completed = currentProposals.filter(p => ["completada", "implementada"].includes((p.status || "").toLowerCase())).length;
+
+    if (el("propKpiTotal")) el("propKpiTotal").textContent = total;
+    if (el("propKpiNoPlan")) el("propKpiNoPlan").textContent = noPlan;
+    if (el("propKpiInProcess")) el("propKpiInProcess").textContent = inProcess;
+    if (el("propKpiCompleted")) el("propKpiCompleted").textContent = completed;
+
+    if (!currentProposals.length) {
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 36px;">No hay propuestas registradas. Cargar informe en la pestaña <strong>Informes</strong>.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = currentProposals.map(p => `
+        <tr>
+            <td class="id-cell">${escapeHtml(p.code)}</td>
+            <td><strong style="color:#16A34A;">💡 ${escapeHtml(p.proposal_text || p.title)}</strong></td>
+            <td>
+                <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${p.finding_id}'); return false;">${escapeHtml(p.finding_code)}</a>
+            </td>
+            <td>${escapeHtml(p.report_title)}</td>
+            <td><strong>${escapeHtml(p.responsible_area || 'Operaciones')}</strong></td>
+            <td><span class="pill pill-${(p.status||'en-proceso').toLowerCase()}">${escapeHtml(p.status)}</span></td>
+            <td>${escapeHtml(p.action_owner || 'Auditoría')}</td>
+            <td>
+                <button class="btn btn-outlined" style="padding:2px 8px; font-size:11px;" onclick="switchTab('planes')">
+                    ${p.action_plans_count || 0} plan(es)
+                </button>
+            </td>
+            <td>${escapeHtml(p.target_date || '31/10/2026')}</td>
+        </tr>
+    `).join("");
+}
+
+// ============================================================
+// 3. PLANES DE ACCIÓN TAB & CASCADING MODAL
+// ============================================================
+
+function renderActionPlansTab() {
+    const tbody = el("actionPlansTableBody");
+    if (!tbody) return;
+
+    if (!currentActionPlans.length) {
+        tbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #64748b; padding: 36px;">No hay planes de acción registrados. Hacé clic en "+ Crear Plan de Acción" arriba.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = currentActionPlans.map(pa => `
+        <tr>
+            <td class="id-cell">${escapeHtml(pa.code)}</td>
+            <td><strong>${escapeHtml(pa.action_text || pa.title)}</strong></td>
+            <td><span style="color:#16A34A; font-weight:600;">💡 ${escapeHtml(pa.proposal_code)}</span></td>
+            <td>
+                <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${pa.finding_code}'); return false;">${escapeHtml(pa.finding_code)}</a>
+            </td>
+            <td>${escapeHtml(pa.report_title)}</td>
+            <td><strong>${escapeHtml(pa.action_owner)}</strong></td>
+            <td>${escapeHtml(pa.target_date || '30/09/2026')}</td>
+            <td>
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <div style="background:#E2E8F0; border-radius:4px; height:8px; flex:1; overflow:hidden;">
+                        <div style="background:var(--primary-blue); width:${pa.progress_pct || 0}%; height:100%;"></div>
+                    </div>
+                    <span>${pa.progress_pct || 0}%</span>
+                </div>
+            </td>
+            <td><span class="pill pill-${(pa.status||'en-proceso').toLowerCase()}">${escapeHtml(pa.status)}</span></td>
+            <td>${pa.evidence_file ? `📎 <small>${escapeHtml(pa.evidence_file)}</small>` : `<span style="color:#94A3B8;">Sin evidencia</span>`}</td>
+            <td>
+                <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openUpdatePlanModal('${pa.id}')">⚙️ Actualizar</button>
+            </td>
+        </tr>
+    `).join("");
+}
+
+function openNewActionPlanModal(preselectedFindingId = null) {
+    const reportSelect = el("modalPlanReport");
+    const findingSelect = el("modalPlanFinding");
+    const proposalSelect = el("modalPlanProposal");
+
+    if (!reportSelect || !findingSelect || !proposalSelect) return;
+
+    reportSelect.innerHTML = `<option value="">-- Seleccionar Informe --</option>` +
+        currentReports.map(r => `<option value="${r.id}">${escapeHtml(r.title)} (${r.code})</option>`).join("");
+
+    findingSelect.innerHTML = `<option value="">Seleccioná un informe primero...</option>`;
+    findingSelect.disabled = true;
+
+    proposalSelect.innerHTML = `<option value="">Seleccioná un hallazgo primero...</option>`;
+    proposalSelect.disabled = true;
+
+    if (el("modalPlanActionText")) el("modalPlanActionText").value = "";
+    if (el("modalPlanOwner")) el("modalPlanOwner").value = "Luciana Gamarra";
+    if (el("modalPlanTargetDate")) el("modalPlanTargetDate").value = new Date().toISOString().slice(0, 10);
+    if (el("modalPlanProgress")) el("modalPlanProgress").value = 0;
+    if (el("modalPlanNotes")) el("modalPlanNotes").value = "";
+
+    if (preselectedFindingId) {
+        const f = currentFindings.find(item => item.id === preselectedFindingId || item.code === preselectedFindingId);
+        if (f) {
+            reportSelect.value = f.report_id;
+            onModalReportChange(f.report_id);
+            findingSelect.value = f.id;
+            onModalFindingChange(f.id);
+        }
+    }
+
+    if (el("actionPlanModal")) el("actionPlanModal").style.display = "flex";
+}
+
+function closeActionPlanModal() {
+    if (el("actionPlanModal")) el("actionPlanModal").style.display = "none";
+}
+
+function onModalReportChange(reportId) {
+    const findingSelect = el("modalPlanFinding");
+    const proposalSelect = el("modalPlanProposal");
+
+    if (!findingSelect || !proposalSelect) return;
+
+    if (!reportId) {
+        findingSelect.innerHTML = `<option value="">Seleccioná un informe primero...</option>`;
+        findingSelect.disabled = true;
+        proposalSelect.innerHTML = `<option value="">Seleccioná un hallazgo primero...</option>`;
+        proposalSelect.disabled = true;
+        return;
+    }
+
+    const filtered = currentFindings.filter(f => f.report_id === reportId);
+    findingSelect.innerHTML = `<option value="">-- Seleccionar Hallazgo --</option>` +
+        filtered.map(f => `<option value="${f.id}">${escapeHtml(f.code)} - ${escapeHtml(f.title)}</option>`).join("");
+    findingSelect.disabled = false;
+
+    proposalSelect.innerHTML = `<option value="">Seleccioná un hallazgo primero...</option>`;
+    proposalSelect.disabled = true;
+}
+
+function onModalFindingChange(findingId) {
+    const proposalSelect = el("modalPlanProposal");
+    if (!proposalSelect) return;
+
+    if (!findingId) {
+        proposalSelect.innerHTML = `<option value="">Seleccioná un hallazgo primero...</option>`;
+        proposalSelect.disabled = true;
+        return;
+    }
+
+    const finding = currentFindings.find(f => f.id === findingId);
+    const proposals = finding ? (finding.proposals || []) : [];
+
+    if (!proposals.length) {
+        proposalSelect.innerHTML = `<option value="">Este hallazgo no tiene propuestas. Creando propuesta automática...</option>`;
+        proposalSelect.disabled = false;
+        return;
+    }
+
+    proposalSelect.innerHTML = `<option value="">-- Seleccionar Propuesta --</option>` +
+        proposals.map(p => `<option value="${p.id}">${escapeHtml(p.code)} - ${escapeHtml(p.proposal_text || p.title)}</option>`).join("");
+    proposalSelect.disabled = false;
+}
+
+async function saveActionPlanFromModal() {
+    const proposal_id = el("modalPlanProposal")?.value;
+    const action_text = el("modalPlanActionText")?.value;
+    const action_owner = el("modalPlanOwner")?.value;
+    const target_date = el("modalPlanTargetDate")?.value;
+    const status = el("modalPlanStatus")?.value;
+    const progress_pct = el("modalPlanProgress")?.value;
+    const notes = el("modalPlanNotes")?.value;
+
+    if (!proposal_id || !action_text) {
+        showToast("Por favor seleccioná una propuesta y completá la acción comprometida.", "warning");
+        return;
+    }
+
+    try {
+        const response = await fetch("/action-plans", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ proposal_id, action_text, action_owner, target_date, status, progress_pct, notes })
+        });
+
+        if (response.ok) {
+            showToast("Plan de Acción creado correctamente.", "success");
+            closeActionPlanModal();
+            loadAllData();
+        } else {
+            showToast("Error al crear el Plan de Acción.", "error");
+        }
+    } catch (err) {
+        console.error(err);
+        showToast("Error de conexión.", "error");
+    }
+}
+
+function openUpdatePlanModal(planId) {
+    const plan = currentActionPlans.find(p => p.id === planId);
+    if (!plan) return;
+
+    const newPct = prompt(`Actualizar porcentaje de avance para ${plan.code} (0-100):`, plan.progress_pct || 0);
+    if (newPct === null) return;
+
+    const newStatus = prompt(`Actualizar estado (En proceso / Pendiente / Completada):`, plan.status || "En proceso");
+    if (!newStatus) return;
+
+    fetch(`/action-plans/${plan.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ progress_pct: parseInt(newPct) || 0, status: newStatus })
+    }).then(res => {
+        if (res.ok) {
+            showToast("Plan actualizado.", "success");
+            loadAllData();
+        }
+    });
+}
+
+// ============================================================
+// 4. TABLEROS (GERENCIAL DASHBOARD CON CHART.JS Y FILTROS INTERACTIVOS)
+// ============================================================
+
+async function loadDashboardTab() {
+    try {
+        const res = await fetch("/dashboard-stats");
+        if (!res.ok) return;
+        currentDashboardStats = await res.json();
+
+        if (el("dashOpen")) el("dashOpen").textContent = currentDashboardStats.open_findings || 0;
+        if (el("dashHigh")) el("dashHigh").textContent = currentDashboardStats.high_risk_findings || 0;
+        if (el("dashProp")) el("dashProp").textContent = currentDashboardStats.total_proposals || 0;
+        if (el("dashOverdue")) el("dashOverdue").textContent = currentDashboardStats.overdue_plans || 0;
+        if (el("dashRate")) el("dashRate").textContent = `${currentDashboardStats.impl_rate || 0}%`;
+
+        renderDashboardCharts(currentDashboardStats);
+        renderCriticalPendingTable(currentDashboardStats.critical_pending || []);
+    } catch (err) {
+        console.error("Error cargando dashboard:", err);
+    }
+}
+
+function renderDashboardCharts(stats) {
+    // 1. Chart Risk
+    const ctxRisk = el("chartRisk")?.getContext("2d");
+    if (ctxRisk) {
+        if (chartInstances.risk) chartInstances.risk.destroy();
+        chartInstances.risk = new Chart(ctxRisk, {
+            type: "doughnut",
+            data: {
+                labels: ["Alto", "Medio", "Bajo"],
+                datasets: [{
+                    data: [stats.risk_breakdown["Alto"] || 0, stats.risk_breakdown["Medio"] || 0, stats.risk_breakdown["Bajo"] || 0],
+                    backgroundColor: ["#DC2626", "#D97706", "#16A34A"]
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { position: "bottom" } },
+                onClick: (e, items) => {
+                    if (items.length > 0) {
+                        const label = ["Alto", "Medio", "Bajo"][items[0].index];
+                        activeFilters.risk = label;
+                        switchTab("hallazgos");
+                        applyFilters();
+                    }
+                }
+            }
+        });
+    }
+
+    // 2. Chart Status
+    const ctxStatus = el("chartStatus")?.getContext("2d");
+    if (ctxStatus) {
+        if (chartInstances.status) chartInstances.status.destroy();
+        const labels = Object.keys(stats.status_breakdown || {});
+        const dataVals = Object.values(stats.status_breakdown || {});
+        chartInstances.status = new Chart(ctxStatus, {
+            type: "bar",
+            data: {
+                labels: labels.length ? labels : ["Pendiente", "En proceso", "Completada"],
+                datasets: [{
+                    label: "Hallazgos",
+                    data: dataVals.length ? dataVals : [0, 0, 0],
+                    backgroundColor: "#0055D4"
+                }]
+            },
+            options: { responsive: true, plugins: { legend: { display: false } } }
+        });
+    }
+
+    // 3. Chart Plans
+    const ctxPlans = el("chartPlans")?.getContext("2d");
+    if (ctxPlans) {
+        if (chartInstances.plans) chartInstances.plans.destroy();
+        chartInstances.plans = new Chart(ctxPlans, {
+            type: "pie",
+            data: {
+                labels: ["En término", "Planes Vencidos"],
+                datasets: [{
+                    data: [(currentActionPlans.length - (stats.overdue_plans || 0)), stats.overdue_plans || 0],
+                    backgroundColor: ["#16A34A", "#B42318"]
+                }]
+            },
+            options: { responsive: true, plugins: { legend: { position: "bottom" } } }
+        });
+    }
+
+    // 4. Chart Aging
+    const ctxAging = el("chartAging")?.getContext("2d");
+    if (ctxAging) {
+        if (chartInstances.aging) chartInstances.aging.destroy();
+        const agingData = stats.aging_breakdown || {};
+        chartInstances.aging = new Chart(ctxAging, {
+            type: "bar",
+            data: {
+                labels: Object.keys(agingData),
+                datasets: [{
+                    label: "Hallazgos por Antigüedad",
+                    data: Object.values(agingData),
+                    backgroundColor: ["#16A34A", "#0055D4", "#D97706", "#DC2626"]
+                }]
+            },
+            options: { responsive: true, plugins: { legend: { display: false } } }
+        });
+    }
+}
+
+function renderCriticalPendingTable(criticalItems) {
+    const tbody = el("criticalPendingTableBody");
+    if (!tbody) return;
+
+    if (!criticalItems.length) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #16A34A; padding: 24px;">¡Excelente! No hay pendientes críticos ni planes vencidos.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = criticalItems.map(item => `
+        <tr>
+            <td>
+                <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${item.code}'); return false;">${escapeHtml(item.code)}</a> -
+                <strong>${escapeHtml(item.title)}</strong>
+            </td>
+            <td><span class="pill pill-${(item.severity||'alto').toLowerCase()}">${escapeHtml(item.severity)}</span></td>
+            <td>${escapeHtml(item.area)}</td>
+            <td><strong>${escapeHtml(item.owner)}</strong></td>
+            <td>${escapeHtml(item.target_date)}</td>
+            <td>
+                <strong style="color: ${item.days_overdue > 0 ? '#DC2626' : '#D97706'};">
+                    ${item.days_overdue > 0 ? `⚠️ ${item.days_overdue} días` : 'Al día'}
+                </strong>
+            </td>
+        </tr>
+    `).join("");
+}
+
+// ============================================================
+// 5. INDICADORES TAB (KPIs DE AUDITORÍA CON SEMÁFOROS Y FILTROS)
+// ============================================================
+
+async function loadKpiIndicatorsTab() {
+    try {
+        const res = await fetch("/kpi-indicators");
+        if (!res.ok) return;
+        currentKpiIndicators = (await res.json()).indicators || [];
+        renderKpiIndicatorsTable(currentKpiIndicators);
+    } catch (err) {
+        console.error("Error cargando indicadores:", err);
+    }
+}
+
+function renderKpiIndicatorsTable(indicators) {
+    const tbody = el("kpiTableBody");
+    if (!tbody) return;
+
+    tbody.innerHTML = indicators.map(kpi => {
+        const colorClass = kpi.status === "Verde" ? "semaforo-verde" : kpi.status === "Amarillo" ? "semaforo-amarillo" : "semaforo-rojo";
+        return `
+            <tr>
+                <td><strong>${escapeHtml(kpi.name)}</strong></td>
+                <td style="font-size: 16px; font-weight: 700; color: #0F172A;">${escapeHtml(kpi.value)}</td>
+                <td><span style="font-size: 12px; color: #64748B;">${escapeHtml(kpi.target)}</span></td>
+                <td><span class="semaforo-badge ${colorClass}">● ${escapeHtml(kpi.status)}</span></td>
+                <td>
+                    <button class="btn btn-outlined" style="padding: 4px 10px; font-size: 11px;" onclick="applyKpiFilter('${kpi.filter_key}', '${kpi.filter_val}')">👁️ Ver Registros</button>
                 </td>
             </tr>
         `;
     }).join("");
 }
 
-// ============================================================
-// DEDICATED TAB: PROPUESTAS DE MEJORA
-// ============================================================
+function applyKpiFilter(key, val) {
+    if (key === "severity") activeFilters.risk = val;
+    if (key === "status") activeFilters.status = val;
+    if (key === "no_plan") activeFilters.no_plan = true;
 
-function renderProposalsTab(items) {
-    const container = el("proposalsContainer");
-    if (!container) return;
-
-    const proposals = items.filter(i => i.proposal || i.type === "Propuesta");
-
-    if (!proposals.length) {
-        container.innerHTML = `
-            <div style="text-align: center; color: #64748b; padding: 40px;">
-                <h4>No hay propuestas registradas aún.</h4>
-                <p style="font-size: 12px; margin-top: 6px;">Cargá un informe de auditoría o hacé clic en "+ Nueva propuesta" en la vista principal para definir las recomendaciones.</p>
-            </div>
-        `;
-        return;
-    }
-
-    container.innerHTML = `
-        <table class="audittrack-table">
-            <thead>
-                <tr>
-                    <th>Área</th>
-                    <th>ID</th>
-                    <th>Hallazgo Vinculado</th>
-                    <th>Propuesta de Mejora (Recomendación)</th>
-                    <th>Riesgo</th>
-                    <th>Estado</th>
-                    <th>Acción</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${proposals.map(p => `
-                    <tr>
-                        <td><strong>${escapeHtml(p.responsible_area)}</strong></td>
-                        <td class="id-cell">${escapeHtml(p.code)}</td>
-                        <td>${escapeHtml(p.title)}</td>
-                        <td><strong style="color: #16A34A;">💡 ${escapeHtml(p.proposal || p.title)}</strong></td>
-                        <td><span class="pill pill-${(p.severity||'medio').toLowerCase()}">${escapeHtml(p.severity)}</span></td>
-                        <td><span class="pill pill-${(p.status||'pendiente').toLowerCase().replace(/\s+/g, '-')}">${escapeHtml(p.status)}</span></td>
-                        <td>
-                            <button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;" onclick="transitionToActionPlan('${p.id}')">📋 Pasar a Plan de Acción</button>
-                        </td>
-                    </tr>
-                `).join("")}
-            </tbody>
-        </table>
-    `;
+    switchTab("hallazgos");
+    filterAndRenderAll();
 }
 
 // ============================================================
-// DEDICATED TAB: PLANES DE ACCIÓN
+// 6. INFORMES TAB & SUB-TABS (REGISTRO PADRE)
 // ============================================================
-
-function renderActionPlansTab(items) {
-    const container = el("actionPlansContainer");
-    if (!container) return;
-
-    const plans = items.filter(i => i.type === "Plan de Acción" || (i.status && i.status !== "Pendiente") || i.action_owner);
-
-    if (!plans.length) {
-        container.innerHTML = `
-            <div style="text-align: center; color: #64748b; padding: 40px;">
-                <h4>No hay planes de acción iniciados aún.</h4>
-                <p style="font-size: 12px; margin-top: 6px;">Para iniciar un plan de acción, hacé clic en "📋 Plan Acción" en cualquier hallazgo o propuesta.</p>
-            </div>
-        `;
-        return;
-    }
-
-    container.innerHTML = `
-        <table class="audittrack-table">
-            <thead>
-                <tr>
-                    <th>Área Responsable</th>
-                    <th>ID</th>
-                    <th>Propuesta / Medida a Implementar</th>
-                    <th>Responsable Plan</th>
-                    <th>Fecha Compromiso</th>
-                    <th>Estado</th>
-                    <th>Gestión</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${plans.map(plan => `
-                    <tr>
-                        <td><strong>${escapeHtml(plan.responsible_area)}</strong></td>
-                        <td class="id-cell">${escapeHtml(plan.code)}</td>
-                        <td><strong>${escapeHtml(plan.proposal || plan.title)}</strong></td>
-                        <td><strong>${escapeHtml(plan.action_owner || 'Sin asignar')}</strong></td>
-                        <td>${escapeHtml(plan.target_date || '30/09/2026')}</td>
-                        <td><span class="pill pill-${(plan.status||'en-proceso').toLowerCase().replace(/\s+/g, '-')}">${escapeHtml(plan.status)}</span></td>
-                        <td>
-                            <button class="btn btn-outlined" style="padding: 4px 10px; font-size: 11px;" onclick="openEditModal('${plan.id}')">⚙️ Actualizar Avance</button>
-                        </td>
-                    </tr>
-                `).join("")}
-            </tbody>
-        </table>
-    `;
-}
-
-// ============================================================
-// WORKFLOW TRANSITIONS (BOTONES INTERACTIVOS)
-// ============================================================
-
-function transitionToProposal(itemId) {
-    openEditModal(itemId);
-    if (el("modalType")) el("modalType").value = "Propuesta";
-    if (el("modalProposal") && !el("modalProposal").value) {
-        el("modalProposal").value = "Implementar control preventivo y revisión de procesos.";
-    }
-}
-
-function transitionToActionPlan(itemId) {
-    openEditModal(itemId);
-    if (el("modalType")) el("modalType").value = "Plan de Acción";
-    if (el("modalStatus")) el("modalStatus").value = "En proceso";
-}
-
-function updateSidebarMetrics(items) {
-    const openCountEl = el("sidebarOpenCount");
-    const progressBarEl = el("sidebarProgressBar");
-    const pctEl = el("sidebarPct");
-
-    const total = items.length;
-    if (total === 0) {
-        if (openCountEl) openCountEl.textContent = 0;
-        if (progressBarEl) progressBarEl.style.width = `0%`;
-        if (pctEl) pctEl.textContent = `0%`;
-        return;
-    }
-
-    const openCount = items.filter(i => (i.status || "").toLowerCase() !== "completada").length;
-    const inProcessCount = items.filter(i => ["en proceso", "planificada", "completada"].includes((i.status || "").toLowerCase())).length;
-    const pct = Math.round((inProcessCount / total) * 100);
-
-    if (openCountEl) openCountEl.textContent = openCount;
-    if (progressBarEl) progressBarEl.style.width = `${pct}%`;
-    if (pctEl) pctEl.textContent = `${pct}%`;
-}
-
-// ============================================================
-// MODALS FOR EDITING / CREATING
-// ============================================================
-
-function openNewFindingModal(defaultType = "Hallazgo") {
-    if (el("modalTitle")) el("modalTitle").textContent = `Nuevo ${defaultType}`;
-    if (el("modalItemId")) el("modalItemId").value = "";
-    if (el("modalType")) el("modalType").value = defaultType;
-    if (el("modalRisk")) el("modalRisk").value = "Alto";
-    if (el("modalItemTitle")) el("modalItemTitle").value = "";
-    if (el("modalArea")) el("modalArea").value = "Contabilidad";
-    if (el("modalReportTitle")) el("modalReportTitle").value = "Informe Auditoría 2026";
-    if (el("modalStatus")) el("modalStatus").value = "Pendiente";
-    if (el("modalOwner")) el("modalOwner").value = "Luciana Gamarra";
-    if (el("modalTargetDate")) el("modalTargetDate").value = new Date().toISOString().slice(0, 10);
-    if (el("modalSituation")) el("modalSituation").value = "";
-    if (el("modalProposal")) el("modalProposal").value = "";
-
-    if (el("itemModal")) el("itemModal").style.display = "flex";
-}
-
-function openEditModal(itemId) {
-    const item = currentItems.find(i => i.id === itemId);
-    if (!item) return;
-
-    if (el("modalTitle")) el("modalTitle").textContent = `Gestionar ${item.code}`;
-    if (el("modalItemId")) el("modalItemId").value = item.id;
-    if (el("modalType")) el("modalType").value = item.type || "Hallazgo";
-    if (el("modalRisk")) el("modalRisk").value = item.severity || "Alto";
-    if (el("modalItemTitle")) el("modalItemTitle").value = item.title || "";
-    if (el("modalArea")) el("modalArea").value = item.responsible_area || "";
-    if (el("modalReportTitle")) el("modalReportTitle").value = item.report_title || "";
-    if (el("modalStatus")) el("modalStatus").value = item.status || "Pendiente";
-    if (el("modalOwner")) el("modalOwner").value = item.action_owner || "";
-    if (el("modalTargetDate")) el("modalTargetDate").value = item.target_date || "";
-    if (el("modalSituation")) el("modalSituation").value = item.situation || "";
-    if (el("modalProposal")) el("modalProposal").value = item.proposal || "";
-
-    if (el("itemModal")) el("itemModal").style.display = "flex";
-}
-
-function closeItemModal() {
-    if (el("itemModal")) el("itemModal").style.display = "none";
-}
-
-async function saveModalItem() {
-    const itemId = el("modalItemId")?.value;
-    const type = el("modalType")?.value;
-    const severity = el("modalRisk")?.value;
-    const title = el("modalItemTitle")?.value;
-    const area = el("modalArea")?.value;
-    const report_title = el("modalReportTitle")?.value;
-    const status = el("modalStatus")?.value;
-    const owner = el("modalOwner")?.value;
-    const target_date = el("modalTargetDate")?.value;
-    const situation = el("modalSituation")?.value;
-    const proposal = el("modalProposal")?.value;
-
-    if (!title) {
-        showToast("Por favor ingresá un título para la observación.", "warning");
-        return;
-    }
-
-    if (itemId) {
-        try {
-            const res = await fetch(`/findings/${itemId}/status`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ status, notes: situation, target_date })
-            });
-            if (res.ok) {
-                showToast("Registro actualizado correctamente.", "success");
-                closeItemModal();
-                loadAuditTrackData();
-            } else {
-                showToast("Error al guardar cambios.", "error");
-            }
-        } catch (err) {
-            console.error(err);
-            showToast("Error de conexión.", "error");
-        }
-    } else {
-        showToast("Nuevo registro guardado.", "success");
-        closeItemModal();
-        loadAuditTrackData();
-    }
-}
-
-// ============================================================
-// REPORT UPLOAD & INFORMES TAB
-// ============================================================
-
-async function uploadAuditReport(file) {
-    if (!file) return;
-    showToast(`Analizando e ingestado '${file.name}'...`, "info");
-
-    const form = new FormData();
-    form.append("file", file);
-
-    try {
-        const response = await fetch("/upload-report", { method: "POST", body: form });
-        let data = {};
-        try { data = await response.json(); } catch (_) {}
-
-        if (!response.ok) throw new Error(data.error || "No se pudo procesar el informe.");
-
-        showToast(data.message || "Informe ingresado correctamente.", "success");
-        await loadAuditTrackData();
-        switchTab("hallazgos");
-    } catch (err) {
-        console.error(err);
-        showToast(err.message || "Error al cargar el informe.", "error");
-    }
-}
 
 async function loadReports() {
     try {
@@ -505,32 +746,121 @@ async function loadReports() {
 function renderReportsList(reports) {
     const container = el("reportsListContainer");
     if (!container) return;
+
     if (!reports.length) {
-        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 24px;">No hay informes cargados aún. Subí tu primer informe arriba.</div>`;
+        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 24px;">No hay informes activos. Subí tu primer informe arriba.</div>`;
         return;
     }
 
     container.innerHTML = reports.map(r => `
-        <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 12px 16px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 18px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
             <div>
-                <strong style="font-size: 14px; color: #0F172A;">${escapeHtml(r.title)}</strong>
-                <div style="font-size: 12px; color: #64748B; margin-top: 2px;">
+                <strong style="font-size: 15px; color: #0055D4; cursor: pointer;" onclick="openReportDetail('${r.id}')">${escapeHtml(r.title)} (${r.code})</strong>
+                <div style="font-size: 12px; color: #64748B; margin-top: 4px;">
                     Proceso: <strong>${escapeHtml(r.process)}</strong> · Área: <strong>${escapeHtml(r.area)}</strong> · Archivo: <strong>${escapeHtml(r.source_filename)}</strong>
                 </div>
+                <div style="margin-top: 8px; display: flex; gap: 12px; font-size: 11px;">
+                    <span style="background: #EFF6FF; color: #0055D4; padding: 2px 8px; border-radius: 6px;"><strong>${r.findings_count || 0}</strong> hallazgos</span>
+                    <span style="background: #DCFCE7; color: #16A34A; padding: 2px 8px; border-radius: 6px;"><strong>${r.proposals_count || 0}</strong> propuestas</span>
+                    <span style="background: #FEF3C7; color: #D97706; padding: 2px 8px; border-radius: 6px;"><strong>${r.action_plans_count || 0}</strong> planes</span>
+                </div>
             </div>
-            <button class="btn btn-outlined" style="padding: 4px 10px; font-size: 11px;" onclick="deleteReportItem('${r.id}')">Eliminar</button>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-primary" style="padding: 6px 12px; font-size: 12px;" onclick="openReportDetail('${r.id}')">Ver Detalle</button>
+                <button class="btn btn-outlined" style="padding: 6px 10px; font-size: 12px;" onclick="deleteReportItem('${r.id}')">Eliminar</button>
+            </div>
         </div>
     `).join("");
 }
 
+async function openReportDetail(reportId) {
+    try {
+        const res = await fetch(`/reports/${reportId}`);
+        if (!res.ok) return;
+        selectedReportDetail = await res.json();
+
+        if (el("reportDetailTitle")) el("reportDetailTitle").textContent = `${selectedReportDetail.title} (${selectedReportDetail.code})`;
+        if (el("reportDetailMeta")) el("reportDetailMeta").textContent = `Proceso: ${selectedReportDetail.process} · Auditor: ${selectedReportDetail.auditor} · Archivo: ${selectedReportDetail.source_filename}`;
+
+        if (el("reportDetailCard")) el("reportDetailCard").style.display = "block";
+        switchReportSubTab("resumen");
+    } catch (err) {
+        console.error("Error abriendo detalle informe:", err);
+    }
+}
+
+function closeReportDetail() {
+    if (el("reportDetailCard")) el("reportDetailCard").style.display = "none";
+    selectedReportDetail = null;
+}
+
+function switchReportSubTab(subTabName) {
+    document.querySelectorAll(".inner-tab-btn").forEach(btn => {
+        btn.classList.toggle("active", btn.textContent.toLowerCase().includes(subTabName));
+    });
+
+    const box = el("reportSubTabContent");
+    if (!box || !selectedReportDetail) return;
+
+    if (subTabName === "resumen") {
+        box.innerHTML = `
+            <div style="font-size: 13px; line-height: 1.6;">
+                <p><strong>Resumen Ejecutivo:</strong> ${escapeHtml(selectedReportDetail.summary || 'Informe procesado con éxito en AuditTrack.')}</p>
+                <div style="margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+                    <div style="background:#F8FAFC; padding:12px; border-radius:8px; border:1px solid #E2E8F0;">
+                        <strong>Total Hallazgos:</strong> ${(selectedReportDetail.findings || []).length}
+                    </div>
+                    <div style="background:#F8FAFC; padding:12px; border-radius:8px; border:1px solid #E2E8F0;">
+                        <strong>Auditor a Cargo:</strong> ${escapeHtml(selectedReportDetail.auditor)}
+                    </div>
+                    <div style="background:#F8FAFC; padding:12px; border-radius:8px; border:1px solid #E2E8F0;">
+                        <strong>Período Auditado:</strong> ${escapeHtml(selectedReportDetail.period)}
+                    </div>
+                </div>
+            </div>
+        `;
+    } else if (subTabName === "hallazgos") {
+        box.innerHTML = (selectedReportDetail.findings || []).map(f => `
+            <div style="border-bottom:1px solid #E2E8F0; padding:10px 0;">
+                <strong style="color:#0055D4;">${escapeHtml(f.code)} - ${escapeHtml(f.title)}</strong>
+                <div style="font-size:12px; color:#64748B;">${escapeHtml(f.situation)}</div>
+            </div>
+        `).join("") || "No hay hallazgos.";
+    } else {
+        box.innerHTML = `<div style="font-size:12px; color:#64748B;">Visualizando ${subTabName} para ${escapeHtml(selectedReportDetail.code)}.</div>`;
+    }
+}
+
+async function uploadAuditReport(file) {
+    if (!file) return;
+    showToast(`Analizando e ingestado '${file.name}' con jerarquía relacional...`, "info");
+
+    const form = new FormData();
+    form.append("file", file);
+
+    try {
+        const response = await fetch("/upload-report", { method: "POST", body: form });
+        let data = {};
+        try { data = await response.json(); } catch (_) {}
+
+        if (!response.ok) throw new Error(data.error || "No se pudo procesar el informe.");
+
+        showToast(data.message || "Informe ingresado correctamente.", "success");
+        await loadAllData();
+        switchTab("hallazgos");
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || "Error al cargar el informe.", "error");
+    }
+}
+
 async function deleteReportItem(reportId) {
-    if (!confirm("¿Eliminar este informe y todas sus recomendaciones asociadas?")) return;
+    if (!confirm("¿Eliminar este informe y todas sus propuestas y planes asociados?")) return;
     try {
         const response = await fetch(`/reports/${reportId}`, { method: "DELETE" });
         if (response.ok) {
             showToast("Informe eliminado.", "success");
-            loadAuditTrackData();
-            loadReports();
+            loadAllData();
         }
     } catch (err) {
         console.error(err);
@@ -538,78 +868,137 @@ async function deleteReportItem(reportId) {
 }
 
 // ============================================================
-// DASHBOARD EXECUTIVE KPIS
+// 7. DETALLE DEL HALLAZGO (DRAWER SLIDE-OVER CON TRAZABILIDAD COMPLETA)
 // ============================================================
 
-async function loadDashboardKPIs() {
+async function openFindingDrawer(findingId) {
     try {
-        const response = await fetch("/dashboard-stats");
-        if (!response.ok) return;
-        const stats = await response.json();
+        const res = await fetch(`/findings/${findingId}`);
+        if (!res.ok) return;
+        const f = await res.json();
 
-        if (el("kpiTotal")) el("kpiTotal").textContent = stats.total_findings || 0;
-        if (el("kpiOpen")) el("kpiOpen").textContent = stats.pending_findings || 0;
-        if (el("kpiProcess")) el("kpiProcess").textContent = stats.in_progress_findings || 0;
-        if (el("kpiCompleted")) el("kpiCompleted").textContent = stats.closed_findings || 0;
+        if (el("drawerCodeTitle")) el("drawerCodeTitle").textContent = f.code;
+        if (el("drawerFindingTitle")) el("drawerFindingTitle").textContent = f.title;
+        if (el("drawerRiskPill")) {
+            el("drawerRiskPill").textContent = f.severity || "Medio";
+            el("drawerRiskPill").className = `pill pill-${(f.severity||'medio').toLowerCase()}`;
+        }
+        if (el("drawerStatusPill")) {
+            el("drawerStatusPill").textContent = f.status || "Pendiente";
+            el("drawerStatusPill").className = `pill pill-${(f.status||'pendiente').toLowerCase().replace(/\s+/g, '-')}`;
+        }
 
-        renderAreaBreakdown(stats.area_breakdown || {});
+        if (el("drawerReportName")) el("drawerReportName").textContent = `${f.report_title} (${f.report_code})`;
+        if (el("drawerFileName")) el("drawerFileName").textContent = f.source_filename || "Informe.xlsx";
+        if (el("drawerArea")) el("drawerArea").textContent = f.responsible_area || "Operaciones";
+        if (el("drawerOwner")) el("drawerOwner").textContent = f.action_owner || "Luciana Gamarra";
+
+        if (el("drawerSituationText")) el("drawerSituationText").textContent = f.situation || f.title;
+        if (el("drawerRiskText")) el("drawerRiskText").textContent = f.risk || "Riesgo de control interno.";
+
+        // Propuestas vinculadas
+        const propBox = el("drawerProposalsList");
+        if (propBox) {
+            const props = f.proposals || [];
+            if (!props.length) {
+                propBox.innerHTML = `<div style="font-size:12px; color:#94A3B8;">Sin propuestas registradas.</div>`;
+            } else {
+                propBox.innerHTML = props.map(p => `
+                    <div style="background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px; padding:10px; margin-bottom:8px; font-size:12px;">
+                        <strong style="color:#0055D4;">💡 ${p.code}:</strong> ${escapeHtml(p.proposal_text || p.title)}
+                        <div style="font-size:11px; color:#64748B; margin-top:2px;">Estado: <strong>${p.status}</strong> · Fecha: <strong>${p.target_date}</strong></div>
+                    </div>
+                `).join("");
+            }
+        }
+
+        // Planes de acción vinculados
+        const plansBox = el("drawerActionPlansList");
+        if (plansBox) {
+            let allPlans = [];
+            (f.proposals || []).forEach(p => {
+                allPlans = allPlans.concat(p.action_plans || []);
+            });
+
+            if (!allPlans.length) {
+                plansBox.innerHTML = `<div style="font-size:12px; color:#94A3B8;">Sin planes de acción asignados.</div>`;
+            } else {
+                plansBox.innerHTML = allPlans.map(pa => `
+                    <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:10px; margin-bottom:8px; font-size:12px;">
+                        <strong>📋 ${pa.code}:</strong> ${escapeHtml(pa.action_text || pa.title)}
+                        <div style="font-size:11px; color:#64748B; margin-top:4px;">
+                            Responsable: <strong>${escapeHtml(pa.action_owner)}</strong> · Fecha: <strong>${pa.target_date}</strong> · Avance: <strong>${pa.progress_pct}%</strong>
+                        </div>
+                    </div>
+                `).join("");
+            }
+        }
+
+        // Evidencias
+        const evBox = el("drawerEvidenceList");
+        if (evBox) {
+            const evs = f.evidence_files || [];
+            if (!evs.length) {
+                evBox.innerHTML = `<div style="font-size:12px; color:#94A3B8;">No se han adjuntado evidencias de cierre aún.</div>`;
+            } else {
+                evBox.innerHTML = evs.map(e => `
+                    <div style="font-size:12px; color:#0F172A;">📎 <strong>${escapeHtml(e.filename)}</strong> (${e.plan_code})</div>
+                `).join("");
+            }
+        }
+
+        // Historial
+        const histBox = el("drawerHistoryList");
+        if (histBox) {
+            const logs = f.history || [];
+            if (!logs.length) {
+                histBox.innerHTML = `<div style="font-size:12px; color:#94A3B8;">Sin registros de historial.</div>`;
+            } else {
+                histBox.innerHTML = logs.map(l => `
+                    <div class="history-item">
+                        <div><strong>${escapeHtml(l.description)}</strong></div>
+                        <div class="history-date">${escapeHtml(l.change_date)} · por <strong>${escapeHtml(l.user_name)}</strong></div>
+                    </div>
+                `).join("");
+            }
+        }
+
+        if (el("drawerFindingDetail")) el("drawerFindingDetail").style.display = "flex";
     } catch (err) {
-        console.error("Error cargando dashboard:", err);
+        console.error("Error cargando detalle hallazgo drawer:", err);
     }
 }
 
-function renderAreaBreakdown(areas) {
-    const container = el("areaBreakdownContainer");
-    if (!container) return;
-    const entries = Object.entries(areas);
-    if (!entries.length) {
-        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 20px;">No hay datos de áreas registrados.</div>`;
+function closeFindingDrawer() {
+    if (el("drawerFindingDetail")) el("drawerFindingDetail").style.display = "none";
+}
+
+function updateSidebarMetrics() {
+    const openCountEl = el("sidebarOpenCount");
+    const progressBarEl = el("sidebarProgressBar");
+    const pctEl = el("sidebarPct");
+
+    const totalF = currentFindings.length;
+    if (totalF === 0) {
+        if (openCountEl) openCountEl.textContent = 0;
+        if (progressBarEl) progressBarEl.style.width = `0%`;
+        if (pctEl) pctEl.textContent = `0%`;
         return;
     }
 
-    container.innerHTML = entries.map(([area, data]) => {
-        const pct = data.total > 0 ? Math.round((data.closed / data.total) * 100) : 0;
-        return `
-            <div style="margin-bottom: 14px;">
-                <div style="display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; margin-bottom: 4px;">
-                    <span>${escapeHtml(area)}</span>
-                    <span>${data.closed} de ${data.total} resueltos (${pct}%)</span>
-                </div>
-                <div style="background: #E2E8F0; border-radius: 6px; height: 8px; overflow: hidden;">
-                    <div style="background: var(--primary-blue); width: ${pct}%; height: 100%;"></div>
-                </div>
-            </div>
-        `;
-    }).join("");
-}
+    const openCount = currentFindings.filter(i => (i.status || "").toLowerCase() !== "completada").length;
 
-// ============================================================
-// EXCEL EXPORT
-// ============================================================
+    let totalPlans = currentActionPlans.length;
+    let completedPlans = currentActionPlans.filter(pa => ["completada", "completado"].includes((pa.status||"").toLowerCase())).length;
+    let pct = totalPlans > 0 ? Math.round((completedPlans / totalPlans) * 100) : 0;
 
-async function exportExcelReport() {
-    showToast("Generando reporte Excel...", "info");
-    try {
-        const response = await fetch("/export-excel", { method: "POST" });
-        if (!response.ok) throw new Error("No se pudo generar el archivo Excel.");
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `Seguimiento_Auditoria_${new Date().toISOString().slice(0, 10)}.xlsx`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        showToast("Excel exportado correctamente.", "success");
-    } catch (err) {
-        console.error(err);
-        showToast(err.message || "Error al exportar a Excel.", "error");
-    }
+    if (openCountEl) openCountEl.textContent = openCount;
+    if (progressBarEl) progressBarEl.style.width = `${pct}%`;
+    if (pctEl) pctEl.textContent = `${pct}%`;
 }
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", () => {
     switchTab("informes");
-    loadAuditTrackData();
+    loadAllData();
 });

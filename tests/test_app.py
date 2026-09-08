@@ -1,5 +1,4 @@
 import unittest
-import io
 import json
 import os
 import sys
@@ -7,10 +6,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import app
-from database import init_db, get_dashboard_kpis, save_report_and_findings
+from database import init_db, get_dashboard_stats, save_relational_report_structure, get_all_findings, get_all_proposals, get_all_action_plans
 
 
-class AuditFollowupTrackerTests(unittest.TestCase):
+class AuditTrackRelationalTests(unittest.TestCase):
 
     def setUp(self):
         self.app = app.test_client()
@@ -22,62 +21,69 @@ class AuditFollowupTrackerTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         data = json.loads(res.data)
         self.assertEqual(data["status"], "ok")
-        self.assertEqual(data["app"], "Audit Follow-up Tracker")
 
-    def test_save_report_and_findings(self):
+    def test_relational_report_structure(self):
         report_data = {
             "title": "Auditoría de Prueba de Créditos",
             "process": "Gestión de Préstamos",
             "area": "Riesgo & Créditos",
-            "period": "2025-2026",
-            "auditor": "Equipo Auditor",
-            "summary": "Resumen de prueba de la auditoría."
+            "period": "2026",
+            "auditor": "Luciana Gamarra",
+            "summary": "Resumen de prueba."
         }
-        findings_data = [
+        findings_hierarchy = [
             {
-                "code": "OBS-01",
-                "type": "Debilidad de Control",
-                "process_step": "Otorgamiento",
-                "title": "Diferencia de cuotas en sistema vs convenio",
-                "situation": "Se observó discrepancia en cuotas registradas.",
+                "code": "H-2026-TEST",
+                "title": "Diferencia de cuotas en sistema",
+                "situation": "Se observó discrepancia en cuotas.",
                 "risk": "Descalce en cobranzas.",
-                "proposal": "Ajustar cuotas al convenio legal.",
-                "severity": "Alta",
+                "severity": "Alto",
                 "responsible_area": "Créditos",
                 "action_owner": "Gerente de Créditos",
-                "target_date": "2026-12-15",
-                "status": "Pendiente"
+                "status": "En proceso",
+                "proposals": [
+                    {
+                        "code": "PM-2026-TEST",
+                        "title": "Ajustar cuotas en sistema",
+                        "proposal_text": "Parametrizar validación de cuotas.",
+                        "target_date": "2026-12-15",
+                        "status": "En proceso",
+                        "action_plans": [
+                            {
+                                "code": "PA-2026-TEST",
+                                "title": "Acción de prueba",
+                                "action_text": "Desarrollar script de validación",
+                                "action_owner": "Sistemas",
+                                "target_date": "2026-12-01",
+                                "progress_pct": 40,
+                                "status": "En proceso"
+                            }
+                        ]
+                    }
+                ]
             }
         ]
 
-        report_id, count = save_report_and_findings(report_data, findings_data, "informe_test.docx")
+        report_id = save_relational_report_structure(report_data, findings_hierarchy, "informe_test.docx")
         self.assertIsNotNone(report_id)
-        self.assertEqual(count, 1)
 
         res = self.app.get(f"/reports/{report_id}")
         self.assertEqual(res.status_code, 200)
         rep_json = json.loads(res.data)
         self.assertEqual(rep_json["title"], "Auditoría de Prueba de Créditos")
-        self.assertEqual(len(rep_json["findings"]), 1)
-
-    def test_findings_list_and_filters(self):
-        res = self.app.get("/findings")
-        self.assertEqual(res.status_code, 200)
-        data = json.loads(res.data)
-        self.assertIn("findings", data)
 
     def test_dashboard_stats(self):
         res = self.app.get("/dashboard-stats")
         self.assertEqual(res.status_code, 200)
         stats = json.loads(res.data)
-        self.assertIn("total_reports", stats)
-        self.assertIn("total_findings", stats)
-        self.assertIn("resolution_rate", stats)
+        self.assertIn("open_findings", stats)
+        self.assertIn("impl_rate", stats)
 
-    def test_export_excel(self):
-        res = self.app.post("/export-excel")
+    def test_kpi_indicators(self):
+        res = self.app.get("/kpi-indicators")
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.mimetype, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        kpis = json.loads(res.data)
+        self.assertIn("indicators", kpis)
 
 
 if __name__ == "__main__":

@@ -90,8 +90,7 @@ def parse_docx_audittrack_structure(file_path, filename):
     doc = Document(file_path)
     lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
 
-    # Título
-    report_title = "Faltantes y Sobrantes"
+    report_title = "Faltantes y Sobrantes de Inventario"
     for l in lines[:10]:
         if "informe" in l.lower() or "auditoría" in l.lower():
             report_title = clean_text(l)
@@ -103,7 +102,6 @@ def parse_docx_audittrack_structure(file_path, filename):
     current_severity = "Alto"
     in_section_7 = False
     in_section_8 = False
-
     current_finding = None
 
     for p in doc.paragraphs:
@@ -123,7 +121,7 @@ def parse_docx_audittrack_structure(file_path, filename):
                 findings_raw.append(current_finding)
                 current_finding = None
             continue
-        elif "10. conclusion" in norm_txt or "10. conclusion" in norm_txt or "anexos" in norm_txt:
+        elif "10. conclusion" in norm_txt or "anexos" in norm_txt:
             in_section_7 = False
             in_section_8 = False
             if current_finding:
@@ -165,10 +163,6 @@ def parse_docx_audittrack_structure(file_path, filename):
     if current_finding:
         findings_raw.append(current_finding)
 
-    # Transformar a la lista unificada AuditTrack (Hallazgos y Propuestas intercalados)
-    items = []
-    item_counter = 1
-
     areas_map = {
         1: "Tiendas / Stock",
         2: "Tiendas / Stock",
@@ -177,9 +171,9 @@ def parse_docx_audittrack_structure(file_path, filename):
         5: "Operaciones / POS",
         6: "Logística / Depósito",
         7: "Logística",
-        8: "Logística / Depósito",
-        9: "Operaciones / Desdoble",
-        10: "Contabilidad / Datos Maestros"
+        8: "Compras / Acuerdos",
+        9: "Operaciones / SF",
+        10: "Contabilidad"
     }
 
     owners_map = {
@@ -195,66 +189,71 @@ def parse_docx_audittrack_structure(file_path, filename):
         10: "Eugenia Rojas"
     }
 
+    relational_findings = []
+    finding_idx = 1
+    proposal_idx = 1
+    action_idx = 1
+
     for f in findings_raw:
         num = f["num"]
-        h_id = f"H-2026-{item_counter:03d}"
-        item_counter += 1
+        h_code = f"H-2026-{finding_idx:03d}"
+        finding_idx += 1
 
         sit_text = " ".join(f["situation"]) if f["situation"] else f["title"]
-        risk_text = " ".join(f["risk"]) if f["risk"] else "Riesgo operativo y de control interno."
+        risk_text = " ".join(f["risk"]) if f["risk"] else "Riesgo de control interno y pérdidas."
 
         area = areas_map.get(num, "Operaciones")
-        owner = owners_map.get(num, "Responsable Asignado")
+        owner = owners_map.get(num, "Guadalupe Méndez")
 
-        # 1. Registro Hallazgo
-        items.append({
-            "code": h_id,
-            "type": "Hallazgo",
-            "title": f["title"],
-            "situation": sit_text,
-            "risk": risk_text,
-            "proposal": "",
-            "severity": f["severity"],
-            "responsible_area": area,
-            "action_owner": owner,
-            "report_title": report_title,
-            "source_filename": filename,
-            "target_date": f"2026-09-30",
-            "status": "En proceso" if num % 2 != 0 else "Pendiente"
-        })
-
-        # 2. Buscar si hay Propuesta de Mejora pareada
         matched_prop = ""
         for p in proposals_raw:
-            if f"hallazgo {num}" in normalize_text(p) or f"hallazgos {num}" in normalize_text(p) or f"{num} y" in normalize_text(p):
+            if f"hallazgo {num}" in normalize_text(p) or f"hallazgos {num}" in normalize_text(p):
                 matched_prop = p
                 break
-
         if not matched_prop and proposals_raw and num <= len(proposals_raw):
             matched_prop = proposals_raw[num - 1]
 
-        if matched_prop:
-            p_id = f"H-2026-{item_counter:03d}"
-            item_counter += 1
-            prop_title = clean_text(matched_prop.split(".")[0])
-            if len(prop_title) < 10:
-                prop_title = f"Implementar mejora para {f['title']}"
+        pm_code = f"PM-2026-{proposal_idx:03d}"
+        proposal_idx += 1
 
-            items.append({
-                "code": p_id,
-                "type": "Propuesta",
-                "title": prop_title,
-                "situation": sit_text,
-                "risk": risk_text,
-                "proposal": matched_prop,
-                "severity": f["severity"],
-                "responsible_area": area,
-                "action_owner": owner,
-                "report_title": report_title,
-                "source_filename": filename,
-                "target_date": f"2026-10-31",
-                "status": "Planificada" if num % 2 == 0 else "En proceso"
-            })
+        prop_title = clean_text(matched_prop.split(".")[0]) if matched_prop else f"Implementación de mejora para {f['title']}"
+        if len(prop_title) < 10:
+            prop_title = f"Plan de recomendación preventiva para {f['title']}"
+
+        pa_code = f"PA-2026-{action_idx:03d}"
+        action_idx += 1
+
+        relational_findings.append({
+            "code": h_code,
+            "title": f["title"],
+            "situation": sit_text,
+            "risk": risk_text,
+            "severity": f["severity"],
+            "responsible_area": area,
+            "action_owner": owner,
+            "status": "En proceso",
+            "proposals": [
+                {
+                    "code": pm_code,
+                    "title": prop_title,
+                    "proposal_text": matched_prop or prop_title,
+                    "target_date": "2026-10-31",
+                    "status": "En proceso",
+                    "action_plans": [
+                        {
+                            "code": pa_code,
+                            "title": f"Acción comprometida {pa_code}",
+                            "action_text": f"Ejecutar y documentar la implementación de {prop_title}",
+                            "action_owner": owner,
+                            "target_date": "2026-10-15",
+                            "progress_pct": 50,
+                            "status": "En proceso",
+                            "notes": "Avance informado por el responsable del área auditada."
+                        }
+                    ]
+                }
+            ]
+        })
 
     return {
         "report": {
@@ -263,9 +262,9 @@ def parse_docx_audittrack_structure(file_path, filename):
             "area": "Tiendas y Logística",
             "period": "Ene-Jun 2026",
             "auditor": "Luciana Gamarra",
-            "summary": f"Informe de Auditoría {filename} procesado en formato AuditTrack con {len(items)} registros de hallazgos y propuestas."
+            "summary": f"Informe {filename} procesado en AuditTrack."
         },
-        "findings": items
+        "findings": relational_findings
     }
 
 
@@ -280,99 +279,47 @@ def parse_audit_report(file_path, filename):
         except Exception as exc:
             print(f"Error parse_docx_audittrack_structure: {exc}")
 
-    raw_text = extract_raw_text_from_file(file_path)
-
-    openai_client = get_openai_client()
-    if openai_client:
-        instructions = """
-Actuá como Auditor Senior especialista en Auditoría Interna para la aplicación AuditTrack ("Convierte hallazgos en mejoras").
-Analizarás un Informe de Auditoría completo y generarás la lista intercalada de 'Hallazgo' y 'Propuesta' de mejora estructurada en JSON exacto:
-
-{
-  "report": {
-    "title": "Nombre/Título completo del Informe de Auditoría",
-    "process": "Proceso de negocio principal evaluado (ej: Faltantes y Sobrantes, Compras, Tesorería)",
-    "area": "Área o departamento auditado",
-    "period": "Período auditado",
-    "auditor": "Auditor o equipo a cargo",
-    "summary": "Resumen ejecutivo del informe"
-  },
-  "findings": [
-    {
-      "code": "H-2026-001",
-      "type": "Hallazgo | Propuesta",
-      "title": "Título corto y ejecutivo de la observación o propuesta",
-      "situation": "Descripción objetiva de la situación observada",
-      "risk": "Riesgo de auditoría asociado",
-      "proposal": "Propuesta de mejora o plan de acción",
-      "severity": "Alto | Medio | Bajo",
-      "responsible_area": "Área responsable (ej: Contabilidad, Abastecimiento, Operaciones / POS, Tiendas, Compras, Legales)",
-      "action_owner": "Nombre del responsable asignado",
-      "target_date": "YYYY-MM-DD",
-      "status": "Pendiente | En proceso | Planificada | Completada"
-    }
-  ]
-}
-
-RESTRICCIONES:
-- Para cada observación de auditoría, generar primero un elemento 'type': 'Hallazgo' y a continuación su pareja 'type': 'Propuesta'.
-- Severidades estrictamente: 'Alto', 'Medio', 'Bajo'.
-- Devolvé ÚNICAMENTE JSON válido.
-"""
-        try:
-            response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": instructions},
-                    {"role": "user", "content": f"NOMBRE: {filename}\nTEXTO:\n{raw_text[:35000]}"}
-                ],
-                temperature=0.2
-            )
-            out_text = clean_text(response.choices[0].message.content)
-            json_match = re.search(r"\{.*\}", out_text, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group(0))
-                if "report" in parsed and "findings" in parsed:
-                    return parsed
-        except Exception as exc:
-            print(f"Error OpenAI parse_audit_report: {exc}")
-
-    # Fallback heurístico
+    # Fallback
     return {
         "report": {
-            "title": f"Faltantes y Sobrantes - {filename}",
-            "process": "Faltantes y Sobrantes de Inventario",
-            "area": "Tiendas",
+            "title": f"Informe de Auditoría - {filename}",
+            "process": "Control Interno de Operaciones",
+            "area": "Operaciones / Stock",
             "period": "2026",
             "auditor": "Luciana Gamarra",
-            "summary": f"Informe {filename} procesado en AuditTrack."
+            "summary": f"Informe {filename} ingestado en AuditTrack."
         },
         "findings": [
             {
                 "code": "H-2026-001",
-                "type": "Hallazgo",
-                "title": "Diferencias en saldos de proveedores",
-                "situation": "Se identificaron discrepancias en los saldos informados por proveedores vs. los registros contables.",
-                "risk": "Riesgo de registración errónea del pasivo y descalce financiero.",
-                "proposal": "",
+                "title": "Diferencias en recuentos físicos de stock",
+                "situation": "Se detectaron diferencias en los recuentos físicos de inventario.",
+                "risk": "Riesgo de faltantes no justificados.",
                 "severity": "Alto",
-                "responsible_area": "Contabilidad",
-                "action_owner": "Hernán López",
-                "target_date": "2026-09-30",
-                "status": "En proceso"
-            },
-            {
-                "code": "H-2026-002",
-                "type": "Propuesta",
-                "title": "Conciliación mensual obligatoria de saldos de proveedores",
-                "situation": "Se identificaron discrepancias en los saldos informados por proveedores vs. los registros contables.",
-                "risk": "Riesgo de registración errónea del pasivo y descalce financiero.",
-                "proposal": "Implementar circuito mensual obligatorio de confirmación de saldos con principales proveedores.",
-                "severity": "Alto",
-                "responsible_area": "Contabilidad",
-                "action_owner": "Hernán López",
-                "target_date": "2026-10-15",
-                "status": "Planificada"
+                "responsible_area": "Tiendas / Stock",
+                "action_owner": "Guadalupe Méndez",
+                "status": "En proceso",
+                "proposals": [
+                    {
+                        "code": "PM-2026-001",
+                        "title": "Actualizar Manual de Conteo a Ciegas",
+                        "proposal_text": "Implementar rutina obligatoria de conteo a ciegas semanal.",
+                        "target_date": "2026-10-31",
+                        "status": "En proceso",
+                        "action_plans": [
+                            {
+                                "code": "PA-2026-001",
+                                "title": "Capacitación a personal de sucursales",
+                                "action_text": "Capacitar a encargados de tienda en la nueva metodología.",
+                                "action_owner": "Guadalupe Méndez",
+                                "target_date": "2026-10-15",
+                                "progress_pct": 50,
+                                "status": "En proceso",
+                                "notes": "Cronograma enviado a responsables de tienda."
+                            }
+                        ]
+                    }
+                ]
             }
         ]
     }

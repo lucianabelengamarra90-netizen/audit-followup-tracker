@@ -645,3 +645,170 @@ body {
     display: none;
     z-index: 10000;
 }
+
+/* Slide-over Drawer for Finding Detail */
+.drawer-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.4);
+    display: flex;
+    justify-content: flex-end;
+    z-index: 9999;
+}
+
+.drawer-panel {
+    background: var(--white);
+    width: 580px;
+    max-width: 90vw;
+    height: 100vh;
+    box-shadow: -8px 0 25px rgba(0, 0, 0, 0.15);
+    display: flex;
+    flex-direction: column;
+    animation: slideDrawer 0.25s ease-out;
+}
+
+@keyframes slideDrawer {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+}
+
+.drawer-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    background: #F8FAFC;
+}
+
+.drawer-close-btn {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: var(--text-muted);
+}
+
+.drawer-body {
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.drawer-section {
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #F1F5F9;
+}
+
+.drawer-section h4 {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--navy-text);
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.drawer-meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    background: #F8FAFC;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid #E2E8F0;
+    font-size: 12px;
+}
+
+.drawer-box-text {
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #334155;
+}
+
+/* History Timeline */
+.history-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.history-item {
+    border-left: 3px solid var(--primary-blue);
+    padding-left: 12px;
+    font-size: 12px;
+}
+
+.history-date {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+/* Expandable nested table rows */
+.expand-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--primary-blue);
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.nested-trace-row td {
+    background: #F8FAFC;
+    padding: 16px 24px !important;
+}
+
+.nested-trace-box {
+    border-left: 3px solid var(--primary-blue);
+    padding-left: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Inner Tabs for Report Detail */
+.inner-tabs {
+    display: flex;
+    gap: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.inner-tab-btn {
+    padding: 8px 14px;
+    border: none;
+    background: transparent;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+}
+
+.inner-tab-btn.active {
+    color: var(--primary-blue);
+    border-bottom-color: var(--primary-blue);
+}
+
+/* Semáforos Indicadores */
+.semaforo-badge {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    display: inline-block;
+}
+
+.semaforo-verde { background: #DCFCE7; color: #15803D; }
+.semaforo-amarillo { background: #FEF3C7; color: #B45309; }
+.semaforo-rojo { background: #FEE2E2; color: #B42318; }
+

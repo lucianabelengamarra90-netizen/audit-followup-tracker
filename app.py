@@ -9,15 +9,21 @@ from openpyxl.utils import get_column_letter
 
 from database import (
     init_db,
-    save_report_and_findings,
+    save_relational_report_structure,
     get_all_reports,
-    get_report,
-    get_findings,
-    get_finding,
-    update_finding_status,
+    get_report_detail,
+    get_all_findings,
+    get_finding_detail,
+    get_all_proposals,
+    get_all_action_plans,
+    create_action_plan,
+    update_action_plan,
     delete_finding,
     delete_report,
-    get_dashboard_kpis
+    get_dashboard_stats,
+    get_kpi_indicators,
+    get_history_logs,
+    add_history_log
 )
 from report_parser import parse_audit_report, clean_text
 
@@ -43,12 +49,7 @@ def index():
 
 @app.route("/health")
 def health():
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    return jsonify({
-        "status": "ok",
-        "app": "Audit Follow-up Tracker",
-        "openaiConfigured": bool(api_key)
-    })
+    return jsonify({"status": "ok", "app": "AuditTrack Relacional"})
 
 
 @app.route("/upload-report", methods=["POST"])
@@ -61,7 +62,7 @@ def upload_report():
         return jsonify({"error": "El archivo enviado no es válido."}), 400
 
     if not allowed_file(file.filename):
-        return jsonify({"error": "Formato de archivo no soportado. Usá PDF, Word (.docx) o Excel (.xlsx)."}), 400
+        return jsonify({"error": "Formato no soportado. Usá PDF, Word (.docx) o Excel (.xlsx)."}), 400
 
     safe_filename = clean_text(file.filename).replace(" ", "_")
     saved_path = os.path.join(app.config["UPLOAD_FOLDER"], safe_filename)
@@ -70,16 +71,14 @@ def upload_report():
     try:
         parsed_data = parse_audit_report(saved_path, safe_filename)
         report_info = parsed_data.get("report", {})
-        findings_info = parsed_data.get("findings", [])
+        findings_hierarchy = parsed_data.get("findings", [])
 
-        report_id, count = save_report_and_findings(report_info, findings_info, safe_filename)
+        report_id = save_relational_report_structure(report_info, findings_hierarchy, safe_filename)
 
         return jsonify({
-            "message": f"Informe '{report_info.get('title')}' ingresado correctamente con {count} hallazgos/mejoras.",
+            "message": f"Informe '{report_info.get('title')}' ingresado correctamente con relaciones integradas.",
             "report_id": report_id,
-            "findings_count": count,
-            "report": report_info,
-            "findings": findings_info
+            "findings_count": len(findings_hierarchy)
         })
     except Exception as exc:
         print(f"Error procesando informe: {exc}")
@@ -93,14 +92,14 @@ def list_reports():
 
 
 @app.route("/reports/<report_id>", methods=["GET", "DELETE"])
-def report_detail(report_id):
+def report_detail_route(report_id):
     if request.method == "DELETE":
         deleted = delete_report(report_id)
         if deleted:
-            return jsonify({"message": "Informe y sus hallazgos eliminados correctamente."})
+            return jsonify({"message": "Informe eliminado correctamente."})
         return jsonify({"error": "Informe no encontrado."}), 404
 
-    report = get_report(report_id)
+    report = get_report_detail(report_id)
     if not report:
         return jsonify({"error": "Informe no encontrado."}), 404
     return jsonify(report)
@@ -111,66 +110,103 @@ def list_findings():
     filters = {
         "status": request.args.get("status"),
         "severity": request.args.get("severity"),
-        "process": request.args.get("process"),
         "area": request.args.get("area"),
         "search": request.args.get("search")
     }
-    findings = get_findings(filters)
+    findings = get_all_findings(filters)
     return jsonify({"findings": findings, "count": len(findings)})
 
 
 @app.route("/findings/<finding_id>", methods=["GET", "DELETE"])
-def finding_detail(finding_id):
+def finding_detail_route(finding_id):
     if request.method == "DELETE":
         deleted = delete_finding(finding_id)
         if deleted:
             return jsonify({"message": "Hallazgo eliminado."})
         return jsonify({"error": "Hallazgo no encontrado."}), 404
 
-    finding = get_finding(finding_id)
+    finding = get_finding_detail(finding_id)
     if not finding:
         return jsonify({"error": "Hallazgo no encontrado."}), 404
     return jsonify(finding)
 
 
-@app.route("/findings/<finding_id>/status", methods=["POST"])
-def update_status(finding_id):
+@app.route("/proposals", methods=["GET"])
+def list_proposals():
+    filters = {
+        "status": request.args.get("status"),
+        "search": request.args.get("search")
+    }
+    proposals = get_all_proposals(filters)
+    return jsonify({"proposals": proposals, "count": len(proposals)})
+
+
+@app.route("/action-plans", methods=["GET", "POST"])
+def action_plans_route():
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        proposal_id = data.get("proposal_id")
+        action_text = data.get("action_text") or data.get("title")
+        action_owner = data.get("action_owner") or "Auditoría"
+        target_date = data.get("target_date") or "2026-10-31"
+        status = data.get("status") or "En proceso"
+        progress_pct = int(data.get("progress_pct") or 0)
+        notes = data.get("notes") or ""
+
+        if not proposal_id or not action_text:
+            return jsonify({"error": "Debe seleccionar una Propuesta de Mejora y definir la Acción."}), 400
+
+        plan_id, pa_code = create_action_plan(proposal_id, action_text, action_owner, target_date, status, progress_pct, notes)
+        return jsonify({"message": f"Plan de Acción {pa_code} creado exitosamente.", "id": plan_id, "code": pa_code})
+
+    filters = {
+        "status": request.args.get("status"),
+        "search": request.args.get("search")
+    }
+    plans = get_all_action_plans(filters)
+    return jsonify({"action_plans": plans, "count": len(plans)})
+
+
+@app.route("/action-plans/<plan_id>", methods=["POST"])
+def update_action_plan_route(plan_id):
     data = request.get_json(silent=True) or {}
-    new_status = clean_text(data.get("status", ""))
+    status = data.get("status")
+    progress_pct = data.get("progress_pct")
     notes = data.get("notes")
     target_date = data.get("target_date")
     evidence_file = data.get("evidence_file")
+    action_owner = data.get("action_owner")
+    user_name = data.get("user_name") or "Luciana Gamarra"
 
-    if not new_status:
-        return jsonify({"error": "El nuevo estado es obligatorio."}), 400
-
-    updated = update_finding_status(finding_id, new_status, notes, target_date, evidence_file)
+    updated = update_action_plan(plan_id, status, progress_pct, notes, target_date, evidence_file, action_owner, user_name)
     if updated:
-        return jsonify({"message": f"Estado actualizado a '{new_status}'."})
-    return jsonify({"error": "No se encontró el hallazgo."}), 404
+        return jsonify({"message": "Plan de Acción actualizado."})
+    return jsonify({"error": "Plan de Acción no encontrado."}), 404
 
 
 @app.route("/dashboard-stats")
-def dashboard_stats():
-    stats = get_dashboard_kpis()
+def dashboard_stats_route():
+    stats = get_dashboard_stats()
     return jsonify(stats)
+
+
+@app.route("/kpi-indicators")
+def kpi_indicators_route():
+    kpis = get_kpi_indicators()
+    return jsonify({"indicators": kpis})
 
 
 @app.route("/export-excel", methods=["POST"])
 def export_excel():
-    findings = get_findings()
-    stats = get_dashboard_kpis()
-    reports = get_all_reports()
+    findings = get_all_findings()
+    stats = get_dashboard_stats()
 
     wb = Workbook()
     ws_kpi = wb.active
     ws_kpi.title = "Tablero de Control"
-    ws_kpi.sheet_properties.tabColor = "17365D"
 
-    # Estilos
     NAVY = "17365D"
     BLUE = "1F4E78"
-    LIGHT_BLUE = "D9EAF7"
     TEXT_COLOR = "1F2937"
     BORDER_COLOR = "D0D7DE"
     THIN_BORDER = Border(
@@ -180,24 +216,20 @@ def export_excel():
         bottom=Side(style="thin", color=BORDER_COLOR)
     )
 
-    # Título
-    ws_kpi.merge_cells("A1:H1")
+    ws_kpi.merge_cells("A1:G1")
     title_cell = ws_kpi["A1"]
-    title_cell.value = "REPORTE CONSOLIDADO DE SEGUIMIENTO DE AUDITORÍA INTERNA"
+    title_cell.value = "REPORTE CONSOLIDADO AUDITTRACK - TRAZABILIDAD INTEGRAL"
     title_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
     title_cell.fill = PatternFill("solid", fgColor=NAVY)
     title_cell.alignment = Alignment(horizontal="center", vertical="center")
     ws_kpi.row_dimensions[1].height = 40
 
-    # KPIs resumen
     kpi_items = [
-        ("Informes Evaluados", stats.get("total_reports", 0)),
-        ("Total Recomendaciones", stats.get("total_findings", 0)),
-        ("Implementados / Cerrados", stats.get("closed_findings", 0)),
-        ("En Proceso", stats.get("in_progress_findings", 0)),
-        ("En Revisión", stats.get("in_review_findings", 0)),
-        ("Vencidos", stats.get("overdue_findings", 0)),
-        ("% Cumplimiento Global", f"{stats.get('resolution_rate', 0)}%"),
+        ("Hallazgos Abiertos", stats.get("open_findings", 0)),
+        ("Riesgo Alto", stats.get("high_risk_findings", 0)),
+        ("Total Propuestas", stats.get("total_proposals", 0)),
+        ("Planes Vencidos", stats.get("overdue_plans", 0)),
+        ("% Implementación", f"{stats.get('impl_rate', 0)}%"),
     ]
 
     for col_idx, (label, val) in enumerate(kpi_items, start=1):
@@ -211,18 +243,12 @@ def export_excel():
         cell_val.alignment = Alignment(horizontal="center", vertical="center")
         cell_val.border = THIN_BORDER
 
-    ws_kpi.row_dimensions[3].height = 25
-    ws_kpi.row_dimensions[4].height = 30
-
-    # Solapa Detalle de Recomendaciones
-    ws_detail = wb.create_sheet("Seguimiento Detallado")
-    ws_detail.sheet_properties.tabColor = "5B9BD5"
+    ws_detail = wb.create_sheet("Trazabilidad Completa")
 
     headers = [
-        "N°", "Código", "Informe", "Proceso / Subproceso", "Oportunidad de Mejora / Hallazgo",
-        "Situación Observada", "Riesgo / Impacto", "Propuesta de Acción",
-        "Criticidad", "Área Responsable", "Responsable Plan", "Fecha Compromiso",
-        "Estado", "Notas de Seguimiento", "Evidencia"
+        "Área", "ID Hallazgo", "Informe", "Archivo", "Hallazgo (Situación)",
+        "Riesgo", "Propuesta de Mejora (Recomendación)", "Plan de Acción",
+        "Responsable", "Fecha Compromiso", "Estado"
     ]
 
     for col_idx, h in enumerate(headers, start=1):
@@ -231,39 +257,45 @@ def export_excel():
         c.fill = PatternFill("solid", fgColor=NAVY)
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         c.border = THIN_BORDER
-    ws_detail.row_dimensions[1].height = 30
 
-    for idx, f in enumerate(findings, start=1):
-        row_idx = idx + 1
-        vals = [
-            idx, f.get("code", ""), f.get("report_title", ""), f.get("process_step", ""),
-            f.get("title", ""), f.get("situation", ""), f.get("risk", ""), f.get("proposal", ""),
-            f.get("severity", ""), f.get("responsible_area", ""), f.get("action_owner", ""),
-            f.get("target_date", ""), f.get("status", ""), f.get("follow_up_notes", ""),
-            f.get("evidence_file", "")
-        ]
-        for col_idx, v in enumerate(vals, start=1):
-            c = ws_detail.cell(row=row_idx, column=col_idx, value=v)
-            c.font = Font(name="Calibri", size=9, color=TEXT_COLOR)
-            c.border = THIN_BORDER
-            c.alignment = Alignment(vertical="center", wrap_text=True)
-            if col_idx in (1, 2, 9, 12, 13):
-                c.alignment = Alignment(horizontal="center", vertical="center")
+    row_idx = 2
+    for f in findings:
+        props = f.get("proposals") or [{}]
+        for p in props:
+            plans = p.get("action_plans") or [{}]
+            for pa in plans:
+                vals = [
+                    f.get("responsible_area", ""),
+                    f.get("code", ""),
+                    f.get("report_title", ""),
+                    f.get("source_filename", ""),
+                    f.get("title", ""),
+                    f.get("severity", ""),
+                    p.get("proposal_text", p.get("title", "")),
+                    pa.get("action_text", pa.get("title", "")),
+                    pa.get("action_owner", f.get("action_owner", "")),
+                    pa.get("target_date", p.get("target_date", "")),
+                    pa.get("status", f.get("status", ""))
+                ]
+                for col_idx, v in enumerate(vals, start=1):
+                    c = ws_detail.cell(row=row_idx, column=col_idx, value=v)
+                    c.font = Font(name="Calibri", size=9, color=TEXT_COLOR)
+                    c.border = THIN_BORDER
+                    c.alignment = Alignment(vertical="center", wrap_text=True)
 
-        ws_detail.row_dimensions[row_idx].height = 35
+                ws_detail.row_dimensions[row_idx].height = 32
+                row_idx += 1
 
-    # Auto ajustar anchos
-    widths = [6, 12, 28, 25, 30, 45, 35, 38, 12, 20, 20, 16, 18, 30, 20]
+    widths = [20, 14, 28, 22, 35, 12, 40, 40, 20, 16, 16]
     for idx, w in enumerate(widths, start=1):
         col_letter = get_column_letter(idx)
         ws_detail.column_dimensions[col_letter].width = w
-        ws_kpi.column_dimensions[col_letter].width = 18
 
     output = BytesIO()
     wb.save(output)
     output.seek(0)
 
-    filename = f"Seguimiento_Auditoria_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    filename = f"Reporte_AuditTrack_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
     return send_file(
         output,
         as_attachment=True,
