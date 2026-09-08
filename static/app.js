@@ -309,7 +309,7 @@ function toggleTraceRow(rowId, findingId) {
 
         contentBox.innerHTML = `
             <div style="font-size:12px;">
-                <strong style="color:#0F172A; text-transform:uppercase;">Cadena de Trazabilidad Relacional (${escapeHtml(item.code)})</strong>
+                <strong style="color:#0F172A; text-transform:uppercase;">Cadena de Trazabilidad e Historial (${escapeHtml(item.code)})</strong>
                 <div style="margin-top:8px;">${propsHtml}</div>
             </div>
         `;
@@ -833,7 +833,7 @@ function switchReportSubTab(subTabName) {
 
 async function uploadAuditReport(file) {
     if (!file) return;
-    showToast(`Analizando e ingestado '${file.name}' con jerarquía relacional...`, "info");
+    showToast(`Analizando e ingestado '${file.name}'...`, "info");
 
     const form = new FormData();
     form.append("file", file);
