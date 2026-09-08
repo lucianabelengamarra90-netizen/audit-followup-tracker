@@ -55,49 +55,49 @@
 
     <div class="main-body">
 
-        <!-- Sidebar Navigation -->
-        <aside class="sidebar">
-            <nav class="sidebar-menu">
-                <button class="menu-item active" data-tab="informes" onclick="switchTab('informes')">
-                    <span class="menu-icon">📄</span>
+        <!-- Top Navigation Bar (horizontal tabs) -->
+        <nav class="topnav-bar">
+            <div class="topnav-tabs">
+                <button class="topnav-tab active" data-tab="informes" onclick="switchTab('informes')">
+                    <span class="topnav-icon">📄</span>
                     <span>Informes</span>
                 </button>
-                <button class="menu-item" data-tab="hallazgos" onclick="switchTab('hallazgos')">
-                    <span class="menu-icon">📘</span>
+                <button class="topnav-tab" data-tab="hallazgos" onclick="switchTab('hallazgos')">
+                    <span class="topnav-icon">📘</span>
                     <span>Hallazgos y Propuestas</span>
                 </button>
-                <button class="menu-item" data-tab="propuestas" onclick="switchTab('propuestas')">
-                    <span class="menu-icon">💡</span>
+                <button class="topnav-tab" data-tab="propuestas" onclick="switchTab('propuestas')">
+                    <span class="topnav-icon">💡</span>
                     <span>Propuestas de mejora</span>
                 </button>
-                <button class="menu-item" data-tab="tableros" onclick="switchTab('tableros')">
-                    <span class="menu-icon">📊</span>
+                <button class="topnav-tab" data-tab="tableros" onclick="switchTab('tableros')">
+                    <span class="topnav-icon">📊</span>
                     <span>Tableros</span>
                 </button>
-                <button class="menu-item" data-tab="indicadores" onclick="switchTab('indicadores')">
-                    <span class="menu-icon">📈</span>
+                <button class="topnav-tab" data-tab="indicadores" onclick="switchTab('indicadores')">
+                    <span class="topnav-icon">📈</span>
                     <span>Indicadores</span>
                 </button>
-                <button class="menu-item" data-tab="configuracion" onclick="switchTab('configuracion')">
-                    <span class="menu-icon">⚙️</span>
+                <button class="topnav-tab" data-tab="configuracion" onclick="switchTab('configuracion')">
+                    <span class="topnav-icon">⚙️</span>
                     <span>Configuración</span>
                 </button>
-            </nav>
-
-            <div class="sidebar-widget">
-                <div class="widget-metric">
-                    <span class="metric-icon">📊</span>
-                    <div>
-                        <strong id="sidebarOpenCount">0</strong>
-                        <small>hallazgos abiertos</small>
-                    </div>
-                </div>
-                <div class="widget-progress-bg">
-                    <div class="widget-progress-fill" id="sidebarProgressBar" style="width: 0%;"></div>
-                </div>
-                <span class="widget-subtext"><strong id="sidebarPct">0%</strong> implementación de planes</span>
             </div>
-        </aside>
+
+            <div class="topnav-widget">
+                <div class="topnav-widget-item">
+                    <span class="topnav-widget-value" id="sidebarOpenCount">0</span>
+                    <span class="topnav-widget-label">Hallazgos abiertos</span>
+                </div>
+                <div class="topnav-widget-divider"></div>
+                <div class="topnav-widget-item">
+                    <div class="topnav-progress-bar">
+                        <div class="topnav-progress-fill" id="sidebarProgressBar" style="width: 0%;"></div>
+                    </div>
+                    <span class="topnav-widget-label"><strong id="sidebarPct">0%</strong> implementación</span>
+                </div>
+            </div>
+        </nav>
 
         <!-- Content Area -->
         <main class="content-area">

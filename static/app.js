@@ -47,7 +47,7 @@ function showToast(message, type = "info") {
 // ============================================================
 
 function switchTab(tabName) {
-    document.querySelectorAll(".menu-item").forEach(btn => {
+    document.querySelectorAll(".topnav-tab").forEach(btn => {
         btn.classList.toggle("active", btn.dataset.tab === tabName);
     });
 
