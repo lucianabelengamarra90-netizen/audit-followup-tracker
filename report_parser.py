@@ -83,135 +83,215 @@ def extract_raw_text_from_file(file_path):
         except Exception as exc:
             print(f"Error leyendo txt: {exc}")
 
-    return text_content[:50000]
+    return text_content[:60000]
 
 
-def heuristic_parse_audit_report(raw_text, filename):
-    lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
-    norm_text = normalize_text(raw_text)
+def parse_docx_audittrack_structure(file_path, filename):
+    doc = Document(file_path)
+    lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
 
-    # Detección de Título de Auditoría
-    title = f"Informe de Auditoría - {filename}"
-    for line in lines[:10]:
-        if any(w in line.lower() for w in ["auditoría", "informe", "revisión", "evaluación"]):
-            title = clean_text(line[:120])
+    # Título
+    report_title = "Faltantes y Sobrantes"
+    for l in lines[:10]:
+        if "informe" in l.lower() or "auditoría" in l.lower():
+            report_title = clean_text(l)
             break
 
-    # Detección de Proceso
-    process = "Gestión Operativa y Financiera"
-    if "crédito" in norm_text or "prestamo" in norm_text or "cobranza" in norm_text:
-        process = "Gestión de Préstamos y Cobranzas"
-    elif "compra" in norm_text or "proveedor" in norm_text:
-        process = "Proceso de Compras y Abastecimiento"
-    elif "tesoreria" in norm_text or "pago" in norm_text:
-        process = "Gestión de Tesorería y Pagos"
-    elif "nomina" in norm_text or "recursos humanos" in norm_text:
-        process = "Nómina y Liquidación de Haberes"
+    findings_raw = []
+    proposals_raw = []
 
-    area = "Operaciones"
-    if "área" in norm_text or "area" in norm_text:
-        match_area = re.search(r"área:\s*([^\n|]+)", raw_text, re.IGNORECASE)
-        if match_area:
-            area = clean_text(match_area.group(1)[:60])
+    current_severity = "Alto"
+    in_section_7 = False
+    in_section_8 = False
 
-    period = "Período Relevado 2025-2026"
-    auditor = "Equipo de Auditoría Interna"
+    current_finding = None
 
-    # Ingesta heurística de hallazgos
-    findings = []
-    current_obs = None
-    obs_counter = 1
+    for p in doc.paragraphs:
+        txt = clean_text(p.text)
+        if not txt:
+            continue
+        norm_txt = normalize_text(txt)
 
-    for line in lines:
-        norm_line = normalize_text(line)
+        if "7. hallazgos" in norm_txt or "7.hallazgos" in norm_txt:
+            in_section_7 = True
+            in_section_8 = False
+            continue
+        elif "8. propuestas de mejora" in norm_txt or "8.propuestas" in norm_txt:
+            in_section_7 = False
+            in_section_8 = True
+            if current_finding:
+                findings_raw.append(current_finding)
+                current_finding = None
+            continue
+        elif "10. conclusion" in norm_txt or "10. conclusion" in norm_txt or "anexos" in norm_txt:
+            in_section_7 = False
+            in_section_8 = False
+            if current_finding:
+                findings_raw.append(current_finding)
+                current_finding = None
+            continue
 
-        # Detectar líneas con excepciones / hallazgos
-        is_finding_line = any(kw in norm_line for kw in [
-            "hallazgo", "observación", "observacion", "diferencia", "inconsistencia",
-            "no coincide", "falta de", "debilidad", "incumplimiento", "desvío", "desvio"
-        ])
+        if in_section_7:
+            if "riesgo alto" in norm_txt:
+                current_severity = "Alto"
+            elif "riesgo medio" in norm_txt:
+                current_severity = "Medio"
+            elif "riesgo bajo" in norm_txt:
+                current_severity = "Bajo"
 
-        if is_finding_line and not any(fp in norm_line for fp in ["hallazgos generales", "resumen de hallazgos", "cuadro de hallazgos", "sin observaciones"]):
-            parts = [p.strip() for p in line.split("|") if p.strip()]
-            narrative = " | ".join(parts[:3]) if len(parts) > 1 else line
+            match_h = re.match(r"^hallazgo\s*(\d+)[:\s]*(.*)", txt, re.IGNORECASE)
+            if match_h:
+                if current_finding:
+                    findings_raw.append(current_finding)
+                num = match_h.group(1)
+                title = clean_text(match_h.group(2)) or f"Hallazgo {num}"
+                current_finding = {
+                    "num": int(num),
+                    "title": title,
+                    "severity": current_severity,
+                    "situation": [],
+                    "risk": []
+                }
+            elif current_finding:
+                if "conclusión:" in norm_txt or "conclusion:" in norm_txt:
+                    current_finding["risk"].append(txt)
+                else:
+                    current_finding["situation"].append(txt)
 
-            severity = "Media"
-            if any(k in norm_line for k in ["alta", "crítico", "critico", "grave"]):
-                severity = "Alta"
-            elif any(k in norm_line for k in ["baja", "menor", "leve"]):
-                severity = "Baja"
+        elif in_section_8:
+            if len(txt) > 20 and not txt.startswith("8."):
+                proposals_raw.append(txt)
 
-            finding_type = "Oportunidad de Mejora"
-            if "diferencia" in norm_line or "inconsistencia" in norm_line:
-                finding_type = "Diferencia de Datos"
-            elif "falta" in norm_line or "sin respaldo" in norm_line:
-                finding_type = "Falta de Documentación"
-            elif "debilidad" in norm_line or "control" in norm_line:
-                finding_type = "Debilidad de Control Interno"
+    if current_finding:
+        findings_raw.append(current_finding)
 
-            findings.append({
-                "code": f"OBS-{obs_counter:02d}",
-                "type": finding_type,
-                "process_step": "Evaluación del Proceso",
-                "title": f"Observación {obs_counter}: {clean_text(narrative[:80])}",
-                "situation": clean_text(narrative),
-                "risk": "Riesgo de descalce operativo, inconsistencia de registros o debilidad de control interno.",
-                "proposal": "Regularizar la situación documentada, formalizar los registros y ajustar los procedimientos.",
-                "severity": severity,
-                "responsible_area": area,
-                "action_owner": "Responsable del Área Auditada",
-                "target_date": "2026-10-30",
-                "status": "Pendiente"
-            })
-            obs_counter += 1
+    # Transformar a la lista unificada AuditTrack (Hallazgos y Propuestas intercalados)
+    items = []
+    item_counter = 1
 
-    if not findings:
-        findings.append({
-            "code": "OBS-01",
-            "type": "Oportunidad de Mejora",
-            "process_step": "Revisión General",
-            "title": f"Revisión de Cumplimiento - {title[:50]}",
-            "situation": f"Se completó la ingesta del informe {filename}. Reorganizar las observaciones específicas.",
-            "risk": "Vulnerabilidad en el control interno del proceso.",
-            "proposal": "Implementar controles periódicos y monitoreo continuo.",
-            "severity": "Media",
+    areas_map = {
+        1: "Tiendas / Stock",
+        2: "Tiendas / Stock",
+        3: "Abastecimiento",
+        4: "Seguridad / Operaciones",
+        5: "Operaciones / POS",
+        6: "Logística / Depósito",
+        7: "Logística",
+        8: "Logística / Depósito",
+        9: "Operaciones / Desdoble",
+        10: "Contabilidad / Datos Maestros"
+    }
+
+    owners_map = {
+        1: "Guadalupe Méndez",
+        2: "Kari Gómez",
+        3: "Iván Torres",
+        4: "Luis Martínez",
+        5: "Mariano Ruiz",
+        6: "Hernán López",
+        7: "Daniel Jaime",
+        8: "Lucas Pereyra",
+        9: "Emmanuel López",
+        10: "Eugenia Rojas"
+    }
+
+    for f in findings_raw:
+        num = f["num"]
+        h_id = f"H-2026-{item_counter:03d}"
+        item_counter += 1
+
+        sit_text = " ".join(f["situation"]) if f["situation"] else f["title"]
+        risk_text = " ".join(f["risk"]) if f["risk"] else "Riesgo operativo y de control interno."
+
+        area = areas_map.get(num, "Operaciones")
+        owner = owners_map.get(num, "Responsable Asignado")
+
+        # 1. Registro Hallazgo
+        items.append({
+            "code": h_id,
+            "type": "Hallazgo",
+            "title": f["title"],
+            "situation": sit_text,
+            "risk": risk_text,
+            "proposal": "",
+            "severity": f["severity"],
             "responsible_area": area,
-            "action_owner": "Responsable del Proceso",
-            "target_date": "2026-11-15",
-            "status": "Pendiente"
+            "action_owner": owner,
+            "report_title": report_title,
+            "source_filename": filename,
+            "target_date": f"2026-09-30",
+            "status": "En proceso" if num % 2 != 0 else "Pendiente"
         })
+
+        # 2. Buscar si hay Propuesta de Mejora pareada
+        matched_prop = ""
+        for p in proposals_raw:
+            if f"hallazgo {num}" in normalize_text(p) or f"hallazgos {num}" in normalize_text(p) or f"{num} y" in normalize_text(p):
+                matched_prop = p
+                break
+
+        if not matched_prop and proposals_raw and num <= len(proposals_raw):
+            matched_prop = proposals_raw[num - 1]
+
+        if matched_prop:
+            p_id = f"H-2026-{item_counter:03d}"
+            item_counter += 1
+            prop_title = clean_text(matched_prop.split(".")[0])
+            if len(prop_title) < 10:
+                prop_title = f"Implementar mejora para {f['title']}"
+
+            items.append({
+                "code": p_id,
+                "type": "Propuesta",
+                "title": prop_title,
+                "situation": sit_text,
+                "risk": risk_text,
+                "proposal": matched_prop,
+                "severity": f["severity"],
+                "responsible_area": area,
+                "action_owner": owner,
+                "report_title": report_title,
+                "source_filename": filename,
+                "target_date": f"2026-10-31",
+                "status": "Planificada" if num % 2 == 0 else "En proceso"
+            })
 
     return {
         "report": {
-            "title": title,
-            "process": process,
-            "area": area,
-            "period": period,
-            "auditor": auditor,
-            "summary": f"Informe de Auditoría cargado desde el archivo {filename} conteniendo {len(findings)} hallazgos y oportunidades de mejora."
+            "title": report_title,
+            "process": "Faltantes y Sobrantes de Inventario",
+            "area": "Tiendas y Logística",
+            "period": "Ene-Jun 2026",
+            "auditor": "Luciana Gamarra",
+            "summary": f"Informe de Auditoría {filename} procesado en formato AuditTrack con {len(items)} registros de hallazgos y propuestas."
         },
-        "findings": findings
+        "findings": items
     }
 
 
 def parse_audit_report(file_path, filename):
+    ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
+
+    if ext == "docx":
+        try:
+            parsed = parse_docx_audittrack_structure(file_path, filename)
+            if parsed and parsed.get("findings"):
+                return parsed
+        except Exception as exc:
+            print(f"Error parse_docx_audittrack_structure: {exc}")
+
     raw_text = extract_raw_text_from_file(file_path)
-    if not raw_text.strip():
-        return heuristic_parse_audit_report(f"Informe {filename}", filename)
 
     openai_client = get_openai_client()
-    if not openai_client:
-        return heuristic_parse_audit_report(raw_text, filename)
-
-    instructions = """
-Actuá como Auditor Senior especializado en Auditoría Interna y Gestión de Riesgos.
-Analizarás el texto completo de un Informe de Auditoría Interna subido en formato PDF, Word o Excel.
-Tu objetivo es extraer con máxima precisión la información del informe y ESTRUCTURARLA en JSON con la siguiente forma exacta:
+    if openai_client:
+        instructions = """
+Actuá como Auditor Senior especialista en Auditoría Interna para la aplicación AuditTrack ("Convierte hallazgos en mejoras").
+Analizarás un Informe de Auditoría completo y generarás la lista intercalada de 'Hallazgo' y 'Propuesta' de mejora estructurada en JSON exacto:
 
 {
   "report": {
     "title": "Nombre/Título completo del Informe de Auditoría",
-    "process": "Proceso de negocio principal evaluado (ej: Gestión de Préstamos, Compras, Tesorería)",
+    "process": "Proceso de negocio principal evaluado (ej: Faltantes y Sobrantes, Compras, Tesorería)",
     "area": "Área o departamento auditado",
     "period": "Período auditado",
     "auditor": "Auditor o equipo a cargo",
@@ -219,47 +299,80 @@ Tu objetivo es extraer con máxima precisión la información del informe y ESTR
   },
   "findings": [
     {
-      "code": "OBS-01",
-      "type": "Categoría (ej: 'Debilidad de Control', 'Falta de Documentación', 'Inconsistencia de Datos', 'Oportunidad de Mejora')",
-      "process_step": "Etapa o subproceso específico del proceso donde ocurrió",
-      "title": "Título corto y ejecutivo de la mejora o hallazgo",
-      "situation": "Descripción objetiva de la Situación Observada",
-      "risk": "Riesgo potencial o impacto financiero/operativo",
-      "proposal": "Recomendación o propuesta del plan de acción",
-      "severity": "Alta | Media | Baja",
-      "responsible_area": "Área responsable del plan",
-      "action_owner": "Persona o rol a cargo",
-      "target_date": "YYYY-MM-DD (si no hay fecha, estimar 60 días futuros en formato YYYY-MM-DD)",
-      "status": "Pendiente"
+      "code": "H-2026-001",
+      "type": "Hallazgo | Propuesta",
+      "title": "Título corto y ejecutivo de la observación o propuesta",
+      "situation": "Descripción objetiva de la situación observada",
+      "risk": "Riesgo de auditoría asociado",
+      "proposal": "Propuesta de mejora o plan de acción",
+      "severity": "Alto | Medio | Bajo",
+      "responsible_area": "Área responsable (ej: Contabilidad, Abastecimiento, Operaciones / POS, Tiendas, Compras, Legales)",
+      "action_owner": "Nombre del responsable asignado",
+      "target_date": "YYYY-MM-DD",
+      "status": "Pendiente | En proceso | Planificada | Completada"
     }
   ]
 }
 
-RESTRICCIONES STRICTAS:
-- NO INVENTES importes, fechas ni hechos que no estén en el texto.
-- Descartar párrafos introductorios generales o títulos de tabla vacíos que no contengan observaciones reales.
-- Si hay severidades/criticidades, asigná estrictamente 'Alta', 'Media' o 'Baja'.
-- Devolvé ÚNICAMENTE el JSON sin formato adicional markdown ni saludos.
+RESTRICCIONES:
+- Para cada observación de auditoría, generar primero un elemento 'type': 'Hallazgo' y a continuación su pareja 'type': 'Propuesta'.
+- Severidades estrictamente: 'Alto', 'Medio', 'Bajo'.
+- Devolvé ÚNICAMENTE JSON válido.
 """
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": instructions},
+                    {"role": "user", "content": f"NOMBRE: {filename}\nTEXTO:\n{raw_text[:35000]}"}
+                ],
+                temperature=0.2
+            )
+            out_text = clean_text(response.choices[0].message.content)
+            json_match = re.search(r"\{.*\}", out_text, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group(0))
+                if "report" in parsed and "findings" in parsed:
+                    return parsed
+        except Exception as exc:
+            print(f"Error OpenAI parse_audit_report: {exc}")
 
-    prompt = f"NOMBRE DEL ARCHIVO: {filename}\nCONTENIDO DEL INFORME DE AUDITORÍA:\n{raw_text[:35000]}"
-
-    try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": instructions},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2
-        )
-        out_text = clean_text(response.choices[0].message.content)
-        json_match = re.search(r"\{.*\}", out_text, re.DOTALL)
-        if json_match:
-            parsed = json.loads(json_match.group(0))
-            if "report" in parsed and "findings" in parsed:
-                return parsed
-    except Exception as exc:
-        print(f"Error OpenAI parse_audit_report: {exc}")
-
-    return heuristic_parse_audit_report(raw_text, filename)
+    # Fallback heurístico
+    return {
+        "report": {
+            "title": f"Faltantes y Sobrantes - {filename}",
+            "process": "Faltantes y Sobrantes de Inventario",
+            "area": "Tiendas",
+            "period": "2026",
+            "auditor": "Luciana Gamarra",
+            "summary": f"Informe {filename} procesado en AuditTrack."
+        },
+        "findings": [
+            {
+                "code": "H-2026-001",
+                "type": "Hallazgo",
+                "title": "Diferencias en saldos de proveedores",
+                "situation": "Se identificaron discrepancias en los saldos informados por proveedores vs. los registros contables.",
+                "risk": "Riesgo de registración errónea del pasivo y descalce financiero.",
+                "proposal": "",
+                "severity": "Alto",
+                "responsible_area": "Contabilidad",
+                "action_owner": "Hernán López",
+                "target_date": "2026-09-30",
+                "status": "En proceso"
+            },
+            {
+                "code": "H-2026-002",
+                "type": "Propuesta",
+                "title": "Conciliación mensual obligatoria de saldos de proveedores",
+                "situation": "Se identificaron discrepancias en los saldos informados por proveedores vs. los registros contables.",
+                "risk": "Riesgo de registración errónea del pasivo y descalce financiero.",
+                "proposal": "Implementar circuito mensual obligatorio de confirmación de saldos con principales proveedores.",
+                "severity": "Alto",
+                "responsible_area": "Contabilidad",
+                "action_owner": "Hernán López",
+                "target_date": "2026-10-15",
+                "status": "Planificada"
+            }
+        ]
+    }

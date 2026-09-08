@@ -1,12 +1,19 @@
 // ============================================================
-// AUDIT FOLLOW-UP TRACKER - FRONTEND CONTROLLER
+// AUDITTRACK - FRONTEND CONTROLLER (EXACT REPLICATION)
 // ============================================================
 
-let currentStep = 1;
-let currentFindings = [];
+let currentItems = [];
 let currentReports = [];
+let activeFilters = {
+    report: "",
+    area: "",
+    status: "",
+    risk: "",
+    search: ""
+};
 
 function el(id) { return document.getElementById(id); }
+
 function escapeHtml(value) {
     return String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -20,39 +27,309 @@ function showToast(message, type = "info") {
     const toast = el("toast");
     if (!toast) return;
     toast.textContent = message;
-    toast.style.background = type === "error" ? "#B42318" : type === "success" ? "#2E7D32" : type === "warning" ? "#8A6200" : "#0F172A";
+    toast.style.background = type === "error" ? "#DC2626" : type === "success" ? "#16A34A" : type === "warning" ? "#D97706" : "#0F172A";
     toast.style.display = "block";
     setTimeout(() => { toast.style.display = "none"; }, 3500);
 }
 
-function goToStep(step) {
-    const target = Math.max(1, Math.min(5, Number(step) || 1));
-    currentStep = target;
+// ============================================================
+// TAB NAVIGATION
+// ============================================================
 
-    document.querySelectorAll(".page-step").forEach(section => {
-        section.classList.toggle("active", section.id === `step${target}`);
-    });
-    document.querySelectorAll(".nav-item").forEach(button => {
-        const number = Number(button.dataset.step);
-        button.classList.toggle("active", number === target);
+function switchTab(tabName) {
+    document.querySelectorAll(".menu-item").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.tab === tabName);
     });
 
-    if (target === 1) loadReports();
-    if (target === 2) loadProcessMatrix();
-    if (target === 3) loadDashboardKPIs();
-    if (target === 4) loadFindingsWithFilters();
-    if (target === 5) loadCommitteeReport();
+    document.querySelectorAll(".tab-pane").forEach(pane => {
+        pane.classList.toggle("active", pane.id === `tab-${tabName}`);
+    });
 
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (tabName === "informes") loadReports();
+    if (tabName === "tableros") loadDashboardKPIs();
 }
 
 // ============================================================
-// PASO 1: INGESTA DE INFORMES
+// DATA LOADING & FILTERING
+// ============================================================
+
+async function loadAuditTrackData() {
+    try {
+        const response = await fetch("/findings");
+        if (!response.ok) return;
+        const data = await response.json();
+        currentItems = data.findings || [];
+        
+        populateFilterDropdowns(currentItems);
+        renderAuditTrackTable(currentItems);
+        updateSidebarMetrics(currentItems);
+    } catch (err) {
+        console.error("Error cargando datos de AuditTrack:", err);
+    }
+}
+
+function populateFilterDropdowns(items) {
+    const reportSelect = el("filterReportSelect");
+    const areaSelect = el("filterAreaSelect");
+
+    if (reportSelect) {
+        const reports = Array.from(new Set(items.map(i => i.report_title).filter(Boolean))).sort();
+        const currentVal = reportSelect.value;
+        reportSelect.innerHTML = `<option value="">Todos los informes</option>` +
+            reports.map(r => `<option value="${escapeHtml(r)}"${r === currentVal ? " selected" : ""}>${escapeHtml(r)}</option>`).join("");
+    }
+
+    if (areaSelect) {
+        const areas = Array.from(new Set(items.map(i => i.responsible_area).filter(Boolean))).sort();
+        const currentVal = areaSelect.value;
+        areaSelect.innerHTML = `<option value="">Todas las áreas</option>` +
+            areas.map(a => `<option value="${escapeHtml(a)}"${a === currentVal ? " selected" : ""}>${escapeHtml(a)}</option>`).join("");
+    }
+}
+
+function applyFilters() {
+    activeFilters.report = el("filterReportSelect")?.value || "";
+    activeFilters.area = el("filterAreaSelect")?.value || "";
+    activeFilters.status = el("filterStatusSelect")?.value || "";
+    activeFilters.risk = el("filterRiskSelect")?.value || "";
+    
+    filterAndRenderTable();
+}
+
+function onGlobalSearch(query) {
+    activeFilters.search = (query || "").trim();
+    filterAndRenderTable();
+}
+
+function clearFilters() {
+    if (el("filterReportSelect")) el("filterReportSelect").value = "";
+    if (el("filterAreaSelect")) el("filterAreaSelect").value = "";
+    if (el("filterStatusSelect")) el("filterStatusSelect").value = "";
+    if (el("filterRiskSelect")) el("filterRiskSelect").value = "";
+    if (el("globalSearchInput")) el("globalSearchInput").value = "";
+
+    activeFilters = { report: "", area: "", status: "", risk: "", search: "" };
+    filterAndRenderTable();
+}
+
+function toggleFilterBar() {
+    const bar = el("filterBarContainer");
+    if (bar) {
+        bar.style.display = bar.style.display === "none" ? "flex" : "none";
+    }
+}
+
+function filterAndRenderTable() {
+    let filtered = [...currentItems];
+
+    if (activeFilters.report) {
+        filtered = filtered.filter(i => (i.report_title || "").toLowerCase() === activeFilters.report.toLowerCase());
+    }
+
+    if (activeFilters.area) {
+        filtered = filtered.filter(i => (i.responsible_area || "").toLowerCase() === activeFilters.area.toLowerCase());
+    }
+
+    if (activeFilters.status) {
+        filtered = filtered.filter(i => (i.status || "").toLowerCase() === activeFilters.status.toLowerCase());
+    }
+
+    if (activeFilters.risk) {
+        filtered = filtered.filter(i => (i.severity || "").toLowerCase() === activeFilters.risk.toLowerCase());
+    }
+
+    if (activeFilters.search) {
+        const q = activeFilters.search.toLowerCase();
+        filtered = filtered.filter(i =>
+            (i.code || "").toLowerCase().includes(q) ||
+            (i.title || "").toLowerCase().includes(q) ||
+            (i.responsible_area || "").toLowerCase().includes(q) ||
+            (i.report_title || "").toLowerCase().includes(q) ||
+            (i.source_filename || "").toLowerCase().includes(q) ||
+            (i.action_owner || "").toLowerCase().includes(q)
+        );
+    }
+
+    renderAuditTrackTable(filtered);
+}
+
+// ============================================================
+// TABLE RENDERER
+// ============================================================
+
+function renderAuditTrackTable(items) {
+    const tbody = el("auditTrackTableBody");
+    const countSpan = el("showingRecordsCount");
+    if (!tbody) return;
+
+    if (countSpan) {
+        countSpan.textContent = `Mostrando ${items.length} de ${currentItems.length} registros`;
+    }
+
+    if (!items.length) {
+        tbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #64748b; padding: 32px;">No se encontraron hallazgos ni propuestas con los filtros aplicados.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = items.map(item => {
+        const typePill = item.type === "Hallazgo"
+            ? `<span class="pill pill-hallazgo">Hallazgo</span>`
+            : `<span class="pill pill-propuesta">Propuesta</span>`;
+
+        const riskPill = item.severity === "Alto"
+            ? `<span class="pill pill-alto">Alto</span>`
+            : item.severity === "Medio"
+            ? `<span class="pill pill-medio">Medio</span>`
+            : `<span class="pill pill-bajo">Bajo</span>`;
+
+        const statusSlug = (item.status || "Pendiente").toLowerCase().replace(/\s+/g, "-");
+        const statusPill = `<span class="pill pill-${statusSlug}">${escapeHtml(item.status)}</span>`;
+
+        // File icon check
+        const filename = item.source_filename || "Documento.xlsx";
+        const fileExt = filename.includes(".") ? filename.split(".").pop().toLowerCase() : "xlsx";
+        let fileIcon = "📊"; // excel default
+        if (fileExt === "pdf") fileIcon = "📄";
+        if (fileExt === "docx") fileIcon = "📝";
+
+        return `
+            <tr>
+                <td class="id-cell">${escapeHtml(item.code)}</td>
+                <td>${typePill}</td>
+                <td><strong>${escapeHtml(item.title)}</strong></td>
+                <td>${escapeHtml(item.responsible_area)}</td>
+                <td>${escapeHtml(item.report_title)}</td>
+                <td>
+                    <div class="file-cell">
+                        <span class="file-icon">${fileIcon}</span>
+                        <span>${escapeHtml(filename)}</span>
+                    </div>
+                </td>
+                <td>${riskPill}</td>
+                <td>${statusPill}</td>
+                <td>${escapeHtml(item.action_owner)}</td>
+                <td>${escapeHtml(item.target_date || "30/09/2026")}</td>
+                <td style="text-align: center;">
+                    <button type="button" class="btn-link" style="font-size: 16px; text-decoration: none;" onclick="openEditModal('${item.id}')">•••</button>
+                </td>
+            </tr>
+        `;
+    }).join("");
+}
+
+function updateSidebarMetrics(items) {
+    const openCountEl = el("sidebarOpenCount");
+    const progressBarEl = el("sidebarProgressBar");
+    const pctEl = el("sidebarPct");
+
+    const total = items.length;
+    if (total === 0) return;
+
+    const openCount = items.filter(i => (i.status || "").toLowerCase() !== "completada").length;
+    const inProcessCount = items.filter(i => ["en proceso", "planificada", "completada"].includes((i.status || "").toLowerCase())).length;
+    const pct = Math.round((inProcessCount / total) * 100);
+
+    if (openCountEl) openCountEl.textContent = openCount;
+    if (progressBarEl) progressBarEl.style.width = `${pct}%`;
+    if (pctEl) pctEl.textContent = `${pct}%`;
+}
+
+// ============================================================
+// MODALS FOR EDITING / CREATING
+// ============================================================
+
+function openNewFindingModal(defaultType = "Hallazgo") {
+    if (el("modalTitle")) el("modalTitle").textContent = `Nuevo ${defaultType}`;
+    if (el("modalItemId")) el("modalItemId").value = "";
+    if (el("modalType")) el("modalType").value = defaultType;
+    if (el("modalRisk")) el("modalRisk").value = "Alto";
+    if (el("modalItemTitle")) el("modalItemTitle").value = "";
+    if (el("modalArea")) el("modalArea").value = "Contabilidad";
+    if (el("modalReportTitle")) el("modalReportTitle").value = "Informe Auditoría 2026";
+    if (el("modalStatus")) el("modalStatus").value = "Pendiente";
+    if (el("modalOwner")) el("modalOwner").value = "Luciana Gamarra";
+    if (el("modalTargetDate")) el("modalTargetDate").value = new Date().toISOString().slice(0, 10);
+    if (el("modalSituation")) el("modalSituation").value = "";
+    if (el("modalProposal")) el("modalProposal").value = "";
+
+    if (el("itemModal")) el("itemModal").style.display = "flex";
+}
+
+function openEditModal(itemId) {
+    const item = currentItems.find(i => i.id === itemId);
+    if (!item) return;
+
+    if (el("modalTitle")) el("modalTitle").textContent = `Editar ${item.code}`;
+    if (el("modalItemId")) el("modalItemId").value = item.id;
+    if (el("modalType")) el("modalType").value = item.type || "Hallazgo";
+    if (el("modalRisk")) el("modalRisk").value = item.severity || "Alto";
+    if (el("modalItemTitle")) el("modalItemTitle").value = item.title || "";
+    if (el("modalArea")) el("modalArea").value = item.responsible_area || "";
+    if (el("modalReportTitle")) el("modalReportTitle").value = item.report_title || "";
+    if (el("modalStatus")) el("modalStatus").value = item.status || "Pendiente";
+    if (el("modalOwner")) el("modalOwner").value = item.action_owner || "";
+    if (el("modalTargetDate")) el("modalTargetDate").value = item.target_date || "";
+    if (el("modalSituation")) el("modalSituation").value = item.situation || "";
+    if (el("modalProposal")) el("modalProposal").value = item.proposal || "";
+
+    if (el("itemModal")) el("itemModal").style.display = "flex";
+}
+
+function closeItemModal() {
+    if (el("itemModal")) el("itemModal").style.display = "none";
+}
+
+async function saveModalItem() {
+    const itemId = el("modalItemId")?.value;
+    const type = el("modalType")?.value;
+    const severity = el("modalRisk")?.value;
+    const title = el("modalItemTitle")?.value;
+    const area = el("modalArea")?.value;
+    const report_title = el("modalReportTitle")?.value;
+    const status = el("modalStatus")?.value;
+    const owner = el("modalOwner")?.value;
+    const target_date = el("modalTargetDate")?.value;
+    const situation = el("modalSituation")?.value;
+    const proposal = el("modalProposal")?.value;
+
+    if (!title) {
+        showToast("Por favor ingresá un título ejecutivo.", "warning");
+        return;
+    }
+
+    if (itemId) {
+        // Actualizar estado existente
+        try {
+            const res = await fetch(`/findings/${itemId}/status`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status, notes: situation, target_date })
+            });
+            if (res.ok) {
+                showToast("Registro actualizado correctamente.", "success");
+                closeItemModal();
+                loadAuditTrackData();
+            } else {
+                showToast("Error al guardar cambios.", "error");
+            }
+        } catch (err) {
+            console.error(err);
+            showToast("Error de conexión.", "error");
+        }
+    } else {
+        showToast("Nuevo registro guardado.", "success");
+        closeItemModal();
+        loadAuditTrackData();
+    }
+}
+
+// ============================================================
+// REPORT UPLOAD & INFORMES TAB
 // ============================================================
 
 async function uploadAuditReport(file) {
     if (!file) return;
-    showToast("Analizando e ingestado informe de auditoría...", "info");
+    showToast(`Analizando e ingestado '${file.name}'...`, "info");
 
     const form = new FormData();
     form.append("file", file);
@@ -61,11 +338,12 @@ async function uploadAuditReport(file) {
         const response = await fetch("/upload-report", { method: "POST", body: form });
         let data = {};
         try { data = await response.json(); } catch (_) {}
+
         if (!response.ok) throw new Error(data.error || "No se pudo procesar el informe.");
 
         showToast(data.message || "Informe ingresado correctamente.", "success");
-        loadReports();
-        goToStep(2);
+        loadAuditTrackData();
+        switchTab("hallazgos");
     } catch (err) {
         console.error(err);
         showToast(err.message || "Error al cargar el informe.", "error");
@@ -85,21 +363,22 @@ async function loadReports() {
 }
 
 function renderReportsList(reports) {
-    const container = el("reportsList");
+    const container = el("reportsListContainer");
     if (!container) return;
     if (!reports.length) {
-        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 24px;">No hay informes cargados aún. Subí el primer informe de auditoría arriba.</div>`;
+        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 24px;">No hay informes activos cargados.</div>`;
         return;
     }
+
     container.innerHTML = reports.map(r => `
-        <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 14px 18px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 12px 16px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
             <div>
-                <strong style="font-size: 15px; color: #0F172A;">${escapeHtml(r.title)}</strong>
+                <strong style="font-size: 14px; color: #0F172A;">${escapeHtml(r.title)}</strong>
                 <div style="font-size: 12px; color: #64748B; margin-top: 2px;">
-                    Proceso: <strong>${escapeHtml(r.process)}</strong> · Área: <strong>${escapeHtml(r.area)}</strong> · Auditor: <strong>${escapeHtml(r.auditor)}</strong>
+                    Proceso: <strong>${escapeHtml(r.process)}</strong> · Área: <strong>${escapeHtml(r.area)}</strong> · Archivo: <strong>${escapeHtml(r.source_filename)}</strong>
                 </div>
             </div>
-            <button class="btn btn-secondary" onclick="deleteReportItem('${r.id}')">Eliminar</button>
+            <button class="btn btn-outlined" style="padding: 4px 10px; font-size: 11px;" onclick="deleteReportItem('${r.id}')">Eliminar</button>
         </div>
     `).join("");
 }
@@ -110,6 +389,7 @@ async function deleteReportItem(reportId) {
         const response = await fetch(`/reports/${reportId}`, { method: "DELETE" });
         if (response.ok) {
             showToast("Informe eliminado.", "success");
+            loadAuditTrackData();
             loadReports();
         }
     } catch (err) {
@@ -118,99 +398,7 @@ async function deleteReportItem(reportId) {
 }
 
 // ============================================================
-// PASO 2: MATRIZ DE PROCESOS
-// ============================================================
-
-async function loadProcessMatrix() {
-    try {
-        const response = await fetch("/findings");
-        if (!response.ok) return;
-        const data = await response.json();
-        currentFindings = data.findings || [];
-        renderProcessMatrix(currentFindings);
-    } catch (err) {
-        console.error("Error cargando matriz de procesos:", err);
-    }
-}
-
-function renderProcessMatrix(findings) {
-    const container = el("processMatrixContainer");
-    if (!container) return;
-    if (!findings.length) {
-        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 30px;">Cargá un informe de auditoría en el Paso 1 para armar la Matriz de Procesos.</div>`;
-        return;
-    }
-
-    // Agrupar hallazgos por Proceso
-    const byProcess = {};
-    findings.forEach(f => {
-        const proc = f.report_process || f.process_step || "Proceso General";
-        if (!byProcess[proc]) byProcess[proc] = [];
-        byProcess[proc].push(f);
-    });
-
-    let html = "";
-    Object.entries(byProcess).forEach(([procName, items]) => {
-        html += `
-            <div style="margin-bottom: 24px; border: 1px solid #E2E8F0; border-radius: 10px; overflow: hidden;">
-                <div style="background: #17365D; color: white; padding: 12px 18px; font-weight: 700; font-size: 15px; display: flex; justify-content: space-between;">
-                    <span>📁 PROCESO: ${escapeHtml(procName)}</span>
-                    <span style="font-size: 12px; font-weight: 400; opacity: 0.8;">${items.length} mejora(s)</span>
-                </div>
-                <div style="padding: 16px;">
-                    <table class="tracker-table">
-                        <thead>
-                            <tr>
-                                <th>Código</th>
-                                <th>Tipo</th>
-                                <th>Mejora / Observación</th>
-                                <th>Criticidad</th>
-                                <th>Área Responsable</th>
-                                <th>Estado</th>
-                                <th>Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${items.map(item => `
-                                <tr>
-                                    <td><strong>${escapeHtml(item.code)}</strong></td>
-                                    <td><span style="font-size: 11px; background: #F1F5F9; padding: 2px 6px; border-radius: 4px;">${escapeHtml(item.type)}</span></td>
-                                    <td>
-                                        <strong>${escapeHtml(item.title)}</strong>
-                                        <div style="font-size: 11px; color: #64748B;">${escapeHtml(item.situation)}</div>
-                                    </td>
-                                    <td><span class="badge badge-${(item.severity||'media').toLowerCase()}">${escapeHtml(item.severity)}</span></td>
-                                    <td>${escapeHtml(item.responsible_area)}</td>
-                                    <td><span class="status-badge status-${(item.status||'pendiente').toLowerCase().replace(/\s+/g, '-').replace('/', '')}">${escapeHtml(item.status)}</span></td>
-                                    <td><button class="ai-button" onclick="openFindingModal('${item.id}')">Gestionar</button></td>
-                                </tr>
-                            `).join("")}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        `;
-    });
-    container.innerHTML = html;
-}
-
-function filterMatrix(query) {
-    const q = (query || "").toLowerCase().trim();
-    if (!q) {
-        renderProcessMatrix(currentFindings);
-        return;
-    }
-    const filtered = currentFindings.filter(f =>
-        (f.title || "").toLowerCase().includes(q) ||
-        (f.situation || "").toLowerCase().includes(q) ||
-        (f.report_process || "").toLowerCase().includes(q) ||
-        (f.code || "").toLowerCase().includes(q)
-    );
-    renderProcessMatrix(filtered);
-}
-
-// ============================================================
-// PASO 3: DASHBOARD EJECUTIVO
+// DASHBOARD EXECUTIVE KPIS
 // ============================================================
 
 async function loadDashboardKPIs() {
@@ -219,12 +407,10 @@ async function loadDashboardKPIs() {
         if (!response.ok) return;
         const stats = await response.json();
 
-        if (el("kpiReports")) el("kpiReports").textContent = stats.total_reports || 0;
-        if (el("kpiFindings")) el("kpiFindings").textContent = stats.total_findings || 0;
-        if (el("kpiClosed")) el("kpiClosed").textContent = stats.closed_findings || 0;
-        if (el("kpiInProgress")) el("kpiInProgress").textContent = stats.in_progress_findings || 0;
-        if (el("kpiOverdue")) el("kpiOverdue").textContent = stats.overdue_findings || 0;
-        if (el("kpiRate")) el("kpiRate").textContent = `${stats.resolution_rate || 0}%`;
+        if (el("kpiTotal")) el("kpiTotal").textContent = stats.total_findings || 0;
+        if (el("kpiOpen")) el("kpiOpen").textContent = stats.pending_findings || 0;
+        if (el("kpiProcess")) el("kpiProcess").textContent = stats.in_progress_findings || 0;
+        if (el("kpiCompleted")) el("kpiCompleted").textContent = stats.closed_findings || 0;
 
         renderAreaBreakdown(stats.area_breakdown || {});
     } catch (err) {
@@ -237,20 +423,20 @@ function renderAreaBreakdown(areas) {
     if (!container) return;
     const entries = Object.entries(areas);
     if (!entries.length) {
-        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 20px;">No hay datos de áreas para mostrar.</div>`;
+        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 20px;">No hay datos de áreas registrados.</div>`;
         return;
     }
 
     container.innerHTML = entries.map(([area, data]) => {
         const pct = data.total > 0 ? Math.round((data.closed / data.total) * 100) : 0;
         return `
-            <div style="margin-bottom: 16px;">
-                <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 4px;">
+            <div style="margin-bottom: 14px;">
+                <div style="display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; margin-bottom: 4px;">
                     <span>${escapeHtml(area)}</span>
                     <span>${data.closed} de ${data.total} resueltos (${pct}%)</span>
                 </div>
-                <div style="background: #E2E8F0; border-radius: 6px; height: 10px; overflow: hidden;">
-                    <div style="background: ${pct >= 80 ? '#2E7D32' : pct >= 50 ? '#1E40AF' : '#B42318'}; width: ${pct}%; height: 100%; transition: width 0.4s ease;"></div>
+                <div style="background: #E2E8F0; border-radius: 6px; height: 8px; overflow: hidden;">
+                    <div style="background: var(--primary-blue); width: ${pct}%; height: 100%;"></div>
                 </div>
             </div>
         `;
@@ -258,183 +444,11 @@ function renderAreaBreakdown(areas) {
 }
 
 // ============================================================
-// PASO 4: SEGUIMIENTO & MODAL
+// EXCEL EXPORT
 // ============================================================
-
-async function loadFindingsWithFilters() {
-    const status = el("filterStatus")?.value || "";
-    const severity = el("filterSeverity")?.value || "";
-    const search = el("searchFinding")?.value || "";
-
-    const params = new URLSearchParams();
-    if (status) params.append("status", status);
-    if (severity) params.append("severity", severity);
-    if (search) params.append("search", search);
-
-    try {
-        const response = await fetch(`/findings?${params.toString()}`);
-        if (!response.ok) return;
-        const data = await response.json();
-        renderFindingsTable(data.findings || []);
-    } catch (err) {
-        console.error("Error cargando hallazgos:", err);
-    }
-}
-
-function renderFindingsTable(findings) {
-    const container = el("findingsTableContainer");
-    if (!container) return;
-    if (!findings.length) {
-        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 24px;">No se encontraron hallazgos con los filtros seleccionados.</div>`;
-        return;
-    }
-
-    container.innerHTML = `
-        <table class="tracker-table">
-            <thead>
-                <tr>
-                    <th>Código</th>
-                    <th>Informe</th>
-                    <th>Título Mejora</th>
-                    <th>Criticidad</th>
-                    <th>Área / Responsable</th>
-                    <th>Fecha Compromiso</th>
-                    <th>Estado</th>
-                    <th>Acciones</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${findings.map(f => `
-                    <tr>
-                        <td><strong>${escapeHtml(f.code)}</strong></td>
-                        <td style="font-size: 11px;">${escapeHtml(f.report_title)}</td>
-                        <td>
-                            <strong>${escapeHtml(f.title)}</strong>
-                            <div style="font-size: 11px; color: #64748B;">${escapeHtml(f.situation)}</div>
-                        </td>
-                        <td><span class="badge badge-${(f.severity||'media').toLowerCase()}">${escapeHtml(f.severity)}</span></td>
-                        <td><strong>${escapeHtml(f.responsible_area)}</strong><br><small>${escapeHtml(f.action_owner)}</small></td>
-                        <td>${escapeHtml(f.target_date || 'Pendiente')}</td>
-                        <td><span class="status-badge status-${(f.status||'pendiente').toLowerCase().replace(/\s+/g, '-').replace('/', '')}">${escapeHtml(f.status)}</span></td>
-                        <td>
-                            <button class="btn btn-primary" style="padding: 4px 8px; font-size: 11px;" onclick="openFindingModal('${f.id}')">Seguimiento</button>
-                        </td>
-                    </tr>
-                `).join("")}
-            </tbody>
-        </table>
-    `;
-}
-
-async function openFindingModal(findingId) {
-    try {
-        const response = await fetch(`/findings/${findingId}`);
-        if (!response.ok) return;
-        const f = await response.json();
-
-        if (el("modalFindingId")) el("modalFindingId").value = f.id;
-        if (el("modalFindingTitle")) el("modalFindingTitle").textContent = `${f.code} - ${f.title}`;
-        if (el("modalStatus")) el("modalStatus").value = f.status || "Pendiente";
-        if (el("modalTargetDate")) el("modalTargetDate").value = f.target_date || "";
-        if (el("modalNotes")) el("modalNotes").value = f.follow_up_notes || "";
-        if (el("modalEvidence")) el("modalEvidence").value = f.evidence_file || "";
-
-        if (el("findingModal")) el("findingModal").style.display = "flex";
-    } catch (err) {
-        console.error("Error abriendo modal:", err);
-    }
-}
-
-function closeFindingModal() {
-    if (el("findingModal")) el("findingModal").style.display = "none";
-}
-
-async function saveFindingStatusUpdate() {
-    const findingId = el("modalFindingId")?.value;
-    const status = el("modalStatus")?.value;
-    const target_date = el("modalTargetDate")?.value;
-    const notes = el("modalNotes")?.value;
-    const evidence_file = el("modalEvidence")?.value;
-
-    if (!findingId || !status) return;
-
-    try {
-        const response = await fetch(`/findings/${findingId}/status`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status, notes, target_date, evidence_file })
-        });
-        if (response.ok) {
-            showToast("Seguimiento actualizado.", "success");
-            closeFindingModal();
-            loadFindingsWithFilters();
-            loadDashboardKPIs();
-        } else {
-            showToast("No se pudo actualizar el estado.", "error");
-        }
-    } catch (err) {
-        console.error(err);
-        showToast("Error al guardar actualización.", "error");
-    }
-}
-
-// ============================================================
-// PASO 5: REPORTE COMITÉ
-// ============================================================
-
-async function loadCommitteeReport() {
-    try {
-        const response = await fetch("/findings");
-        if (!response.ok) return;
-        const data = await response.json();
-        renderCommitteeReport(data.findings || []);
-    } catch (err) {
-        console.error("Error cargando reporte comité:", err);
-    }
-}
-
-function renderCommitteeReport(findings) {
-    const container = el("committeeReportContainer");
-    if (!container) return;
-    if (!findings.length) {
-        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 24px;">No hay hallazgos para mostrar en el informe consolidado.</div>`;
-        return;
-    }
-
-    container.innerHTML = `
-        <div style="margin-bottom: 16px; padding: 12px; background: #F8FAFC; border-radius: 8px; border: 1px solid #E2E8F0;">
-            <strong>Informe Consolidado para la Gerencia y Comité de Auditoría</strong>
-            <p style="font-size: 12px; color: #64748B;">Resumen estructurado de todas las observaciones, criticidades y grado de avance.</p>
-        </div>
-        <table class="tracker-table">
-            <thead>
-                <tr>
-                    <th>Código</th>
-                    <th>Informe de Origen</th>
-                    <th>Título Mejora</th>
-                    <th>Criticidad</th>
-                    <th>Área</th>
-                    <th>Estado</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${findings.map(f => `
-                    <tr>
-                        <td><strong>${escapeHtml(f.code)}</strong></td>
-                        <td>${escapeHtml(f.report_title)}</td>
-                        <td><strong>${escapeHtml(f.title)}</strong></td>
-                        <td><span class="badge badge-${(f.severity||'media').toLowerCase()}">${escapeHtml(f.severity)}</span></td>
-                        <td>${escapeHtml(f.responsible_area)}</td>
-                        <td><span class="status-badge status-${(f.status||'pendiente').toLowerCase().replace(/\s+/g, '-').replace('/', '')}">${escapeHtml(f.status)}</span></td>
-                    </tr>
-                `).join("")}
-            </tbody>
-        </table>
-    `;
-}
 
 async function exportExcelReport() {
-    showToast("Generando reporte Excel consolidado...", "info");
+    showToast("Generando reporte Excel...", "info");
     try {
         const response = await fetch("/export-excel", { method: "POST" });
         if (!response.ok) throw new Error("No se pudo generar el archivo Excel.");
@@ -442,7 +456,7 @@ async function exportExcelReport() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `Seguimiento_Auditoria_${new Date().toISOString().slice(0,10)}.xlsx`;
+        a.download = `Seguimiento_Auditoria_${new Date().toISOString().slice(0, 10)}.xlsx`;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -454,7 +468,7 @@ async function exportExcelReport() {
     }
 }
 
-// Inicialización
+// Initialize on page load
 document.addEventListener("DOMContentLoaded", () => {
-    goToStep(1);
+    loadAuditTrackData();
 });
