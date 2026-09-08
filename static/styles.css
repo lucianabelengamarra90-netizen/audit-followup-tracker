@@ -334,37 +334,66 @@ body {
     gap: 10px;
 }
 
+/* Buttons System - Modern Corporate SaaS */
 .btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
-    border-radius: 8px;
+    justify-content: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 16px;
+    border-radius: 7px;
+    font-family: var(--font);
     font-size: 13px;
     font-weight: 600;
+    line-height: 1;
     cursor: pointer;
     border: 1px solid transparent;
-    transition: all 0.15s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    white-space: nowrap;
+    user-select: none;
+    outline: none;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
+.btn:active {
+    transform: translateY(0.5px);
+}
+
+/* Botón Principal (Primary Action) */
 .btn-primary {
-    background: var(--primary-blue);
+    background-color: var(--primary-blue);
+    border-color: var(--primary-blue);
     color: var(--white);
+    box-shadow: 0 1px 3px rgba(0, 85, 212, 0.25);
 }
 
 .btn-primary:hover {
-    background: var(--primary-blue-hover);
+    background-color: var(--primary-blue-hover);
+    border-color: var(--primary-blue-hover);
+    box-shadow: 0 2px 6px rgba(0, 85, 212, 0.35);
 }
 
+.btn-primary:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0, 85, 212, 0.3);
+}
+
+/* Botones Secundarios (Outlined / Secondary) */
 .btn-outlined {
-    background: var(--white);
+    background-color: var(--white);
     border-color: #CBD5E1;
     color: #334155;
 }
 
 .btn-outlined:hover {
-    background: #F8FAFC;
+    background-color: #F8FAFC;
     border-color: #94A3B8;
+    color: #0F172A;
+    box-shadow: 0 2px 5px rgba(15, 23, 42, 0.06);
+}
+
+.btn-outlined:focus-visible {
+    box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.2);
 }
 
 /* Filter Bar */
@@ -407,18 +436,23 @@ body {
 }
 
 .btn-link {
-    background: none;
+    background: transparent;
     border: none;
     color: var(--primary-blue);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     margin-left: auto;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background-color 0.15s, color 0.15s;
 }
 
 .btn-link:hover {
-    text-decoration: underline;
+    background-color: #EFF6FF;
+    color: var(--primary-blue-hover);
 }
+
 
 /* Table Card & Full Width Responsive Container */
 .table-card {
