@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audit Follow-up Tracker | Seguimiento de Auditoría Interna</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+
+<div class="app-container">
+
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-icon">✓</div>
+            <div class="brand-title">
+                <h1>Audit Follow-up</h1>
+                <span>Tracker & Analytics</span>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <button class="nav-item active" data-step="1" onclick="goToStep(1)">
+                <span class="nav-number">01</span>
+                <span class="nav-label">
+                    <strong>Informes</strong>
+                    <small>Carga e Ingesta</small>
+                </span>
+            </button>
+
+            <button class="nav-item" data-step="2" onclick="goToStep(2)">
+                <span class="nav-number">02</span>
+                <span class="nav-label">
+                    <strong>Matriz Procesos</strong>
+                    <small>Mejoras por Proceso</small>
+                </span>
+            </button>
+
+            <button class="nav-item" data-step="3" onclick="goToStep(3)">
+                <span class="nav-number">03</span>
+                <span class="nav-label">
+                    <strong>Dashboard</strong>
+                    <small>Control Ejecutivo KPI</small>
+                </span>
+            </button>
+
+            <button class="nav-item" data-step="4" onclick="goToStep(4)">
+                <span class="nav-number">04</span>
+                <span class="nav-label">
+                    <strong>Seguimiento</strong>
+                    <small>Evidencias y Estados</small>
+                </span>
+            </button>
+
+            <button class="nav-item" data-step="5" onclick="goToStep(5)">
+                <span class="nav-number">05</span>
+                <span class="nav-label">
+                    <strong>Reporte Comité</strong>
+                    <small>Exportación Consolidada</small>
+                </span>
+            </button>
+        </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+
+        <!-- PASO 1: INFORMES -->
+        <section class="page-step active" id="step1">
+            <div class="page-header">
+                <div>
+                    <span class="eyebrow">Ingesta de Informes</span>
+                    <h2>Carga de Informes de Auditoría Completos</h2>
+                    <p>Subí un Informe de Auditoría Interna en Word (.docx), PDF (.pdf) o Excel (.xlsx). El sistema extraerá los datos generales, el proceso de negocio y todas las recomendaciones.</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Subir Informe de Auditoría</h3>
+                    <p>Soporta archivos de informes redactados o archivos de Memo Builder (.xlsx).</p>
+                </div>
+
+                <div id="dropZone" class="drop-zone" onclick="document.getElementById('reportInput').click()">
+                    <div class="drop-icon">↑</div>
+                    <p><strong>Hacé clic para seleccionar</strong> o arrastrá el archivo del informe acá</p>
+                    <span style="font-size: 11px; color: #64748b;">Soporta PDF, Word (.docx) y Excel (.xlsx)</span>
+                </div>
+                <input type="file" id="reportInput" hidden accept=".pdf,.docx,.xlsx,.csv" onchange="uploadAuditReport(this.files[0])">
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Informes Ingresados</h3>
+                    <p>Historial de informes de auditoría activos en la plataforma.</p>
+                </div>
+                <div id="reportsList"></div>
+            </div>
+        </section>
+
+        <!-- PASO 2: MATRIZ DE PROCESOS -->
+        <section class="page-step" id="step2">
+            <div class="page-header">
+                <div>
+                    <span class="eyebrow">Matriz por Procesos</span>
+                    <h2>Oportunidades de Mejora por Proceso de Negocio</h2>
+                    <p>Visualización jerárquica que vincula cada informe y mejora con su proceso y subproceso correspondiente.</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+                    <input type="text" id="matrixSearch" placeholder="Buscar por proceso, mejora o palabra clave..." style="flex:1; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px;" oninput="filterMatrix(this.value)">
+                </div>
+                <div id="processMatrixContainer"></div>
+            </div>
+        </section>
+
+        <!-- PASO 3: DASHBOARD -->
+        <section class="page-step" id="step3">
+            <div class="page-header">
+                <div>
+                    <span class="eyebrow">Dashboard Ejecutivo</span>
+                    <h2>Tablero de Control de Seguimiento de Auditoría</h2>
+                    <p>Indicadores clave de rendimiento (KPI) y semáforo de cumplimiento por área responsable.</p>
+                </div>
+                <button class="btn btn-primary" onclick="exportExcelReport()">Exportar Excel Consolidado</button>
+            </div>
+
+            <div class="kpi-grid">
+                <div class="kpi-card">
+                    <div class="kpi-label">Informes Activos</div>
+                    <div class="kpi-value" id="kpiReports">0</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Total Hallazgos</div>
+                    <div class="kpi-value" id="kpiFindings">0</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Cerrados / Implementados</div>
+                    <div class="kpi-value" style="color: #2E7D32;" id="kpiClosed">0</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">En Proceso</div>
+                    <div class="kpi-value" style="color: #1E40AF;" id="kpiInProgress">0</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Vencidos Sin Cierre</div>
+                    <div class="kpi-value" style="color: #B42318;" id="kpiOverdue">0</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">% Resueltos</div>
+                    <div class="kpi-value" style="color: #17365D;" id="kpiRate">0%</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Avance por Área Responsable</h3>
+                    <p>Estado de regularización de recomendaciones por departamento.</p>
+                </div>
+                <div id="areaBreakdownContainer"></div>
+            </div>
+        </section>
+
+        <!-- PASO 4: SEGUIMIENTO & EVIDENCIAS -->
+        <section class="page-step" id="step4">
+            <div class="page-header">
+                <div>
+                    <span class="eyebrow">Centro de Seguimiento</span>
+                    <h2>Gestión de Estados, Prórrogas y Evidencias</h2>
+                    <p>Bitácora individual para auditar el cumplimiento, subir evidencias de remediación y cerrar hallazgos.</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+                    <select id="filterStatus" style="padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px;" onchange="loadFindingsWithFilters()">
+                        <option value="">Todos los Estados</option>
+                        <option value="Pendiente">Pendientes</option>
+                        <option value="En Proceso">En Proceso</option>
+                        <option value="En Revisión">En Revisión</option>
+                        <option value="Implementado / Cerrado">Cerrados</option>
+                        <option value="Vencido">Vencidos</option>
+                    </select>
+
+                    <select id="filterSeverity" style="padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px;" onchange="loadFindingsWithFilters()">
+                        <option value="">Todas las Criticidades</option>
+                        <option value="Alta">Alta (Crítica)</option>
+                        <option value="Media">Media</option>
+                        <option value="Baja">Baja</option>
+                    </select>
+
+                    <input type="text" id="searchFinding" placeholder="Buscar por código, título o área..." style="flex:1; min-width: 200px; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px;" oninput="loadFindingsWithFilters()">
+                </div>
+
+                <div id="findingsTableContainer"></div>
+            </div>
+        </section>
+
+        <!-- PASO 5: REPORTE COMITÉ -->
+        <section class="page-step" id="step5">
+            <div class="page-header">
+                <div>
+                    <span class="eyebrow">Reporte Ejecutivo</span>
+                    <h2>Consolidado para el Comité de Auditoría</h2>
+                    <p>Resumen consolidado listo para exportación o presentación institucional.</p>
+                </div>
+                <button class="btn btn-primary" onclick="exportExcelReport()">Descargar Informe Excel</button>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Reporte Consolidado</h3>
+                    <p>Resumen de ejecución y estado de todas las auditorías.</p>
+                </div>
+                <div id="committeeReportContainer"></div>
+            </div>
+        </section>
+
+    </main>
+</div>
+
+<!-- Modal Actualización de Hallazgo -->
+<div id="findingModal" class="modal-overlay" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modalFindingTitle">Actualizar Estado de Hallazgo</h3>
+            <button class="icon-button" onclick="closeFindingModal()" style="font-size: 20px; cursor: pointer; border: none; background: none;">×</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="modalFindingId">
+            <div style="margin-bottom: 12px;">
+                <label style="font-size: 12px; font-weight: 600; color: #64748b;">Estado del Plan de Acción</label>
+                <select id="modalStatus" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; margin-top: 4px;">
+                    <option value="Pendiente">Pendiente</option>
+                    <option value="En Proceso">En Proceso</option>
+                    <option value="En Revisión">En Revisión (Evidencia Subida)</option>
+                    <option value="Implementado / Cerrado">Implementado / Cerrado (Validado por Auditoría)</option>
+                </select>
+            </div>
+
+            <div style="margin-bottom: 12px;">
+                <label style="font-size: 12px; font-weight: 600; color: #64748b;">Fecha Compromiso de Implementación</label>
+                <input type="date" id="modalTargetDate" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; margin-top: 4px;">
+            </div>
+
+            <div style="margin-bottom: 12px;">
+                <label style="font-size: 12px; font-weight: 600; color: #64748b;">Bitácora de Notas de Seguimiento del Auditor</label>
+                <textarea id="modalNotes" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; margin-top: 4px;" placeholder="Registrá acá los comentarios de las reuniones de seguimiento o validaciones de evidencias..."></textarea>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+                <label style="font-size: 12px; font-weight: 600; color: #64748b;">Referencia de Evidencia de Cumplimiento</label>
+                <input type="text" id="modalEvidence" placeholder="Ej. Procedimiento_Nuevo_v2.pdf / Ticket #4012" style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; margin-top: 4px;">
+            </div>
+
+            <button class="btn btn-primary" style="width: 100%; justify-content: center;" onclick="saveFindingStatusUpdate()">Guardar Actualización</button>
+        </div>
+    </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
