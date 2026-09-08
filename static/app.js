@@ -300,7 +300,7 @@ function renderAuditTrackTable(items) {
     }
 
     if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="13" style="text-align: center; color: #64748b; padding: 36px;">No hay hallazgos con los filtros aplicados. Cargar informe en la pestaña <strong>Informes</strong> arriba.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="12" style="text-align: center; color: #64748b; padding: 36px;">No hay hallazgos con los filtros aplicados. Cargar informe arriba.</td></tr>`;
         return;
     }
 
@@ -312,89 +312,66 @@ function renderAuditTrackTable(items) {
             ? `<span class="pill pill-medio">Medio</span>`
             : `<span class="pill pill-bajo">Bajo</span>`;
 
-        const statusSlug = (item.status || "Pendiente").toLowerCase().replace(/\s+/g, "-");
-        const statusPill = `<span class="pill pill-${statusSlug}">${escapeHtml(item.status)}</span>`;
-
         const filename = item.source_filename || "Informe.xlsx";
+        const firstProp = (item.proposals && item.proposals.length > 0) ? item.proposals[0] : null;
 
-        // Fila 1: Hallazgo (13 columnas exactas)
+        const propCodeCell = firstProp
+            ? `<a href="#" class="id-cell" style="color: #16A34A; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(firstProp.code)}</a>`
+            : `<span style="color:#94A3B8; font-size:11px;">Sin propuesta</span>`;
+
+        const propTextCell = firstProp
+            ? `<div class="truncate-2-lines" style="color:#16A34A; font-weight:500;" title="${escapeHtml(firstProp.proposal_text || firstProp.title)}">💡 ${escapeHtml(firstProp.proposal_text || firstProp.title)}</div>`
+            : `<button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">+ Agregar Propuesta</button>`;
+
+        let firstAction = (firstProp && firstProp.action_plans && firstProp.action_plans.length > 0) ? firstProp.action_plans[0] : null;
+        let owner = (firstProp && firstProp.action_owner) ? firstProp.action_owner : (firstAction ? firstAction.action_owner : (item.action_owner || "Sin asignar"));
+        let targetDate = (firstProp && firstProp.target_date) ? firstProp.target_date : (firstAction ? firstAction.target_date : "-");
+        let status = (firstProp && firstProp.status) ? firstProp.status : (item.status || "Pendiente");
+        let pct = firstAction ? (firstAction.progress_pct || 0) : 0;
+
+        const statusSlug = status.toLowerCase().replace(/\s+/g, "-");
+        const statusPill = `<span class="pill pill-${statusSlug}">${escapeHtml(status)}</span>`;
+
         html += `
             <tr>
+                <td style="font-weight: 700; color: #1E293B;">${escapeHtml(item.responsible_area || 'Pendiente de definir')}</td>
                 <td>
                     <a href="#" class="id-cell" style="color: #0055D4; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(item.code)}</a>
                 </td>
-                <td><span class="pill pill-hallazgo">Hallazgo</span></td>
                 <td>
                     <strong style="color: #0F172A; cursor:pointer;" onclick="openFindingDrawer('${item.id}')">${escapeHtml(item.title)}</strong>
                     <div class="truncate-2-lines" style="font-size: 11px; color: #64748B; margin-top: 3px;" title="${escapeHtml(item.situation)}">${escapeHtml(item.situation)}</div>
                 </td>
-                <td style="font-weight: 600; color: #1E293B;">${escapeHtml(item.responsible_area || 'Pendiente de definir')}</td>
-                <td><span style="font-size:11px;">${escapeHtml(item.report_title || item.report_code || '-')}</span></td>
+                <td>${propCodeCell}</td>
+                <td>${propTextCell}</td>
                 <td>
                     <div class="file-cell">
                         <span>📄</span>
                         <span style="font-size:11px;">${escapeHtml(filename)}</span>
                     </div>
                 </td>
-                <td><span style="color:#64748B; font-size:11px;">Padre</span></td>
                 <td>${riskPill}</td>
-                <td><strong>${escapeHtml(item.action_owner || 'Sin asignar')}</strong></td>
-                <td><span style="font-size:11px;">-</span></td>
+                <td><strong>${escapeHtml(owner)}</strong></td>
+                <td><span style="font-size:11px;">${escapeHtml(targetDate)}</span></td>
                 <td>${statusPill}</td>
-                <td><span style="font-size:11px;">-</span></td>
+                <td>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <div style="background:#CBD5E1; border-radius:4px; height:6px; flex:1; overflow:hidden;">
+                            <div style="background:#16A34A; width:${pct}%; height:100%;"></div>
+                        </div>
+                        <span style="font-size:10px;">${pct}%</span>
+                    </div>
+                </td>
                 <td>
                     <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">👁️ Ver</button>
                 </td>
             </tr>
         `;
-
-        // Filas vinculadas: Propuestas de Mejora (13 columnas exactas)
-        (item.proposals || []).forEach(p => {
-            const pStatusSlug = (p.status || "En proceso").toLowerCase().replace(/\s+/g, "-");
-            const pStatusPill = `<span class="pill pill-${pStatusSlug}">${escapeHtml(p.status)}</span>`;
-
-            let firstAction = (p.action_plans && p.action_plans.length > 0) ? p.action_plans[0] : null;
-            let pct = firstAction ? (firstAction.progress_pct || 0) : 0;
-            let targetDate = p.target_date || (firstAction ? firstAction.target_date : "-");
-            let owner = p.action_owner || (firstAction ? firstAction.action_owner : "Sin asignar");
-
-            html += `
-                <tr style="background:#F8FAFC;">
-                    <td style="padding-left:14px;">
-                        <a href="#" class="id-cell" style="color: #16A34A; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(p.code)}</a>
-                    </td>
-                    <td><span class="pill pill-propuesta">Propuesta</span></td>
-                    <td>
-                        <div class="truncate-2-lines" style="color:#16A34A; font-weight:500;" title="${escapeHtml(p.proposal_text || p.title)}">
-                            💡 ${escapeHtml(p.proposal_text || p.title)}
-                        </div>
-                    </td>
-                    <td><span style="font-size:11px; color:#64748B;">${escapeHtml(p.responsible_area || item.responsible_area || 'Pendiente de definir')}</span></td>
-                    <td><span style="font-size:11px; color:#64748B;">${escapeHtml(item.report_code || '-')}</span></td>
-                    <td><span style="font-size:11px; color:#64748B;">${escapeHtml(filename)}</span></td>
-                    <td><a href="#" style="color:#0055D4; font-weight:600;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(item.code)}</a></td>
-                    <td>${riskPill}</td>
-                    <td><strong>${escapeHtml(owner)}</strong></td>
-                    <td><span style="font-size:11px;">${escapeHtml(targetDate)}</span></td>
-                    <td>${pStatusPill}</td>
-                    <td>
-                        <div style="display:flex; align-items:center; gap:4px;">
-                            <div style="background:#CBD5E1; border-radius:4px; height:6px; flex:1; overflow:hidden;">
-                                <div style="background:#16A34A; width:${pct}%; height:100%;"></div>
-                            </div>
-                            <span style="font-size:10px;">${pct}%</span>
-                        </div>
-                    </td>
-                    <td>
-                        <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">👁️ Ver</button>
-                    </td>
-                </tr>
-            `;
-        });
     });
 
     tbody.innerHTML = html;
 }
+
 
 
 function toggleTraceRow(rowId, findingId) {

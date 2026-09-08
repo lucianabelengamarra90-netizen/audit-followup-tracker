@@ -155,10 +155,12 @@
                 <div class="view-header">
                     <div>
                         <h2>Hallazgos y Propuestas de Mejora</h2>
-                        <p>Vista completa pareada: desplegá la flecha (▼) de cada fila para ver la cadena en línea sin salir de la pantalla.</p>
+                        <p>Estructura relacional pareada: hallazgo y propuesta de mejora en la misma fila con área al inicio.</p>
                     </div>
 
                     <div class="view-actions">
+                        <button class="btn btn-primary" onclick="document.getElementById('reportInputMainTab').click()">📤 Subir Informe de Auditoría</button>
+                        <input type="file" id="reportInputMainTab" hidden accept=".pdf,.docx,.xlsx,.csv" onchange="uploadAuditReport(this.files[0])">
                         <button class="btn btn-outlined" onclick="exportExcelReport()">↓ Exportar Excel</button>
                         <button class="btn btn-outlined" onclick="toggleFilterBar()">⚙️ Filtros</button>
                     </div>
@@ -191,28 +193,27 @@
                     <button type="button" class="btn-link" onclick="clearFilters()">Limpiar filtros</button>
                 </div>
 
-                <!-- Tabla Principal con Área Primero -->
+                <!-- Tabla Principal Pareada (Misma Línea) -->
                 <div class="table-card">
                     <table class="audittrack-table">
                         <thead>
                             <tr>
-                                <th style="width: 100px;">ID</th>
-                                <th style="width: 90px;">Tipo</th>
-                                <th style="min-width: 280px;">Hallazgo / Propuesta</th>
-                                <th style="width: 140px;">Área / Proceso</th>
-                                <th style="width: 140px;">Informe</th>
+                                <th style="width: 130px;">Área / Proceso</th>
+                                <th style="width: 95px;">ID Hallazgo</th>
+                                <th style="min-width: 260px;">Hallazgo (Situación Observada)</th>
+                                <th style="width: 100px;">ID Propuesta</th>
+                                <th style="min-width: 260px;">Propuesta de Mejora (Recomendación)</th>
                                 <th style="width: 130px;">Archivo de origen</th>
-                                <th style="width: 110px;">Vinculado a</th>
-                                <th style="width: 85px;">Riesgo</th>
+                                <th style="width: 80px;">Riesgo</th>
                                 <th style="width: 130px;">Responsable</th>
-                                <th style="width: 110px;">Fecha compromiso</th>
-                                <th style="width: 100px;">Estado</th>
+                                <th style="width: 105px;">Fecha compromiso</th>
+                                <th style="width: 95px;">Estado</th>
                                 <th style="width: 75px;">Avance</th>
-                                <th style="width: 90px;">Acciones</th>
+                                <th style="width: 85px;">Acciones</th>
                             </tr>
                         </thead>
                         <tbody id="auditTrackTableBody">
-                            <!-- Filas colapsables dinámicas -->
+                            <!-- Filas pareadas en la misma línea -->
                         </tbody>
                     </table>
 
