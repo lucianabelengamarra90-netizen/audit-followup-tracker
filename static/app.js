@@ -1,5 +1,5 @@
 // ============================================================
-// AUDITTRACK - FRONTEND CONTROLLER (EXACT REPLICATION)
+// AUDITTRACK - FRONTEND CONTROLLER (EXACT REPLICATION & WORKFLOW)
 // ============================================================
 
 let currentItems = [];
@@ -46,6 +46,8 @@ function switchTab(tabName) {
     });
 
     if (tabName === "informes") loadReports();
+    if (tabName === "propuestas") renderProposalsTab(currentItems);
+    if (tabName === "planes") renderActionPlansTab(currentItems);
     if (tabName === "tableros") loadDashboardKPIs();
 }
 
@@ -62,6 +64,8 @@ async function loadAuditTrackData() {
         
         populateFilterDropdowns(currentItems);
         renderAuditTrackTable(currentItems);
+        renderProposalsTab(currentItems);
+        renderActionPlansTab(currentItems);
         updateSidebarMetrics(currentItems);
     } catch (err) {
         console.error("Error cargando datos de AuditTrack:", err);
@@ -143,6 +147,8 @@ function filterAndRenderTable() {
         filtered = filtered.filter(i =>
             (i.code || "").toLowerCase().includes(q) ||
             (i.title || "").toLowerCase().includes(q) ||
+            (i.situation || "").toLowerCase().includes(q) ||
+            (i.proposal || "").toLowerCase().includes(q) ||
             (i.responsible_area || "").toLowerCase().includes(q) ||
             (i.report_title || "").toLowerCase().includes(q) ||
             (i.source_filename || "").toLowerCase().includes(q) ||
@@ -151,10 +157,12 @@ function filterAndRenderTable() {
     }
 
     renderAuditTrackTable(filtered);
+    renderProposalsTab(filtered);
+    renderActionPlansTab(filtered);
 }
 
 // ============================================================
-// TABLE RENDERER
+// MAIN TABLE RENDERER (ÁREA PRIMERO, HALLAZGO Y PROPUESTA AL LADO)
 // ============================================================
 
 function renderAuditTrackTable(items) {
@@ -167,15 +175,11 @@ function renderAuditTrackTable(items) {
     }
 
     if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #64748b; padding: 32px;">No se encontraron hallazgos ni propuestas con los filtros aplicados.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: #64748b; padding: 36px;">No hay datos registrados aún. Subí tu informe de auditoría en la pestaña <strong>Informes</strong> arriba.</td></tr>`;
         return;
     }
 
     tbody.innerHTML = items.map(item => {
-        const typePill = item.type === "Hallazgo"
-            ? `<span class="pill pill-hallazgo">Hallazgo</span>`
-            : `<span class="pill pill-propuesta">Propuesta</span>`;
-
         const riskPill = item.severity === "Alto"
             ? `<span class="pill pill-alto">Alto</span>`
             : item.severity === "Medio"
@@ -186,18 +190,25 @@ function renderAuditTrackTable(items) {
         const statusPill = `<span class="pill pill-${statusSlug}">${escapeHtml(item.status)}</span>`;
 
         // File icon check
-        const filename = item.source_filename || "Documento.xlsx";
+        const filename = item.source_filename || "Informe.xlsx";
         const fileExt = filename.includes(".") ? filename.split(".").pop().toLowerCase() : "xlsx";
-        let fileIcon = "📊"; // excel default
+        let fileIcon = "📊";
         if (fileExt === "pdf") fileIcon = "📄";
         if (fileExt === "docx") fileIcon = "📝";
 
+        const proposalText = item.proposal
+            ? `<div style="color: #15803D; font-weight: 500;">💡 ${escapeHtml(item.proposal)}</div>`
+            : `<button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="transitionToProposal('${item.id}')">+ Definir Propuesta</button>`;
+
         return `
             <tr>
+                <td style="font-weight: 700; color: #1E293B;">${escapeHtml(item.responsible_area || 'Operaciones')}</td>
                 <td class="id-cell">${escapeHtml(item.code)}</td>
-                <td>${typePill}</td>
-                <td><strong>${escapeHtml(item.title)}</strong></td>
-                <td>${escapeHtml(item.responsible_area)}</td>
+                <td>
+                    <strong style="color: #0F172A;">${escapeHtml(item.title)}</strong>
+                    <div style="font-size: 11px; color: #64748B; margin-top: 3px;">${escapeHtml(item.situation || item.title)}</div>
+                </td>
+                <td>${proposalText}</td>
                 <td>${escapeHtml(item.report_title)}</td>
                 <td>
                     <div class="file-cell">
@@ -207,14 +218,139 @@ function renderAuditTrackTable(items) {
                 </td>
                 <td>${riskPill}</td>
                 <td>${statusPill}</td>
-                <td>${escapeHtml(item.action_owner)}</td>
-                <td>${escapeHtml(item.target_date || "30/09/2026")}</td>
-                <td style="text-align: center;">
-                    <button type="button" class="btn-link" style="font-size: 16px; text-decoration: none;" onclick="openEditModal('${item.id}')">•••</button>
+                <td><strong>${escapeHtml(item.action_owner || 'Sin asignar')}</strong></td>
+                <td>${escapeHtml(item.target_date || '30/09/2026')}</td>
+                <td>
+                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                        <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="transitionToActionPlan('${item.id}')">📋 Plan Acción</button>
+                        <button class="btn-link" style="font-size: 14px; text-decoration: none;" onclick="openEditModal('${item.id}')">⚙️</button>
+                    </div>
                 </td>
             </tr>
         `;
     }).join("");
+}
+
+// ============================================================
+// DEDICATED TAB: PROPUESTAS DE MEJORA
+// ============================================================
+
+function renderProposalsTab(items) {
+    const container = el("proposalsContainer");
+    if (!container) return;
+
+    const proposals = items.filter(i => i.proposal || i.type === "Propuesta");
+
+    if (!proposals.length) {
+        container.innerHTML = `
+            <div style="text-align: center; color: #64748b; padding: 40px;">
+                <h4>No hay propuestas registradas aún.</h4>
+                <p style="font-size: 12px; margin-top: 6px;">Cargá un informe de auditoría o hacé clic en "+ Nueva propuesta" en la vista principal para definir las recomendaciones.</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = `
+        <table class="audittrack-table">
+            <thead>
+                <tr>
+                    <th>Área</th>
+                    <th>ID</th>
+                    <th>Hallazgo Vinculado</th>
+                    <th>Propuesta de Mejora (Recomendación)</th>
+                    <th>Riesgo</th>
+                    <th>Estado</th>
+                    <th>Acción</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${proposals.map(p => `
+                    <tr>
+                        <td><strong>${escapeHtml(p.responsible_area)}</strong></td>
+                        <td class="id-cell">${escapeHtml(p.code)}</td>
+                        <td>${escapeHtml(p.title)}</td>
+                        <td><strong style="color: #16A34A;">💡 ${escapeHtml(p.proposal || p.title)}</strong></td>
+                        <td><span class="pill pill-${(p.severity||'medio').toLowerCase()}">${escapeHtml(p.severity)}</span></td>
+                        <td><span class="pill pill-${(p.status||'pendiente').toLowerCase().replace(/\s+/g, '-')}">${escapeHtml(p.status)}</span></td>
+                        <td>
+                            <button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;" onclick="transitionToActionPlan('${p.id}')">📋 Pasar a Plan de Acción</button>
+                        </td>
+                    </tr>
+                `).join("")}
+            </tbody>
+        </table>
+    `;
+}
+
+// ============================================================
+// DEDICATED TAB: PLANES DE ACCIÓN
+// ============================================================
+
+function renderActionPlansTab(items) {
+    const container = el("actionPlansContainer");
+    if (!container) return;
+
+    const plans = items.filter(i => i.type === "Plan de Acción" || (i.status && i.status !== "Pendiente") || i.action_owner);
+
+    if (!plans.length) {
+        container.innerHTML = `
+            <div style="text-align: center; color: #64748b; padding: 40px;">
+                <h4>No hay planes de acción iniciados aún.</h4>
+                <p style="font-size: 12px; margin-top: 6px;">Para iniciar un plan de acción, hacé clic en "📋 Plan Acción" en cualquier hallazgo o propuesta.</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = `
+        <table class="audittrack-table">
+            <thead>
+                <tr>
+                    <th>Área Responsable</th>
+                    <th>ID</th>
+                    <th>Propuesta / Medida a Implementar</th>
+                    <th>Responsable Plan</th>
+                    <th>Fecha Compromiso</th>
+                    <th>Estado</th>
+                    <th>Gestión</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${plans.map(plan => `
+                    <tr>
+                        <td><strong>${escapeHtml(plan.responsible_area)}</strong></td>
+                        <td class="id-cell">${escapeHtml(plan.code)}</td>
+                        <td><strong>${escapeHtml(plan.proposal || plan.title)}</strong></td>
+                        <td><strong>${escapeHtml(plan.action_owner || 'Sin asignar')}</strong></td>
+                        <td>${escapeHtml(plan.target_date || '30/09/2026')}</td>
+                        <td><span class="pill pill-${(plan.status||'en-proceso').toLowerCase().replace(/\s+/g, '-')}">${escapeHtml(plan.status)}</span></td>
+                        <td>
+                            <button class="btn btn-outlined" style="padding: 4px 10px; font-size: 11px;" onclick="openEditModal('${plan.id}')">⚙️ Actualizar Avance</button>
+                        </td>
+                    </tr>
+                `).join("")}
+            </tbody>
+        </table>
+    `;
+}
+
+// ============================================================
+// WORKFLOW TRANSITIONS (BOTONES INTERACTIVOS)
+// ============================================================
+
+function transitionToProposal(itemId) {
+    openEditModal(itemId);
+    if (el("modalType")) el("modalType").value = "Propuesta";
+    if (el("modalProposal") && !el("modalProposal").value) {
+        el("modalProposal").value = "Implementar control preventivo y revisión de procesos.";
+    }
+}
+
+function transitionToActionPlan(itemId) {
+    openEditModal(itemId);
+    if (el("modalType")) el("modalType").value = "Plan de Acción";
+    if (el("modalStatus")) el("modalStatus").value = "En proceso";
 }
 
 function updateSidebarMetrics(items) {
@@ -223,7 +359,12 @@ function updateSidebarMetrics(items) {
     const pctEl = el("sidebarPct");
 
     const total = items.length;
-    if (total === 0) return;
+    if (total === 0) {
+        if (openCountEl) openCountEl.textContent = 0;
+        if (progressBarEl) progressBarEl.style.width = `0%`;
+        if (pctEl) pctEl.textContent = `0%`;
+        return;
+    }
 
     const openCount = items.filter(i => (i.status || "").toLowerCase() !== "completada").length;
     const inProcessCount = items.filter(i => ["en proceso", "planificada", "completada"].includes((i.status || "").toLowerCase())).length;
@@ -259,7 +400,7 @@ function openEditModal(itemId) {
     const item = currentItems.find(i => i.id === itemId);
     if (!item) return;
 
-    if (el("modalTitle")) el("modalTitle").textContent = `Editar ${item.code}`;
+    if (el("modalTitle")) el("modalTitle").textContent = `Gestionar ${item.code}`;
     if (el("modalItemId")) el("modalItemId").value = item.id;
     if (el("modalType")) el("modalType").value = item.type || "Hallazgo";
     if (el("modalRisk")) el("modalRisk").value = item.severity || "Alto";
@@ -293,12 +434,11 @@ async function saveModalItem() {
     const proposal = el("modalProposal")?.value;
 
     if (!title) {
-        showToast("Por favor ingresá un título ejecutivo.", "warning");
+        showToast("Por favor ingresá un título para la observación.", "warning");
         return;
     }
 
     if (itemId) {
-        // Actualizar estado existente
         try {
             const res = await fetch(`/findings/${itemId}/status`, {
                 method: "POST",
@@ -342,7 +482,7 @@ async function uploadAuditReport(file) {
         if (!response.ok) throw new Error(data.error || "No se pudo procesar el informe.");
 
         showToast(data.message || "Informe ingresado correctamente.", "success");
-        loadAuditTrackData();
+        await loadAuditTrackData();
         switchTab("hallazgos");
     } catch (err) {
         console.error(err);
@@ -366,7 +506,7 @@ function renderReportsList(reports) {
     const container = el("reportsListContainer");
     if (!container) return;
     if (!reports.length) {
-        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 24px;">No hay informes activos cargados.</div>`;
+        container.innerHTML = `<div style="text-align: center; color: #64748b; padding: 24px;">No hay informes cargados aún. Subí tu primer informe arriba.</div>`;
         return;
     }
 

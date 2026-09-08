@@ -93,12 +93,12 @@
         <!-- Content Area -->
         <main class="content-area">
 
-            <!-- TAB INFORMES (PRIMERA OPCIÓN) -->
+            <!-- TAB 1: INFORMES (PRIMERA OPCIÓN) -->
             <section class="tab-pane active" id="tab-informes">
                 <div class="view-header">
                     <div>
                         <h2>Informes de Auditoría</h2>
-                        <p>Cargá tus informes de auditoría en Word (.docx), PDF (.pdf) o Excel (.xlsx) para detectar automáticamente hallazgos, propuestas y áreas asignadas.</p>
+                        <p>Cargá tus informes de auditoría en Word (.docx), PDF (.pdf) o Excel (.xlsx) para detectar automáticamente los hallazgos y sus propuestas de mejora por área.</p>
                     </div>
                 </div>
 
@@ -112,17 +112,17 @@
                 </div>
 
                 <div class="card">
-                    <h3>Informes Activos</h3>
+                    <h3>Informes Cargas Recientemente</h3>
                     <div id="reportsListContainer"></div>
                 </div>
             </section>
 
-            <!-- TAB HALLAZGOS Y PROPUESTAS -->
+            <!-- TAB 2: HALLAZGOS Y PROPUESTAS (ÁREA PRIMERO, HALLAZGO Y PROPUESTA AL LADO) -->
             <section class="tab-pane" id="tab-hallazgos">
                 <div class="view-header">
                     <div>
                         <h2>Hallazgos y Propuestas de Mejora</h2>
-                        <p>Registro y seguimiento de hallazgos, propuestas y acciones correctivas provenientes de los informes de auditoría.</p>
+                        <p>Visión consolidada por área: cada hallazgo detectado junto a su propuesta de mejora pareada al lado.</p>
                     </div>
 
                     <div class="view-actions">
@@ -158,29 +158,24 @@
                         <option value="Bajo">Bajo</option>
                     </select>
 
-                    <div class="date-range-box">
-                        <input type="text" placeholder="Desde | Hasta" onfocus="(this.type='date')" onblur="(this.type='text')">
-                        <span>📅</span>
-                    </div>
-
                     <button type="button" class="btn-link" onclick="clearFilters()">Limpiar filtros</button>
                 </div>
 
-                <!-- Data Table -->
+                <!-- Data Table con Área PRIMERO y Hallazgo / Propuesta LADO A LADO -->
                 <div class="table-card">
                     <table class="audittrack-table">
                         <thead>
                             <tr>
-                                <th>ID <span>˅</span></th>
-                                <th>Tipo <span>˅</span></th>
-                                <th>Título</th>
                                 <th>Área / Proceso</th>
+                                <th>ID</th>
+                                <th>Hallazgo (Situación Observada)</th>
+                                <th>Propuesta de Mejora (Recomendación)</th>
                                 <th>Informe</th>
-                                <th>Archivo de origen</th>
-                                <th>Riesgo <span>˅</span></th>
-                                <th>Estado <span>˅</span></th>
+                                <th>Archivo</th>
+                                <th>Riesgo</th>
+                                <th>Estado</th>
                                 <th>Responsable</th>
-                                <th>Fecha límite</th>
+                                <th>Fecha Límite</th>
                                 <th>Acciones</th>
                             </tr>
                         </thead>
@@ -190,7 +185,7 @@
                     </table>
 
                     <div class="table-footer">
-                        <span id="showingRecordsCount">Mostrando 14 de 14 registros</span>
+                        <span id="showingRecordsCount">Mostrando 0 registros</span>
                         <div class="pagination">
                             <button class="page-btn">&lt;</button>
                             <button class="page-btn active">1</button>
@@ -200,7 +195,33 @@
                 </div>
             </section>
 
+            <!-- TAB 3: PROPUESTAS DE MEJORA (SOLAPA DEDICADA) -->
+            <section class="tab-pane" id="tab-propuestas">
+                <div class="view-header">
+                    <div>
+                        <h2>Catálogo de Propuestas de Mejora</h2>
+                        <p>Recomendaciones estratégicas formuladas por Auditoría Interna para ser convertidas en Planes de Acción.</p>
+                    </div>
+                </div>
 
+                <div id="proposalsContainer" class="card">
+                    <!-- Se llena dinámicamente -->
+                </div>
+            </section>
+
+            <!-- TAB 4: PLANES DE ACCIÓN (SOLAPA DEDICADA) -->
+            <section class="tab-pane" id="tab-planes">
+                <div class="view-header">
+                    <div>
+                        <h2>Planes de Acción y Seguimiento Operativo</h2>
+                        <p>Seguimiento detallado de tareas, fechas compromiso, responsables y avance de implementación.</p>
+                    </div>
+                </div>
+
+                <div id="actionPlansContainer" class="card">
+                    <!-- Se llena dinámicamente -->
+                </div>
+            </section>
 
             <!-- TAB TABLEROS -->
             <section class="tab-pane" id="tab-tableros">
@@ -212,10 +233,10 @@
                 </div>
 
                 <div class="kpi-grid">
-                    <div class="kpi-card"><div class="kpi-label">Total Registros</div><div class="kpi-value" id="kpiTotal">14</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Hallazgos Abiertos</div><div class="kpi-value" style="color: #991B1B;" id="kpiOpen">8</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Propuestas en Proceso</div><div class="kpi-value" style="color: #92400E;" id="kpiProcess">4</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Completadas</div><div class="kpi-value" style="color: #15803D;" id="kpiCompleted">2</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Total Registros</div><div class="kpi-value" id="kpiTotal">0</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Hallazgos Abiertos</div><div class="kpi-value" style="color: #991B1B;" id="kpiOpen">0</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Propuestas en Proceso</div><div class="kpi-value" style="color: #92400E;" id="kpiProcess">0</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Completadas</div><div class="kpi-value" style="color: #15803D;" id="kpiCompleted">0</div></div>
                 </div>
 
                 <div class="card">
@@ -228,7 +249,7 @@
     </div>
 </div>
 
-<!-- Modal para Crear / Editar Hallazgo o Propuesta -->
+<!-- Modal para Crear / Editar / Convertir Hallazgo a Propuesta o Plan -->
 <div id="itemModal" class="modal-overlay" style="display:none;">
     <div class="modal-card">
         <div class="modal-header">
@@ -243,6 +264,7 @@
                     <select id="modalType">
                         <option value="Hallazgo">Hallazgo</option>
                         <option value="Propuesta">Propuesta</option>
+                        <option value="Plan de Acción">Plan de Acción</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -256,7 +278,7 @@
             </div>
 
             <div class="form-group">
-                <label>Título Ejecutivo</label>
+                <label>Título del Hallazgo / Observación</label>
                 <input type="text" id="modalItemTitle" placeholder="Ej. Diferencias en saldos de proveedores">
             </div>
 
@@ -282,7 +304,7 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Responsable</label>
+                    <label>Responsable Asignado</label>
                     <input type="text" id="modalOwner" placeholder="Nombre del responsable">
                 </div>
                 <div class="form-group">
@@ -292,13 +314,13 @@
             </div>
 
             <div class="form-group">
-                <label>Situación / Descripción</label>
-                <textarea id="modalSituation" rows="3" placeholder="Descripción detallada de los hechos u oportunidad de mejora..."></textarea>
+                <label>Hallazgo (Situación Observada)</label>
+                <textarea id="modalSituation" rows="3" placeholder="Descripción detallada de la observación..."></textarea>
             </div>
 
             <div class="form-group">
-                <label>Propuesta / Plan de Acción</label>
-                <textarea id="modalProposal" rows="2" placeholder="Recomendación o acción correctiva..."></textarea>
+                <label>Propuesta de Mejora (Recomendación)</label>
+                <textarea id="modalProposal" rows="3" placeholder="Recomendación o propuesta planteada..."></textarea>
             </div>
 
             <button type="button" class="btn btn-primary" style="width:100%; justify-content:center; margin-top:12px;" onclick="saveModalItem()">Guardar Cambios</button>
