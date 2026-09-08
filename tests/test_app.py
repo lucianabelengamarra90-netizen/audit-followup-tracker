@@ -33,7 +33,6 @@ class AuditTrackRelationalTests(unittest.TestCase):
         }
         findings_hierarchy = [
             {
-                "code": "H-2026-TEST",
                 "title": "Diferencia de cuotas en sistema",
                 "situation": "Se observó discrepancia en cuotas.",
                 "risk": "Descalce en cobranzas.",
@@ -43,14 +42,12 @@ class AuditTrackRelationalTests(unittest.TestCase):
                 "status": "En proceso",
                 "proposals": [
                     {
-                        "code": "PM-2026-TEST",
                         "title": "Ajustar cuotas en sistema",
                         "proposal_text": "Parametrizar validación de cuotas.",
                         "target_date": "2026-12-15",
                         "status": "En proceso",
                         "action_plans": [
                             {
-                                "code": "PA-2026-TEST",
                                 "title": "Acción de prueba",
                                 "action_text": "Desarrollar script de validación",
                                 "action_owner": "Sistemas",

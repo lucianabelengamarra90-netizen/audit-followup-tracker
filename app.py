@@ -23,7 +23,8 @@ from database import (
     get_dashboard_stats,
     get_kpi_indicators,
     get_history_logs,
-    add_history_log
+    add_history_log,
+    get_active_alerts
 )
 from report_parser import parse_audit_report, clean_text
 
@@ -194,6 +195,12 @@ def dashboard_stats_route():
 def kpi_indicators_route():
     kpis = get_kpi_indicators()
     return jsonify({"indicators": kpis})
+
+
+@app.route("/api/notifications")
+def api_notifications():
+    alerts = get_active_alerts()
+    return jsonify(alerts)
 
 
 @app.route("/export-excel", methods=["POST"])

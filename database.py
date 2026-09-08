@@ -180,9 +180,18 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
 
     add_history_log("report", report_id, auditor, f"Carga inicial de informe {title} ({source_filename})", cursor=cursor)
 
-    finding_counter = 1
-    proposal_counter = 1
-    action_counter = 1
+    f_c_cursor = conn.cursor()
+    f_c_cursor.execute("SELECT COUNT(*) FROM findings")
+    finding_counter = f_c_cursor.fetchone()[0] + 1
+
+    p_c_cursor = conn.cursor()
+    p_c_cursor.execute("SELECT COUNT(*) FROM proposals")
+    proposal_counter = p_c_cursor.fetchone()[0] + 1
+
+    pa_c_cursor = conn.cursor()
+    pa_c_cursor.execute("SELECT COUNT(*) FROM action_plans")
+    action_counter = pa_c_cursor.fetchone()[0] + 1
+
 
     for f_item in findings_hierarchy:
         finding_id = str(uuid.uuid4())
@@ -918,3 +927,182 @@ def seed_relational_demo_data():
     ]
 
     save_relational_report_structure(report_1, findings_1, "Proveedores_y_VidaUtil_2026.xlsx")
+
+
+def get_active_alerts():
+    init_db()
+    conn = get_db()
+    cursor = conn.cursor()
+
+    today_dt = date.today()
+    today_str = today_dt.strftime("%Y-%m-%d")
+    future_7_str = (today_dt + timedelta(days=7)).strftime("%Y-%m-%d")
+
+    overdue_alerts = []
+    due_today_alerts = []
+    due_soon_alerts = []
+    attention_alerts = []
+
+    # 1. Propuestas y Planes Vencidos / Próximos
+    cursor.execute("""
+        SELECT 'propuesta' as item_type, p.id, p.code, p.title, p.proposal_text as text, p.target_date, p.status, f.id as finding_id, f.code as finding_code, r.auditor as report_auditor
+        FROM proposals p
+        JOIN findings f ON p.finding_id = f.id
+        JOIN reports r ON f.report_id = r.id
+        WHERE p.target_date != '' AND LOWER(p.status) NOT IN ('completada', 'cerrada', 'implementada')
+    """)
+    props = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT 'plan' as item_type, pa.id, pa.code, pa.title, pa.action_text as text, pa.target_date, pa.status, f.id as finding_id, f.code as finding_code, r.auditor as report_auditor
+        FROM action_plans pa
+        JOIN proposals p ON pa.proposal_id = p.id
+        JOIN findings f ON p.finding_id = f.id
+        JOIN reports r ON f.report_id = r.id
+        WHERE pa.target_date != '' AND LOWER(pa.status) NOT IN ('completado', 'cerrado')
+    """)
+    plans = [dict(r) for r in cursor.fetchall()]
+
+    for item in props + plans:
+        t_str = item["target_date"]
+        auditor_name = item.get("report_auditor") or "Auditoría Interna"
+        try:
+            t_dt = datetime.strptime(t_str[:10], "%Y-%m-%d").date()
+            code = item["code"]
+            finding_id = item["finding_id"]
+
+            if t_dt < today_dt:
+                days_diff = (today_dt - t_dt).days
+                overdue_alerts.append({
+                    "id": item["id"],
+                    "code": code,
+                    "finding_id": finding_id,
+                    "title": item["text"] or item["title"],
+                    "auditor": auditor_name,
+                    "level": "vencida",
+                    "badge_color": "rojo",
+                    "message": f"{code} lleva {days_diff} días vencida."
+                })
+            elif t_dt == today_dt:
+                due_today_alerts.append({
+                    "id": item["id"],
+                    "code": code,
+                    "finding_id": finding_id,
+                    "title": item["text"] or item["title"],
+                    "auditor": auditor_name,
+                    "level": "hoy",
+                    "badge_color": "naranja",
+                    "message": f"{code} vence hoy."
+                })
+            elif t_dt <= today_dt + timedelta(days=7):
+                days_left = (t_dt - today_dt).days
+                due_soon_alerts.append({
+                    "id": item["id"],
+                    "code": code,
+                    "finding_id": finding_id,
+                    "title": item["text"] or item["title"],
+                    "auditor": auditor_name,
+                    "level": "proximo",
+                    "badge_color": "amarillo",
+                    "message": f"{code} vence en {days_left} días."
+                })
+        except Exception:
+            pass
+
+    # 2. Propuestas sin Plan de Acción
+    cursor.execute("""
+        SELECT p.id, p.code, p.title, p.proposal_text, f.id as finding_id, r.auditor as report_auditor
+        FROM proposals p
+        JOIN findings f ON p.finding_id = f.id
+        JOIN reports r ON f.report_id = r.id
+        LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+        WHERE pa.id IS NULL
+    """)
+    for r in cursor.fetchall():
+        attention_alerts.append({
+            "id": r["id"],
+            "code": r["code"],
+            "finding_id": r["finding_id"],
+            "title": r["proposal_text"] or r["title"],
+            "auditor": r["report_auditor"] or "Auditoría Interna",
+            "level": "atencion",
+            "badge_color": "azul",
+            "message": f"{r['code']} continúa sin Plan de Acción asociado."
+        })
+
+    # 3. Hallazgos de riesgo Alto sin propuesta
+    cursor.execute("""
+        SELECT f.id, f.code, f.title, r.auditor as report_auditor
+        FROM findings f
+        JOIN reports r ON f.report_id = r.id
+        LEFT JOIN proposals p ON p.finding_id = f.id
+        WHERE LOWER(f.severity) = 'alto' AND p.id IS NULL
+    """)
+    for r in cursor.fetchall():
+        attention_alerts.append({
+            "id": r["id"],
+            "code": r["code"],
+            "finding_id": r["id"],
+            "title": r["title"],
+            "auditor": r["report_auditor"] or "Auditoría Interna",
+            "level": "atencion",
+            "badge_color": "rojo",
+            "message": f"{r['code']} de riesgo Alto no posee una Propuesta de Mejora asociada."
+        })
+
+    # 4. Plan sin actualización en 30 días
+    past_30_str = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    cursor.execute("""
+        SELECT pa.id, pa.code, pa.action_text, f.id as finding_id, r.auditor as report_auditor
+        FROM action_plans pa
+        JOIN proposals p ON pa.proposal_id = p.id
+        JOIN findings f ON p.finding_id = f.id
+        JOIN reports r ON f.report_id = r.id
+        WHERE pa.last_updated < ? AND LOWER(pa.status) NOT IN ('completado', 'cerrado')
+    """, (past_30_str,))
+    for r in cursor.fetchall():
+        attention_alerts.append({
+            "id": r["id"],
+            "code": r["code"],
+            "finding_id": r["finding_id"],
+            "title": r["action_text"],
+            "auditor": r["report_auditor"] or "Auditoría Interna",
+            "level": "atencion",
+            "badge_color": "amarillo",
+            "message": f"{r['code']} no registra actualizaciones desde hace 30 días."
+        })
+
+    # 5. Nueva evidencia cargada
+    cursor.execute("""
+        SELECT pa.id, pa.code, pa.evidence_file, f.id as finding_id, r.auditor as report_auditor
+        FROM action_plans pa
+        JOIN proposals p ON pa.proposal_id = p.id
+        JOIN findings f ON p.finding_id = f.id
+        JOIN reports r ON f.report_id = r.id
+        WHERE pa.evidence_file != '' AND pa.evidence_file IS NOT NULL
+        ORDER BY pa.last_updated DESC LIMIT 3
+    """)
+    for r in cursor.fetchall():
+        attention_alerts.append({
+            "id": r["id"],
+            "code": r["code"],
+            "finding_id": r["finding_id"],
+            "title": f"Archivo: {r['evidence_file']}",
+            "auditor": r["report_auditor"] or "Auditoría Interna",
+            "level": "atencion",
+            "badge_color": "verde",
+            "message": f"Nueva evidencia cargada para {r['code']}."
+        })
+
+    conn.close()
+
+    total_count = len(overdue_alerts) + len(due_today_alerts) + len(due_soon_alerts) + len(attention_alerts)
+
+    return {
+        "total_count": total_count,
+        "overdue": overdue_alerts,
+        "due_today": due_today_alerts,
+        "due_soon": due_soon_alerts,
+        "attention": attention_alerts
+    }
+

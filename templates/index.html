@@ -27,7 +27,23 @@
         </div>
 
         <div class="header-user">
-            <div class="notification-bell">🔔<span class="bell-dot">3</span></div>
+            <div class="notification-bell-box" style="position: relative;">
+                <div class="notification-bell" onclick="toggleNotificationDropdown()">
+                    🔔<span class="bell-dot" id="bellBadgeCount">0</span>
+                </div>
+
+                <!-- Notification Dropdown Panel -->
+                <div id="notificationDropdown" class="notification-dropdown" style="display: none;">
+                    <div class="notification-dropdown-header">
+                        <strong>Centro de Alertas de Auditoría</strong>
+                        <button type="button" class="btn-link" style="font-size: 11px;" onclick="markAllNotificationsRead()">Marcar leídas</button>
+                    </div>
+                    <div id="notificationDropdownBody" class="notification-dropdown-body">
+                        <!-- Categorías dinámicas -->
+                    </div>
+                </div>
+            </div>
+
             <div class="user-avatar">AI</div>
             <div class="user-info">
                 <strong>Auditoría Interna</strong>

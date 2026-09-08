@@ -86,9 +86,121 @@ async function loadAllData() {
         renderProposalsTab();
         renderActionPlansTab();
         updateSidebarMetrics();
+        loadNotifications();
     } catch (err) {
         console.error("Error cargando estructura relacional de AuditTrack:", err);
     }
+}
+
+async function loadNotifications() {
+    try {
+        const res = await fetch("/api/notifications");
+        if (!res.ok) return;
+        const alertsData = await res.json();
+
+        const badgeEl = el("bellBadgeCount");
+        if (badgeEl) badgeEl.textContent = alertsData.total_count || 0;
+
+        renderNotificationDropdownBody(alertsData);
+    } catch (err) {
+        console.error("Error cargando notificaciones:", err);
+    }
+}
+
+function toggleNotificationDropdown() {
+    const dropdown = el("notificationDropdown");
+    if (dropdown) {
+        dropdown.style.display = dropdown.style.display === "none" ? "block" : "none";
+    }
+}
+
+function renderNotificationDropdownBody(data) {
+    const body = el("notificationDropdownBody");
+    if (!body) return;
+
+    if (!data.total_count) {
+        body.innerHTML = `<div style="text-align: center; color: #16A34A; padding: 20px; font-size: 12px;"><strong>¡Sin alertas pendientes!</strong><p style="color:#64748B; margin-top:2px;">Todos los registros se encuentran al día.</p></div>`;
+        return;
+    }
+
+    let html = "";
+
+    const renderAuditorBadge = (auditorName) => `
+        <span style="font-size:11px; background:#EFF6FF; color:#0055D4; padding:2px 6px; border-radius:4px; font-weight:600; float:right;">
+            👤 ${escapeHtml(auditorName || 'Auditoría Interna')}
+        </span>
+    `;
+
+    if (data.overdue && data.overdue.length > 0) {
+        html += `<div class="notification-category">🔴 Vencidas (${data.overdue.length})</div>`;
+        data.overdue.forEach(item => {
+            html += `
+                <div class="notification-item" onclick="onNotificationClick('${item.finding_id}')">
+                    ${renderAuditorBadge(item.auditor)}
+                    <strong>${escapeHtml(item.code)}</strong>
+                    <p style="color:#DC2626; font-weight:600; margin-top:2px;">${escapeHtml(item.message)}</p>
+                    <p>${escapeHtml(item.title)}</p>
+                </div>
+            `;
+        });
+    }
+
+    if (data.due_today && data.due_today.length > 0) {
+        html += `<div class="notification-category">🟠 Vence hoy (${data.due_today.length})</div>`;
+        data.due_today.forEach(item => {
+            html += `
+                <div class="notification-item" onclick="onNotificationClick('${item.finding_id}')">
+                    ${renderAuditorBadge(item.auditor)}
+                    <strong>${escapeHtml(item.code)}</strong>
+                    <p style="color:#D97706; font-weight:600; margin-top:2px;">${escapeHtml(item.message)}</p>
+                    <p>${escapeHtml(item.title)}</p>
+                </div>
+            `;
+        });
+    }
+
+    if (data.due_soon && data.due_soon.length > 0) {
+        html += `<div class="notification-category">🟡 Próximas a vencer (${data.due_soon.length})</div>`;
+        data.due_soon.forEach(item => {
+            html += `
+                <div class="notification-item" onclick="onNotificationClick('${item.finding_id}')">
+                    ${renderAuditorBadge(item.auditor)}
+                    <strong>${escapeHtml(item.code)}</strong>
+                    <p style="color:#B45309; font-weight:600; margin-top:2px;">${escapeHtml(item.message)}</p>
+                    <p>${escapeHtml(item.title)}</p>
+                </div>
+            `;
+        });
+    }
+
+    if (data.attention && data.attention.length > 0) {
+        html += `<div class="notification-category">⚠ Requieren atención (${data.attention.length})</div>`;
+        data.attention.forEach(item => {
+            html += `
+                <div class="notification-item" onclick="onNotificationClick('${item.finding_id}')">
+                    ${renderAuditorBadge(item.auditor)}
+                    <strong>${escapeHtml(item.code)}</strong>
+                    <p style="color:#0055D4; font-weight:600; margin-top:2px;">${escapeHtml(item.message)}</p>
+                    <p>${escapeHtml(item.title)}</p>
+                </div>
+            `;
+        });
+    }
+
+    body.innerHTML = html;
+}
+
+
+function onNotificationClick(findingId) {
+    toggleNotificationDropdown();
+    if (findingId) openFindingDrawer(findingId);
+}
+
+function markAllNotificationsRead() {
+    const badgeEl = el("bellBadgeCount");
+    if (badgeEl) badgeEl.textContent = 0;
+    showToast("Notificaciones marcadas como leídas.", "info");
+    toggleNotificationDropdown();
 }
 
 function populateFilterDropdowns() {

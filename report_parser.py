@@ -32,6 +32,95 @@ def get_openai_client():
     return OpenAI(api_key=api_key) if api_key else None
 
 
+def extract_explicit_area(raw_text):
+    if not raw_text:
+        return "Pendiente de definir"
+
+    patterns = [
+        r"(?:área auditada|area auditada)\s*[:\-]\s*([^\n\r\|]+)",
+        r"(?:proceso auditado|proceso)\s*[:\-]\s*([^\n\r\|]+)",
+        r"(?:sector)\s*[:\-]\s*([^\n\r\|]+)",
+        r"(?:gerencia)\s*[:\-]\s*([^\n\r\|]+)",
+        r"(?:departamento)\s*[:\-]\s*([^\n\r\|]+)",
+        r"(?:unidad auditada)\s*[:\-]\s*([^\n\r\|]+)",
+        r"(?:alcance)\s*[:\-]\s*([^\n\r\|]+)"
+    ]
+
+    for p in patterns:
+        match = re.search(p, raw_text, re.IGNORECASE)
+        if match:
+            res = clean_text(match.group(1))
+            if len(res) > 3 and len(res) < 50:
+                return res
+
+    return "Pendiente de definir"
+
+
+def extract_explicit_auditor(raw_text):
+    if not raw_text:
+        return "Auditoría Interna"
+
+    patterns = [
+        r"(?:auditor responsable|auditor líder|auditor lider|auditor encargado|auditor|elaborado por|realizado por)\s*[:\-]\s*([^\n\r\|]+)"
+    ]
+
+    for p in patterns:
+        match = re.search(p, raw_text, re.IGNORECASE)
+        if match:
+            res = clean_text(match.group(1))
+            if len(res) > 2 and len(res) < 50:
+                return res
+
+    return "Auditoría Interna"
+
+
+
+def rewrite_audit_text(raw_narrative, is_proposal=False):
+    cleaned = clean_text(raw_narrative)
+    if not cleaned:
+        return "Pendiente de definir"
+
+    # Si el texto ya es conciso (menos de 25 palabras), usarlo directamente
+    words = cleaned.split()
+    if len(words) <= 25:
+        return cleaned
+
+    openai_client = get_openai_client()
+    if openai_client:
+        prompt_role = "Propuesta de Mejora (Recomendación)" if is_proposal else "Hallazgo (Situación Observada)"
+        sys_prompt = (
+            "Actuá como un Editor Senior de Auditoría Interna. Tu tarea es reescribir el siguiente texto "
+            f"de un informe en una {prompt_role} concisa, ejecutiva, profesional y fácil de leer. "
+            "DEBE tener entre 1 y 3 líneas (máximo 25 a 40 palabras). "
+            "Mantené estrictamente el sentido original del informe sin copiar párrafos extensos ni omitir datos relevantes. "
+            "REGLA ESTRICTA: Jamás inventes causas, riesgos, áreas, responsables, fechas o controles que no estén en el texto original. "
+            "Devolvé únicamente la redacción mejorada sin comillas ni títulos adicionales."
+        )
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": cleaned}
+                ],
+                temperature=0.2,
+                max_tokens=100
+            )
+            rewritten = clean_text(response.choices[0].message.content)
+            if rewritten:
+                return rewritten
+        except Exception as exc:
+            print(f"Error reescribiendo con IA: {exc}")
+
+    # Fallback heurístico conciso (1 a 3 líneas max 30 palabras)
+    sentences = re.split(r"[.!?]\s+", cleaned)
+    first_sentence = sentences[0].strip() if sentences else cleaned
+    first_words = first_sentence.split()
+    if len(first_words) > 30:
+        return " ".join(first_words[:30]) + "..."
+    return first_sentence + ("." if not first_sentence.endswith(".") else "")
+
+
 def extract_raw_text_from_file(file_path):
     ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
     text_content = ""
@@ -88,6 +177,12 @@ def extract_raw_text_from_file(file_path):
 
 def parse_docx_audittrack_structure(file_path, filename):
     doc = Document(file_path)
+    full_raw_text = "\n".join([p.text.strip() for p in doc.paragraphs if p.text.strip()])
+
+    explicit_area = extract_explicit_area(full_raw_text)
+
+    explicit_auditor = extract_explicit_auditor(full_raw_text)
+
     lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
 
     report_title = "Faltantes y Sobrantes de Inventario"
@@ -163,32 +258,6 @@ def parse_docx_audittrack_structure(file_path, filename):
     if current_finding:
         findings_raw.append(current_finding)
 
-    areas_map = {
-        1: "Tiendas / Stock",
-        2: "Tiendas / Stock",
-        3: "Abastecimiento",
-        4: "Seguridad / Operaciones",
-        5: "Operaciones / POS",
-        6: "Logística / Depósito",
-        7: "Logística",
-        8: "Compras / Acuerdos",
-        9: "Operaciones / SF",
-        10: "Contabilidad"
-    }
-
-    owners_map = {
-        1: "Guadalupe Méndez",
-        2: "Kari Gómez",
-        3: "Iván Torres",
-        4: "Luis Martínez",
-        5: "Mariano Ruiz",
-        6: "Hernán López",
-        7: "Daniel Jaime",
-        8: "Lucas Pereyra",
-        9: "Emmanuel López",
-        10: "Eugenia Rojas"
-    }
-
     relational_findings = []
     finding_idx = 1
     proposal_idx = 1
@@ -199,11 +268,11 @@ def parse_docx_audittrack_structure(file_path, filename):
         h_code = f"H-2026-{finding_idx:03d}"
         finding_idx += 1
 
-        sit_text = " ".join(f["situation"]) if f["situation"] else f["title"]
-        risk_text = " ".join(f["risk"]) if f["risk"] else "Riesgo de control interno y pérdidas."
+        raw_sit = " ".join(f["situation"]) if f["situation"] else f["title"]
+        sit_text = rewrite_audit_text(raw_sit, is_proposal=False)
 
-        area = areas_map.get(num, "Operaciones")
-        owner = owners_map.get(num, "Guadalupe Méndez")
+        raw_risk = " ".join(f["risk"]) if f["risk"] else "Riesgo de control interno y pérdidas."
+        risk_text = rewrite_audit_text(raw_risk, is_proposal=False)
 
         matched_prop = ""
         for p in proposals_raw:
@@ -216,9 +285,7 @@ def parse_docx_audittrack_structure(file_path, filename):
         pm_code = f"PM-2026-{proposal_idx:03d}"
         proposal_idx += 1
 
-        prop_title = clean_text(matched_prop.split(".")[0]) if matched_prop else f"Implementación de mejora para {f['title']}"
-        if len(prop_title) < 10:
-            prop_title = f"Plan de recomendación preventiva para {f['title']}"
+        prop_text = rewrite_audit_text(matched_prop, is_proposal=True) if matched_prop else f"Implementación de medida correctiva para {f['title']}"
 
         pa_code = f"PA-2026-{action_idx:03d}"
         action_idx += 1
@@ -229,26 +296,26 @@ def parse_docx_audittrack_structure(file_path, filename):
             "situation": sit_text,
             "risk": risk_text,
             "severity": f["severity"],
-            "responsible_area": area,
-            "action_owner": owner,
+            "responsible_area": explicit_area if explicit_area != "Pendiente de definir" else "Tiendas / Stock",
+            "action_owner": "Pendiente de definir",
             "status": "En proceso",
             "proposals": [
                 {
                     "code": pm_code,
-                    "title": prop_title,
-                    "proposal_text": matched_prop or prop_title,
+                    "title": prop_text,
+                    "proposal_text": prop_text,
                     "target_date": "2026-10-31",
                     "status": "En proceso",
                     "action_plans": [
                         {
                             "code": pa_code,
                             "title": f"Acción comprometida {pa_code}",
-                            "action_text": f"Ejecutar y documentar la implementación de {prop_title}",
-                            "action_owner": owner,
+                            "action_text": f"Ejecutar y documentar la implementación de {prop_text}",
+                            "action_owner": "Pendiente de definir",
                             "target_date": "2026-10-15",
                             "progress_pct": 50,
                             "status": "En proceso",
-                            "notes": "Avance informado por el responsable del área auditada."
+                            "notes": "Avance informado por el área auditada."
                         }
                     ]
                 }
@@ -259,9 +326,9 @@ def parse_docx_audittrack_structure(file_path, filename):
         "report": {
             "title": report_title,
             "process": "Faltantes y Sobrantes de Inventario",
-            "area": "Tiendas y Logística",
+            "area": explicit_area if explicit_area != "Pendiente de definir" else "Tiendas y Logística",
             "period": "Ene-Jun 2026",
-            "auditor": "Auditoría Interna",
+            "auditor": explicit_auditor,
             "summary": f"Informe {filename} procesado en AuditTrack."
         },
         "findings": relational_findings
@@ -279,43 +346,48 @@ def parse_audit_report(file_path, filename):
         except Exception as exc:
             print(f"Error parse_docx_audittrack_structure: {exc}")
 
+    raw_text = extract_raw_text_from_file(file_path)
+    explicit_area = extract_explicit_area(raw_text)
+    explicit_auditor = extract_explicit_auditor(raw_text)
+
     # Fallback
     return {
         "report": {
             "title": f"Informe de Auditoría - {filename}",
-            "process": "Control Interno de Operaciones",
-            "area": "Operaciones / Stock",
+            "process": "Control Interno",
+            "area": explicit_area,
             "period": "2026",
-            "auditor": "Auditoría Interna",
+            "auditor": explicit_auditor,
             "summary": f"Informe {filename} ingestado en AuditTrack."
         },
+
         "findings": [
             {
                 "code": "H-2026-001",
                 "title": "Diferencias en recuentos físicos de stock",
-                "situation": "Se detectaron diferencias en los recuentos físicos de inventario.",
-                "risk": "Riesgo de faltantes no justificados.",
+                "situation": "Se identificaron discrepancias en los recuentos físicos de inventario en sucursales.",
+                "risk": "Riesgo de registración errónea y faltantes no justificados.",
                 "severity": "Alto",
-                "responsible_area": "Tiendas / Stock",
-                "action_owner": "Guadalupe Méndez",
+                "responsible_area": explicit_area if explicit_area != "Pendiente de definir" else "Tiendas / Stock",
+                "action_owner": "Pendiente de definir",
                 "status": "En proceso",
                 "proposals": [
                     {
                         "code": "PM-2026-001",
                         "title": "Actualizar Manual de Conteo a Ciegas",
-                        "proposal_text": "Implementar rutina obligatoria de conteo a ciegas semanal.",
+                        "proposal_text": "Implementar rutina periódica de conteo físico a ciegas en tiendas.",
                         "target_date": "2026-10-31",
                         "status": "En proceso",
                         "action_plans": [
                             {
                                 "code": "PA-2026-001",
                                 "title": "Capacitación a personal de sucursales",
-                                "action_text": "Capacitar a encargados de tienda en la nueva metodología.",
-                                "action_owner": "Guadalupe Méndez",
+                                "action_text": "Capacitar a encargados de tienda en la nueva metodología de recuento.",
+                                "action_owner": "Pendiente de definir",
                                 "target_date": "2026-10-15",
                                 "progress_pct": 50,
                                 "status": "En proceso",
-                                "notes": "Cronograma enviado a responsables de tienda."
+                                "notes": "Cronograma acordado con responsables de sucursal."
                             }
                         ]
                     }
