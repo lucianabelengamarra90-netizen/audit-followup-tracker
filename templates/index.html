@@ -41,7 +41,11 @@
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
             <nav class="sidebar-menu">
-                <button class="menu-item active" data-tab="hallazgos" onclick="switchTab('hallazgos')">
+                <button class="menu-item active" data-tab="informes" onclick="switchTab('informes')">
+                    <span class="menu-icon">📄</span>
+                    <span>Informes</span>
+                </button>
+                <button class="menu-item" data-tab="hallazgos" onclick="switchTab('hallazgos')">
                     <span class="menu-icon">📘</span>
                     <span>Hallazgos y Propuestas</span>
                 </button>
@@ -52,10 +56,6 @@
                 <button class="menu-item" data-tab="planes" onclick="switchTab('planes')">
                     <span class="menu-icon">📋</span>
                     <span>Planes de acción</span>
-                </button>
-                <button class="menu-item" data-tab="informes" onclick="switchTab('informes')">
-                    <span class="menu-icon">📄</span>
-                    <span>Informes</span>
                 </button>
                 <button class="menu-item" data-tab="tableros" onclick="switchTab('tableros')">
                     <span class="menu-icon">📊</span>
@@ -79,22 +79,46 @@
                 <div class="widget-metric">
                     <span class="metric-icon">📊</span>
                     <div>
-                        <strong id="sidebarOpenCount">14</strong>
+                        <strong id="sidebarOpenCount">0</strong>
                         <small>hallazgos abiertos</small>
                     </div>
                 </div>
                 <div class="widget-progress-bg">
-                    <div class="widget-progress-fill" id="sidebarProgressBar" style="width: 60%;"></div>
+                    <div class="widget-progress-fill" id="sidebarProgressBar" style="width: 0%;"></div>
                 </div>
-                <span class="widget-subtext"><strong id="sidebarPct">60%</strong> propuestas en proceso</span>
+                <span class="widget-subtext"><strong id="sidebarPct">0%</strong> propuestas en proceso</span>
             </div>
         </aside>
 
         <!-- Content Area -->
         <main class="content-area">
 
-            <!-- TAB 1: HALLAZGOS Y PROPUESTAS (VISTA PRINCIPAL EXACTA FOTO) -->
-            <section class="tab-pane active" id="tab-hallazgos">
+            <!-- TAB INFORMES (PRIMERA OPCIÓN) -->
+            <section class="tab-pane active" id="tab-informes">
+                <div class="view-header">
+                    <div>
+                        <h2>Informes de Auditoría</h2>
+                        <p>Cargá tus informes de auditoría en Word (.docx), PDF (.pdf) o Excel (.xlsx) para detectar automáticamente hallazgos, propuestas y áreas asignadas.</p>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div id="dropZone" class="drop-zone" onclick="document.getElementById('reportInput').click()">
+                        <div class="drop-icon">↑</div>
+                        <p><strong>Hacé clic para seleccionar</strong> o arrastrá tu informe de auditoría acá</p>
+                        <span style="font-size: 12px; color: #64748B;">Formatos soportados: Word (.docx), PDF (.pdf), Excel (.xlsx)</span>
+                    </div>
+                    <input type="file" id="reportInput" hidden accept=".pdf,.docx,.xlsx,.csv" onchange="uploadAuditReport(this.files[0])">
+                </div>
+
+                <div class="card">
+                    <h3>Informes Activos</h3>
+                    <div id="reportsListContainer"></div>
+                </div>
+            </section>
+
+            <!-- TAB HALLAZGOS Y PROPUESTAS -->
+            <section class="tab-pane" id="tab-hallazgos">
                 <div class="view-header">
                     <div>
                         <h2>Hallazgos y Propuestas de Mejora</h2>
@@ -176,29 +200,7 @@
                 </div>
             </section>
 
-            <!-- TAB 4: INFORMES DE AUDITORÍA -->
-            <section class="tab-pane" id="tab-informes">
-                <div class="view-header">
-                    <div>
-                        <h2>Informes de Auditoría</h2>
-                        <p>Cargá tus informes completos en Word (.docx), PDF (.pdf) o Excel (.xlsx) para extraer automáticamente hallazgos y propuestas.</p>
-                    </div>
-                </div>
 
-                <div class="card">
-                    <div id="dropZone" class="drop-zone" onclick="document.getElementById('reportInput').click()">
-                        <div class="drop-icon">↑</div>
-                        <p><strong>Hacé clic para seleccionar</strong> o arrastrá el informe de auditoría acá</p>
-                        <span style="font-size: 12px; color: #64748B;">Formatos soportados: Word (.docx), PDF (.pdf), Excel (.xlsx)</span>
-                    </div>
-                    <input type="file" id="reportInput" hidden accept=".pdf,.docx,.xlsx,.csv" onchange="uploadAuditReport(this.files[0])">
-                </div>
-
-                <div class="card">
-                    <h3>Informes Activos</h3>
-                    <div id="reportsListContainer"></div>
-                </div>
-            </section>
 
             <!-- TAB TABLEROS -->
             <section class="tab-pane" id="tab-tableros">

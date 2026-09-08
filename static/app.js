@@ -470,5 +470,6 @@ async function exportExcelReport() {
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", () => {
+    switchTab("informes");
     loadAuditTrackData();
 });

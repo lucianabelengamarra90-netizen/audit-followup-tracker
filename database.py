@@ -54,14 +54,7 @@ def init_db():
     """)
 
     conn.commit()
-    
-    # Check if empty to seed 14 records matching exact screenshot
-    cursor.execute("SELECT COUNT(*) FROM findings")
-    cnt = cursor.fetchone()[0]
     conn.close()
-
-    if cnt == 0:
-        seed_initial_data()
 
 
 def seed_initial_data():
