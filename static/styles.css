@@ -420,27 +420,32 @@ body {
     text-decoration: underline;
 }
 
-/* Table Card */
+/* Table Card & Full Width Responsive Container */
 .table-card {
     background: var(--white);
     border: 1px solid var(--border-color);
     border-radius: 12px;
-    overflow: hidden;
+    overflow-x: auto;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+    width: 100%;
 }
 
 .audittrack-table {
     width: 100%;
+    min-width: 1250px;
     border-collapse: collapse;
     font-size: 12px;
     text-align: left;
 }
 
 .audittrack-table th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
     background: #F8FAFC;
     color: #64748B;
     font-weight: 600;
-    padding: 10px 14px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--border-color);
     white-space: nowrap;
 }
@@ -452,11 +457,32 @@ body {
 }
 
 .audittrack-table td {
-    padding: 12px 14px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--border-color);
     vertical-align: middle;
     color: #334155;
 }
+
+.truncate-2-lines {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.4;
+    max-height: 2.8em;
+}
+
+.truncate-3-lines {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.4;
+    max-height: 4.2em;
+}
+
 
 .audittrack-table tr:hover {
     background: #F8FAFC;

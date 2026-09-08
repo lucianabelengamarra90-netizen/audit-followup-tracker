@@ -74,27 +74,42 @@ def extract_explicit_auditor(raw_text):
     return "Auditoría Interna"
 
 
+def clean_administrative_phrases(text):
+    if not text:
+        return ""
+    patterns = [
+        r"se\s+(?:vio|conversó|habló|consultó|reunió|acordó)\s+con\s+(?:el\s+área|el\s+sector|la\s+gerencia|el\s+responsable)[^.!?]*[.!?]?",
+        r"según\s+reunión\s+mantenida[^.!?]*[.!?]?",
+        r"de\s+acuerdo\s+con\s+lo\s+informado\s+por[^.!?]*[.!?]?"
+    ]
+    cleaned = text
+    for p in patterns:
+        cleaned = re.sub(p, "", cleaned, flags=re.IGNORECASE)
+    return clean_text(cleaned)
+
 
 def rewrite_audit_text(raw_narrative, is_proposal=False):
-    cleaned = clean_text(raw_narrative)
+    cleaned = clean_administrative_phrases(raw_narrative)
     if not cleaned:
         return "Pendiente de definir"
 
-    # Si el texto ya es conciso (menos de 25 palabras), usarlo directamente
     words = cleaned.split()
-    if len(words) <= 25:
+    if len(words) <= 25 and len(words) >= 8:
         return cleaned
 
     openai_client = get_openai_client()
     if openai_client:
         prompt_role = "Propuesta de Mejora (Recomendación)" if is_proposal else "Hallazgo (Situación Observada)"
         sys_prompt = (
-            "Actuá como un Editor Senior de Auditoría Interna. Tu tarea es reescribir el siguiente texto "
-            f"de un informe en una {prompt_role} concisa, ejecutiva, profesional y fácil de leer. "
-            "DEBE tener entre 1 y 3 líneas (máximo 25 a 40 palabras). "
-            "Mantené estrictamente el sentido original del informe sin copiar párrafos extensos ni omitir datos relevantes. "
-            "REGLA ESTRICTA: Jamás inventes causas, riesgos, áreas, responsables, fechas o controles que no estén en el texto original. "
-            "Devolvé únicamente la redacción mejorada sin comillas ni títulos adicionales."
+            "Actuá como un Editor Senior de Auditoría Interna. Tu tarea es analizar el bloque completo del informe y redactar "
+            f"una {prompt_role} concisa, ejecutiva, profesional y objetiva. "
+            "REGLAS OBLIGATORIAS:\n"
+            "1. DEBE tener entre 1 y 3 líneas (20 a 40 palabras).\n"
+            "2. Jamás devuelvas títulos incompletos de 2 o 3 palabras (Ej. NO escribir 'Posible hurto', 'Vida útil', 'Diferencias Gift Cards').\n"
+            "3. En Hallazgos, explicá concretamente qué ocurrió, sobre qué proceso/elemento y la desviación observada.\n"
+            "4. Filtrá frases administrativas de trámite ('Se vio con el área...', 'Se conversó con...').\n"
+            "5. NO inventes soluciones de Inteligencia Artificial ni sistemas automatizados no mencionados en el informe.\n"
+            "6. Devuelvé únicamente el texto mejorado sin comillas ni encabezados extra."
         )
         try:
             response = openai_client.chat.completions.create(
@@ -104,21 +119,23 @@ def rewrite_audit_text(raw_narrative, is_proposal=False):
                     {"role": "user", "content": cleaned}
                 ],
                 temperature=0.2,
-                max_tokens=100
+                max_tokens=120
             )
             rewritten = clean_text(response.choices[0].message.content)
-            if rewritten:
+            if rewritten and len(rewritten.split()) >= 6:
                 return rewritten
         except Exception as exc:
             print(f"Error reescribiendo con IA: {exc}")
 
-    # Fallback heurístico conciso (1 a 3 líneas max 30 palabras)
-    sentences = re.split(r"[.!?]\s+", cleaned)
-    first_sentence = sentences[0].strip() if sentences else cleaned
-    first_words = first_sentence.split()
-    if len(first_words) > 30:
-        return " ".join(first_words[:30]) + "..."
-    return first_sentence + ("." if not first_sentence.endswith(".") else "")
+    # Fallback heurístico
+    sentences = [s.strip() for s in re.split(r"[.!?]\s+", cleaned) if len(s.strip().split()) >= 5]
+    if not sentences:
+        sentences = [cleaned]
+    res = " ".join(sentences[:2])
+    res_words = res.split()
+    if len(res_words) > 35:
+        res = " ".join(res_words[:35]) + "..."
+    return res + ("." if not res.endswith(".") else "")
 
 
 def extract_raw_text_from_file(file_path):
@@ -180,12 +197,11 @@ def parse_docx_audittrack_structure(file_path, filename):
     full_raw_text = "\n".join([p.text.strip() for p in doc.paragraphs if p.text.strip()])
 
     explicit_area = extract_explicit_area(full_raw_text)
-
     explicit_auditor = extract_explicit_auditor(full_raw_text)
 
     lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
 
-    report_title = "Faltantes y Sobrantes de Inventario"
+    report_title = f"Informe de Auditoría - {filename}"
     for l in lines[:10]:
         if "informe" in l.lower() or "auditoría" in l.lower():
             report_title = clean_text(l)
@@ -271,7 +287,7 @@ def parse_docx_audittrack_structure(file_path, filename):
         raw_sit = " ".join(f["situation"]) if f["situation"] else f["title"]
         sit_text = rewrite_audit_text(raw_sit, is_proposal=False)
 
-        raw_risk = " ".join(f["risk"]) if f["risk"] else "Riesgo de control interno y pérdidas."
+        raw_risk = " ".join(f["risk"]) if f["risk"] else "Riesgo de control interno."
         risk_text = rewrite_audit_text(raw_risk, is_proposal=False)
 
         matched_prop = ""
@@ -296,7 +312,7 @@ def parse_docx_audittrack_structure(file_path, filename):
             "situation": sit_text,
             "risk": risk_text,
             "severity": f["severity"],
-            "responsible_area": explicit_area if explicit_area != "Pendiente de definir" else "Tiendas / Stock",
+            "responsible_area": explicit_area,
             "action_owner": "Pendiente de definir",
             "status": "En proceso",
             "proposals": [
@@ -310,12 +326,12 @@ def parse_docx_audittrack_structure(file_path, filename):
                         {
                             "code": pa_code,
                             "title": f"Acción comprometida {pa_code}",
-                            "action_text": f"Ejecutar y documentar la implementación de {prop_text}",
+                            "action_text": "Pendiente de definición por el área responsable",
                             "action_owner": "Pendiente de definir",
                             "target_date": "2026-10-15",
-                            "progress_pct": 50,
-                            "status": "En proceso",
-                            "notes": "Avance informado por el área auditada."
+                            "progress_pct": 0,
+                            "status": "Pendiente",
+                            "notes": ""
                         }
                     ]
                 }
@@ -325,11 +341,11 @@ def parse_docx_audittrack_structure(file_path, filename):
     return {
         "report": {
             "title": report_title,
-            "process": "Faltantes y Sobrantes de Inventario",
-            "area": explicit_area if explicit_area != "Pendiente de definir" else "Tiendas y Logística",
-            "period": "Ene-Jun 2026",
+            "process": "Control Interno",
+            "area": explicit_area,
+            "period": "2026",
             "auditor": explicit_auditor,
-            "summary": f"Informe {filename} procesado en AuditTrack."
+            "summary": f"Informe {filename} ingestado en AuditTrack."
         },
         "findings": relational_findings
     }
@@ -360,34 +376,33 @@ def parse_audit_report(file_path, filename):
             "auditor": explicit_auditor,
             "summary": f"Informe {filename} ingestado en AuditTrack."
         },
-
         "findings": [
             {
                 "code": "H-2026-001",
-                "title": "Diferencias en recuentos físicos de stock",
-                "situation": "Se identificaron discrepancias en los recuentos físicos de inventario en sucursales.",
+                "title": "Diferencias en recuentos físicos de inventario",
+                "situation": "Se identificaron discrepancias en los recuentos físicos de inventario sin documentación respaldatoria.",
                 "risk": "Riesgo de registración errónea y faltantes no justificados.",
                 "severity": "Alto",
-                "responsible_area": explicit_area if explicit_area != "Pendiente de definir" else "Tiendas / Stock",
+                "responsible_area": explicit_area,
                 "action_owner": "Pendiente de definir",
                 "status": "En proceso",
                 "proposals": [
                     {
                         "code": "PM-2026-001",
-                        "title": "Actualizar Manual de Conteo a Ciegas",
-                        "proposal_text": "Implementar rutina periódica de conteo físico a ciegas en tiendas.",
+                        "title": "Implementar rutina periódica de recuento físico a ciegas",
+                        "proposal_text": "Implementar rutina periódica de recuento físico a ciegas en sucursales.",
                         "target_date": "2026-10-31",
                         "status": "En proceso",
                         "action_plans": [
                             {
                                 "code": "PA-2026-001",
-                                "title": "Capacitación a personal de sucursales",
-                                "action_text": "Capacitar a encargados de tienda en la nueva metodología de recuento.",
+                                "title": "Acción comprometida PA-2026-001",
+                                "action_text": "Pendiente de definición por el área responsable",
                                 "action_owner": "Pendiente de definir",
                                 "target_date": "2026-10-15",
-                                "progress_pct": 50,
-                                "status": "En proceso",
-                                "notes": "Cronograma acordado con responsables de sucursal."
+                                "progress_pct": 0,
+                                "status": "Pendiente",
+                                "notes": ""
                             }
                         ]
                     }

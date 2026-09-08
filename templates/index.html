@@ -70,10 +70,6 @@
                     <span class="menu-icon">💡</span>
                     <span>Propuestas de mejora</span>
                 </button>
-                <button class="menu-item" data-tab="planes" onclick="switchTab('planes')">
-                    <span class="menu-icon">📋</span>
-                    <span>Planes de acción</span>
-                </button>
                 <button class="menu-item" data-tab="tableros" onclick="switchTab('tableros')">
                     <span class="menu-icon">📊</span>
                     <span>Tableros</span>
@@ -201,17 +197,19 @@
                     <table class="audittrack-table">
                         <thead>
                             <tr>
-                                <th style="width: 32px;"></th>
-                                <th>Área / Proceso</th>
-                                <th>ID</th>
-                                <th>Hallazgo (Situación Observada)</th>
-                                <th>Vinculado a</th>
-                                <th>Propuesta de Mejora (Recomendación)</th>
-                                <th>Archivo de origen</th>
-                                <th>Riesgo</th>
-                                <th>Estado</th>
-                                <th>Responsable</th>
-                                <th>Acciones</th>
+                                <th style="width: 100px;">ID</th>
+                                <th style="width: 90px;">Tipo</th>
+                                <th style="min-width: 280px;">Hallazgo / Propuesta</th>
+                                <th style="width: 140px;">Área / Proceso</th>
+                                <th style="width: 140px;">Informe</th>
+                                <th style="width: 130px;">Archivo de origen</th>
+                                <th style="width: 110px;">Vinculado a</th>
+                                <th style="width: 85px;">Riesgo</th>
+                                <th style="width: 130px;">Responsable</th>
+                                <th style="width: 110px;">Fecha compromiso</th>
+                                <th style="width: 100px;">Estado</th>
+                                <th style="width: 75px;">Avance</th>
+                                <th style="width: 90px;">Acciones</th>
                             </tr>
                         </thead>
                         <tbody id="auditTrackTableBody">
@@ -524,6 +522,43 @@
             <div class="drawer-section">
                 <h4>🕒 Historial Cronológico de Cambios</h4>
                 <div id="drawerHistoryList" class="history-timeline"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL DE VALIDACIÓN PREVIA AL GUARDADO -->
+<div id="previewValidationModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="max-width: 1050px; width: 95%; max-height: 90vh;">
+        <div class="modal-header" style="background: #0055D4; color: white;">
+            <div>
+                <h3 style="color: white; margin: 0; font-size: 16px;" id="previewModalTitle">Revisión y Validación de Auditoría</h3>
+                <p style="color: #DBEAFE; margin: 4px 0 0 0; font-size: 12px;" id="previewModalSubtitle">Se identificaron registros. Revisá y aprobá antes de ingestar en el sistema.</p>
+            </div>
+            <button type="button" class="modal-close" style="color: white;" onclick="closePreviewValidationModal()">×</button>
+        </div>
+        <div class="modal-body" style="padding: 16px; overflow-y: auto;">
+            <div id="previewReportInfoBox" style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 12px;"></div>
+            
+            <div style="overflow-x: auto; border: 1px solid #E2E8F0; border-radius: 8px; max-height: 50vh;">
+                <table class="audittrack-table" style="width: 100%; min-width: 900px;">
+                    <thead>
+                        <tr style="background: #F1F5F9;">
+                            <th style="width: 80px;">Tipo</th>
+                            <th>Redacción Generada (IA)</th>
+                            <th style="width: 130px;">Área / Proceso</th>
+                            <th style="width: 80px;">Riesgo</th>
+                            <th style="width: 110px;">Vinculado a</th>
+                            <th style="width: 80px;">Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody id="previewTableBody"></tbody>
+                </table>
+            </div>
+
+            <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" class="btn btn-outlined" onclick="closePreviewValidationModal()">Descartar</button>
+                <button type="button" class="btn btn-primary" onclick="confirmSaveValidatedReport()">Aprobar e Ingestar en AuditTrack</button>
             </div>
         </div>
     </div>

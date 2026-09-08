@@ -943,28 +943,170 @@ function switchReportSubTab(subTabName) {
     }
 }
 
+let currentPreviewData = null;
+
 async function uploadAuditReport(file) {
     if (!file) return;
-    showToast(`Analizando e ingestado '${file.name}'...`, "info");
+    showToast(`Analizando e interpretando '${file.name}' con IA...`, "info");
 
     const form = new FormData();
     form.append("file", file);
 
     try {
-        const response = await fetch("/upload-report", { method: "POST", body: form });
+        const response = await fetch("/parse-preview", { method: "POST", body: form });
         let data = {};
         try { data = await response.json(); } catch (_) {}
 
         if (!response.ok) throw new Error(data.error || "No se pudo procesar el informe.");
 
-        showToast(data.message || "Informe ingresado correctamente.", "success");
+        currentPreviewData = data;
+        openPreviewValidationModal(data);
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || "Error al analizar el informe.", "error");
+    }
+}
+
+function openPreviewValidationModal(data) {
+    const modal = el("previewValidationModal");
+    const infoBox = el("previewReportInfoBox");
+    const tbody = el("previewTableBody");
+    const subtitle = el("previewModalSubtitle");
+    if (!modal || !tbody) return;
+
+    const rep = data.report || {};
+    const findings = data.findings || [];
+    let propCount = 0;
+    findings.forEach(f => { propCount += (f.proposals || []).length; });
+
+    if (subtitle) {
+        subtitle.textContent = `Se identificaron ${findings.length} Hallazgos y ${propCount} Propuestas de Mejora. Revisá y aprobá antes de ingestar.`;
+    }
+
+    if (infoBox) {
+        infoBox.innerHTML = `
+            <strong>Informe:</strong> ${escapeHtml(rep.title || 'Informe sin título')} | 
+            <strong>Proceso:</strong> ${escapeHtml(rep.process || 'Control Interno')} | 
+            <strong>Área:</strong> <span style="background:#EFF6FF; color:#0055D4; padding:2px 6px; border-radius:4px; font-weight:600;">${escapeHtml(rep.area || 'Pendiente de definir')}</span> | 
+            <strong>Auditor:</strong> ${escapeHtml(rep.auditor || 'Auditoría Interna')}
+        `;
+    }
+
+    let html = "";
+    findings.forEach((f, fIdx) => {
+        html += `
+            <tr>
+                <td><span class="pill pill-hallazgo">Hallazgo</span></td>
+                <td>
+                    <textarea class="preview-edit-text" style="width:100%; font-size:12px; border:1px solid #CBD5E1; border-radius:4px; padding:4px;" rows="2" onchange="updatePreviewFindingText(${fIdx}, this.value)">${escapeHtml(f.situation || f.title)}</textarea>
+                </td>
+                <td>
+                    <input type="text" style="width:100%; font-size:12px; border:1px solid #CBD5E1; border-radius:4px; padding:4px;" value="${escapeHtml(f.responsible_area || rep.area || 'Pendiente de definir')}" onchange="updatePreviewFindingArea(${fIdx}, this.value)">
+                </td>
+                <td>
+                    <select style="font-size:12px; border:1px solid #CBD5E1; border-radius:4px; padding:4px;" onchange="updatePreviewFindingSeverity(${fIdx}, this.value)">
+                        <option value="Alto"${f.severity === 'Alto' ? ' selected' : ''}>Alto</option>
+                        <option value="Medio"${f.severity === 'Medio' ? ' selected' : ''}>Medio</option>
+                        <option value="Bajo"${f.severity === 'Bajo' ? ' selected' : ''}>Bajo</option>
+                    </select>
+                </td>
+                <td><small style="color:#64748B;">Padre</small></td>
+                <td>
+                    <button type="button" class="btn btn-outlined" style="padding:2px 6px; font-size:11px; color:#DC2626;" onclick="deletePreviewFinding(${fIdx})">Eliminar</button>
+                </td>
+            </tr>
+        `;
+
+        (f.proposals || []).forEach((p, pIdx) => {
+            html += `
+                <tr style="background:#F8FAFC;">
+                    <td style="padding-left:18px;"><span class="pill pill-propuesta">Propuesta</span></td>
+                    <td>
+                        <textarea class="preview-edit-text" style="width:100%; font-size:12px; border:1px solid #CBD5E1; border-radius:4px; padding:4px;" rows="2" onchange="updatePreviewProposalText(${fIdx}, ${pIdx}, this.value)">${escapeHtml(p.proposal_text || p.title)}</textarea>
+                    </td>
+                    <td><small style="color:#64748B;">(Idem Hallazgo)</small></td>
+                    <td><small style="color:#64748B;">-</small></td>
+                    <td><strong style="color:#0055D4;">${escapeHtml(f.code || `H-2026-${fIdx+1}`)}</strong></td>
+                    <td>
+                        <button type="button" class="btn btn-outlined" style="padding:2px 6px; font-size:11px; color:#DC2626;" onclick="deletePreviewProposal(${fIdx}, ${pIdx})">Eliminar</button>
+                    </td>
+                </tr>
+            `;
+        });
+    });
+
+    tbody.innerHTML = html || `<tr><td colspan="6" style="text-align:center; color:#94A3B8; padding:20px;">No hay registros cargados.</td></tr>`;
+    modal.style.display = "flex";
+}
+
+function closePreviewValidationModal() {
+    const modal = el("previewValidationModal");
+    if (modal) modal.style.display = "none";
+    currentPreviewData = null;
+}
+
+function updatePreviewFindingText(fIdx, val) {
+    if (currentPreviewData && currentPreviewData.findings[fIdx]) {
+        currentPreviewData.findings[fIdx].situation = val;
+    }
+}
+
+function updatePreviewFindingArea(fIdx, val) {
+    if (currentPreviewData && currentPreviewData.findings[fIdx]) {
+        currentPreviewData.findings[fIdx].responsible_area = val;
+    }
+}
+
+function updatePreviewFindingSeverity(fIdx, val) {
+    if (currentPreviewData && currentPreviewData.findings[fIdx]) {
+        currentPreviewData.findings[fIdx].severity = val;
+    }
+}
+
+function updatePreviewProposalText(fIdx, pIdx, val) {
+    if (currentPreviewData && currentPreviewData.findings[fIdx] && currentPreviewData.findings[fIdx].proposals[pIdx]) {
+        currentPreviewData.findings[fIdx].proposals[pIdx].proposal_text = val;
+    }
+}
+
+function deletePreviewFinding(fIdx) {
+    if (currentPreviewData) {
+        currentPreviewData.findings.splice(fIdx, 1);
+        openPreviewValidationModal(currentPreviewData);
+    }
+}
+
+function deletePreviewProposal(fIdx, pIdx) {
+    if (currentPreviewData && currentPreviewData.findings[fIdx]) {
+        currentPreviewData.findings[fIdx].proposals.splice(pIdx, 1);
+        openPreviewValidationModal(currentPreviewData);
+    }
+}
+
+async function confirmSaveValidatedReport() {
+    if (!currentPreviewData) return;
+
+    try {
+        showToast("Ingestando informe validado en AuditTrack...", "info");
+        const res = await fetch("/save-validated-report", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(currentPreviewData)
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Error al guardar el informe.");
+
+        showToast(data.message || "Informe ingresado exitosamente en AuditTrack.", "success");
+        closePreviewValidationModal();
         await loadAllData();
         switchTab("hallazgos");
     } catch (err) {
         console.error(err);
-        showToast(err.message || "Error al cargar el informe.", "error");
+        showToast(err.message || "Error al ingresar el informe.", "error");
     }
 }
+
 
 async function deleteReportItem(reportId) {
     if (!confirm("¿Eliminar este informe y todas sus propuestas y planes asociados?")) return;

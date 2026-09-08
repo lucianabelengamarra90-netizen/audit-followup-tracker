@@ -1094,6 +1094,28 @@ def get_active_alerts():
             "message": f"Nueva evidencia cargada para {r['code']}."
         })
 
+    # 6. Propuesta sin responsable o sin fecha compromiso
+    cursor.execute("""
+        SELECT p.id, p.code, p.title, p.proposal_text, f.id as finding_id, r.auditor as report_auditor
+        FROM proposals p
+        JOIN findings f ON p.finding_id = f.id
+        JOIN reports r ON f.report_id = r.id
+        WHERE (p.action_owner IS NULL OR p.action_owner = '' OR p.action_owner LIKE '%Pendiente%')
+           OR (p.target_date IS NULL OR p.target_date = '')
+    """)
+    for r in cursor.fetchall():
+        attention_alerts.append({
+            "id": r["id"],
+            "code": r["code"],
+            "finding_id": r["finding_id"],
+            "title": r["proposal_text"] or r["title"],
+            "auditor": r["report_auditor"] or "Auditoría Interna",
+            "level": "atencion",
+            "badge_color": "naranja",
+            "message": f"{r['code']} requiere definir responsable o fecha compromiso."
+        })
+
+
     conn.close()
 
     total_count = len(overdue_alerts) + len(due_today_alerts) + len(due_soon_alerts) + len(attention_alerts)

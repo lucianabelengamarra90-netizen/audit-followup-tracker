@@ -86,6 +86,57 @@ def upload_report():
         return jsonify({"error": f"No se pudo procesar el informe: {str(exc)}"}), 500
 
 
+@app.route("/parse-preview", methods=["POST"])
+def parse_preview():
+    if "file" not in request.files:
+        return jsonify({"error": "No se seleccionó ningún archivo de informe."}), 400
+
+    file = request.files["file"]
+    if not file or not file.filename:
+        return jsonify({"error": "El archivo enviado no es válido."}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Formato no soportado. Usá PDF, Word (.docx) o Excel (.xlsx)."}), 400
+
+    safe_filename = clean_text(file.filename).replace(" ", "_")
+    saved_path = os.path.join(app.config["UPLOAD_FOLDER"], safe_filename)
+    file.save(saved_path)
+
+    try:
+        parsed_data = parse_audit_report(saved_path, safe_filename)
+        return jsonify({
+            "report_file": safe_filename,
+            "report": parsed_data.get("report", {}),
+            "findings": parsed_data.get("findings", [])
+        })
+    except Exception as exc:
+        print(f"Error procesando vista previa: {exc}")
+        return jsonify({"error": f"No se pudo procesar la vista previa: {str(exc)}"}), 500
+
+
+@app.route("/save-validated-report", methods=["POST"])
+def save_validated_report():
+    data = request.get_json(silent=True) or {}
+    report_info = data.get("report", {})
+    findings_hierarchy = data.get("findings", [])
+    source_filename = data.get("report_file", "Informe.docx")
+
+    if not report_info or not findings_hierarchy:
+        return jsonify({"error": "No hay datos validados para guardar."}), 400
+
+    try:
+        report_id = save_relational_report_structure(report_info, findings_hierarchy, source_filename)
+        return jsonify({
+            "message": f"Informe '{report_info.get('title')}' ingresado correctamente en AuditTrack.",
+            "report_id": report_id,
+            "findings_count": len(findings_hierarchy)
+        })
+    except Exception as exc:
+        print(f"Error guardando informe validado: {exc}")
+        return jsonify({"error": f"No se pudo guardar el informe: {str(exc)}"}), 500
+
+
+
 @app.route("/reports", methods=["GET"])
 def list_reports():
     reports = get_all_reports()
