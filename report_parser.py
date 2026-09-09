@@ -424,9 +424,14 @@ def parse_audit_report(file_path, filename):
 
         title = clean_text(f.get("title", f"Hallazgo {idx}"))
         situation = clean_text(f.get("situation", title))
-        proposal = clean_text(f.get("proposal", f"Implementar recomendaciones para {title}"))
+        raw_proposal = f.get("proposal", "") or f.get("recommendation", "") or f.get("propuesta", "")
+        proposal = clean_text(raw_proposal)
+        if not proposal:
+            proposal = f"Implementar medidas de control y mejora para: {title[:60]}."
         severity = f.get("severity", "Medio")
         area = f.get("responsible_area") or explicit_area
+
+        print(f"[DEBUG Parser] H-{idx}: title={title[:50]}, proposal={proposal[:80]}")
 
         relational_findings.append({
             "code": h_code,
