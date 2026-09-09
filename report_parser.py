@@ -911,10 +911,7 @@ def parse_document(
 
         if (
             "informe" in norm
-            and (
-                "auditoria" in norm
-                or "auditoría" in line.lower()
-            )
+            and "auditoria" in norm
         ):
             report_title = line
             break
@@ -962,7 +959,6 @@ def parse_document(
             }
 
             reading_proposal = False
-
             continue
 
         if (
@@ -985,7 +981,6 @@ def parse_document(
             )
 
             reading_proposal = True
-
             continue
 
         if current_finding:
@@ -993,7 +988,6 @@ def parse_document(
                 current_finding[
                     "proposal_lines"
                 ].append(line)
-
             else:
                 current_finding[
                     "situation_lines"
@@ -1685,59 +1679,45 @@ def parse_audit_report(
 
         relational_findings.append({
             "code": h_code,
-
             "title": title,
-
             "situation": situation,
-
             "risk": risk,
-
             "severity": severity,
-
             "responsible_area": area,
-
             "action_owner": (
                 "Pendiente de definir"
             ),
-
             "status": "Pendiente",
-
             "proposals": proposals,
-
             "evidence": (
                 finding.get(
                     "evidence",
                     ""
                 )
             ),
-
             "cause": (
                 finding.get(
                     "cause",
                     ""
                 )
             ),
-
             "affected_process_or_control":
                 finding.get(
                     "affected_process_or_control",
                     ""
                 ),
-
             "impact": (
                 finding.get(
                     "impact",
                     ""
                 )
             ),
-
             "ai_confidence": (
                 finding.get(
                     "ai_confidence",
                     0
                 )
             ),
-
             "ai_validated": (
                 finding.get(
                     "ai_validated",
@@ -1765,7 +1745,6 @@ def parse_audit_report(
                 f"hallazgos."
             ),
         },
-
         "findings": (
             relational_findings
         ),
