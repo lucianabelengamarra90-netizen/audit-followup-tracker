@@ -1,12 +1,10 @@
 import os
 import re
-import json
 import uuid
 import unicodedata
 from openpyxl import load_workbook
 from docx import Document
 from pypdf import PdfReader
-from openai import OpenAI
 
 
 def normalize_text(value):
@@ -25,17 +23,6 @@ def clean_text(value):
     if value is None:
         return ""
     return re.sub(r"\s+", " ", str(value)).strip()
-
-
-def get_openai_client():
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return None
-    try:
-        return OpenAI(api_key=api_key)
-    except Exception as exc:
-        print(f"Error instanciando cliente OpenAI: {exc}")
-        return None
 
 
 def extract_explicit_area(raw_text):
@@ -78,20 +65,6 @@ def extract_explicit_auditor(raw_text):
                 return res
 
     return "Auditoría Interna"
-
-
-def clean_administrative_phrases(text):
-    if not text:
-        return ""
-    patterns = [
-        r"se\s+(?:vio|conversó|habló|consultó|reunió|acordó)\s+con\s+(?:el\s+área|el\s+sector|la\s+gerencia|el\s+responsable)[^.!?]*[.!?]?",
-        r"según\s+reunión\s+mantenida[^.!?]*[.!?]?",
-        r"de\s+acuerdo\s+con\s+lo\s+informado\s+por[^.!?]*[.!?]?"
-    ]
-    cleaned = text
-    for p in patterns:
-        cleaned = re.sub(p, "", cleaned, flags=re.IGNORECASE)
-    return clean_text(cleaned)
 
 
 def extract_raw_text_from_file(file_path):
@@ -148,126 +121,111 @@ def extract_raw_text_from_file(file_path):
     return text_content[:60000]
 
 
-def parse_with_openai_gpt(raw_text, filename):
-    client = get_openai_client()
-    if not client or not raw_text.strip():
-        return None
+# ──────────────────────────────────────────────────────────────
+#  PARSER HEURÍSTICO INTELIGENTE (sin dependencia de IA)
+# ──────────────────────────────────────────────────────────────
 
-    prompt = (
-        "Sos un Auditor Líder Senior experto en análisis de informes de auditoría interna.\n"
-        "Analizá el siguiente texto de un informe de auditoría y extraé ÚNICAMENTE los hallazgos de auditoría "
-        "con sus propuestas de mejora tal como están redactados en el documento.\n\n"
-        "REGLAS CRÍTICAS:\n"
-        "1. Un hallazgo es una desviación, observación, debilidad de control o incumplimiento detectado en la auditoría. "
-        "NO son hallazgos: el alcance, la metodología, los objetivos, la introducción, las conclusiones generales "
-        "ni ninguna sección administrativa del informe.\n"
-        "2. Para CADA hallazgo real extraé:\n"
-        "   - 'title': Título conciso del hallazgo (máx 10 palabras). Tomalo del documento si existe.\n"
-        "   - 'situation': La situación o condición observada, redactada de forma profesional y ejecutiva "
-        "(entre 25 y 60 palabras). Basate en el texto original del documento, mejorá la redacción si es informal.\n"
-        "   - 'severity': 'Alto', 'Medio' o 'Bajo' según el riesgo indicado en el documento o tu criterio.\n"
-        "   - 'responsible_area': Área, proceso o gerencia a la que corresponde el hallazgo.\n"
-        "   - 'proposal': La propuesta de mejora ORIGINAL del documento asociada a este hallazgo. "
-        "Si el documento tiene una propuesta de mejora explícita para este hallazgo, COPIÁLA (mejorada pero fiel). "
-        "Si no hay propuesta en el documento, generá una accionable que empiece con verbo infinitivo "
-        "(Implementar, Establecer, Diseñar, Fortalecer, etc.), entre 25 y 50 palabras.\n"
-        "3. Si el documento tiene 5 hallazgos, devolvé 5. Si tiene 10, devolvé 10. Extraé TODOS los que haya.\n"
-        "4. Devolvé ÚNICAMENTE un objeto JSON válido con la siguiente estructura (sin markdown extra):\n"
-        "{\n"
-        "  \"report_title\": \"Título del informe\",\n"
-        "  \"area\": \"Área principal\",\n"
-        "  \"auditor\": \"Auditoría Interna\",\n"
-        "  \"findings\": [\n"
-        "    {\n"
-        "      \"title\": \"...\",\n"
-        "      \"situation\": \"...\",\n"
-        "      \"severity\": \"Alto|Medio|Bajo\",\n"
-        "      \"responsible_area\": \"...\",\n"
-        "      \"proposal\": \"...\"\n"
-        "    }\n"
-        "  ]\n"
-        "}"
-    )
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Archivo: {filename}\n\nTexto del informe:\n\n{raw_text[:45000]}"}
-            ],
-            temperature=0.1,
-            max_tokens=6000
-        )
-        content = response.choices[0].message.content.strip()
-        data = json.loads(content)
-        if data and isinstance(data.get("findings"), list) and len(data["findings"]) > 0:
-            return data
-    except Exception as exc:
-        print(f"Error procesando con OpenAI GPT: {exc}")
-
-    return None
-
-
-# Sections that are NOT findings — used to avoid false positives in heuristic parser
-NON_FINDING_SECTIONS = {
+# Secciones que NO son hallazgos
+NON_FINDING_KEYWORDS = {
     "alcance", "metodologia", "metodología", "objetivo", "objetivos",
     "introduccion", "introducción", "antecedentes", "contexto",
     "conclusion", "conclusión", "conclusiones", "resumen ejecutivo",
     "anexo", "anexos", "referencias", "glosario", "índice", "indice",
     "marco normativo", "marco de referencia", "cronograma", "equipo auditor",
     "distribucion", "distribución", "carátula", "caratula", "portada",
-    "periodo", "período", "plan de mejoras", "plan de accion",
+    "periodo", "período", "plan de accion", "plan de acción",
+    "tabla de contenido", "contenido", "contenidos",
 }
 
+# Palabras clave que indican el inicio de un hallazgo
+FINDING_KEYWORDS = [
+    "hallazgo", "observacion", "observación", "desviacion", "desviación",
+    "debilidad", "deficiencia", "incumplimiento", "punto de atención",
+    "punto de atencion", "irregularidad", "riesgo detectado",
+]
 
-def _is_non_finding_section(line_norm):
-    """Return True if the line is a known document section that is NOT a finding."""
-    for kw in NON_FINDING_SECTIONS:
-        # Match "7. Alcance", "2.1 Metodología", "Alcance:", etc.
-        if re.search(r"(?:^|\d[\.\s]+)" + re.escape(kw) + r"s?\b", line_norm):
+# Palabras clave que indican una propuesta / recomendación
+PROPOSAL_KEYWORDS = [
+    "propuesta de mejora", "propuesta", "recomendacion", "recomendación",
+    "accion correctiva", "acción correctiva", "mejora sugerida",
+    "sugerencia", "plan de accion", "plan de acción",
+    "medida correctiva", "accion recomendada", "acción recomendada",
+]
+
+
+def _is_non_finding_header(norm_line):
+    """Devuelve True si la línea es un header de sección administrativa (no un hallazgo)."""
+    for kw in NON_FINDING_KEYWORDS:
+        # "7. Alcance", "2.1 Metodología", "Alcance:", "ALCANCE", etc.
+        pattern = r"(?:^|\d+[\.\s]+)" + re.escape(kw) + r"s?\s*[:.]?\s*$"
+        if re.search(pattern, norm_line):
             return True
-        if line_norm.strip() == kw:
+        if norm_line.strip().rstrip(":. ") == kw:
             return True
     return False
 
 
-def _extract_section_blocks(lines):
-    """
-    Identify the start index of the Hallazgos section and, optionally,
-    the Propuestas de Mejora section in the document.
-    Returns (hallazgos_start, proposals_start) where values are line indices or None.
-    """
-    hallazgos_start = None
-    proposals_start = None
-
-    hallazgo_section_re = re.compile(
-        r"(?:\d+[\.\-\s]*)?(?:hallazgo|hallazgos|observacion|observaciones|desviacion|desviaciones|"
-        r"resultados de la auditoria|resultados de auditoría)\s*$",
+def _looks_like_finding_start(line, norm_line):
+    """Detecta si la línea es el inicio de un nuevo hallazgo."""
+    # Patrón explícito: "Hallazgo 1", "Observación N°3", "Hallazgo 1:", etc.
+    explicit_re = re.compile(
+        r"^(?:hallazgo|observaci[oó]n|desviaci[oó]n|punto|ítem|item)\s*(?:n[°º]?\s*)?\d+",
         re.IGNORECASE
     )
-    proposal_section_re = re.compile(
-        r"(?:\d+[\.\-\s]*)?(?:propuesta|propuestas|recomendacion|recomendaciones|plan de mejora|"
-        r"mejoras recomendadas|acciones correctivas)\s*$",
-        re.IGNORECASE
-    )
+    if explicit_re.match(line):
+        return True
 
-    for i, line in enumerate(lines):
-        norm = normalize_text(line)
-        if hallazgo_section_re.match(norm) and len(line) < 80:
-            hallazgos_start = i
-        elif proposal_section_re.match(norm) and len(line) < 80:
-            proposals_start = i
+    # Líneas cortas (<120 chars) que contienen palabras clave de hallazgo
+    if len(line) < 120:
+        for kw in FINDING_KEYWORDS:
+            if kw in norm_line:
+                return True
 
-    return hallazgos_start, proposals_start
+    return False
 
 
-def parse_flexible_doc(file_path, filename, raw_text):
+def _looks_like_proposal_start(line, norm_line):
+    """Detecta si la línea es el inicio de una propuesta de mejora."""
+    for kw in PROPOSAL_KEYWORDS:
+        if norm_line.startswith(kw):
+            return True
+        # "Propuesta de mejora:", "Recomendación:", etc.
+        pattern = re.escape(kw) + r"\s*[:\-]"
+        if re.match(pattern, norm_line):
+            return True
+    return False
+
+
+def _extract_after_keyword(line, norm_line):
+    """Extrae el texto que viene después de la keyword de propuesta/hallazgo."""
+    for kw in PROPOSAL_KEYWORDS:
+        pattern = re.compile(re.escape(kw) + r"\s*[:\-]\s*", re.IGNORECASE)
+        m = pattern.match(line)
+        if m:
+            return line[m.end():].strip()
+    return line
+
+
+def _detect_severity(text):
+    """Detecta la severidad a partir del texto."""
+    norm = normalize_text(text)
+    if "alto" in norm or "critico" in norm or "crítico" in norm or "grave" in norm:
+        return "Alto"
+    if "bajo" in norm or "leve" in norm or "menor" in norm:
+        return "Bajo"
+    return "Medio"
+
+
+def parse_document(raw_text, filename):
     """
-    Heuristic parser used when no OpenAI API key is available.
-    Scans the document for a "Hallazgos" section and extracts each finding
-    together with its inline "Propuesta de mejora".
+    Parser inteligente que extrae hallazgos y propuestas de mejora del texto.
+    
+    Estrategia:
+    1. Recorre el documento línea por línea
+    2. Cuando detecta el inicio de un hallazgo, comienza a acumular texto
+    3. Cuando detecta una propuesta de mejora dentro del bloque del hallazgo,
+       la asocia al hallazgo actual
+    4. Filtra secciones administrativas (Alcance, Metodología, etc.)
     """
     explicit_area = extract_explicit_area(raw_text)
     explicit_auditor = extract_explicit_auditor(raw_text)
@@ -275,147 +233,185 @@ def parse_flexible_doc(file_path, filename, raw_text):
 
     lines = [clean_text(l) for l in raw_text.splitlines() if clean_text(l)]
 
-    # Try to detect report title from first meaningful lines
-    for l in lines[:10]:
-        if "informe" in l.lower() or "auditoría" in l.lower() or "auditoria" in l.lower():
+    # Detectar título del informe
+    for l in lines[:15]:
+        nl = l.lower()
+        if "informe" in nl and ("auditoría" in nl or "auditoria" in nl or "inventario" in nl):
             report_title = clean_text(l)
             break
 
-    hallazgos_start, proposals_start = _extract_section_blocks(lines)
-
-    # Determine the range to scan for findings
-    scan_start = (hallazgos_start + 1) if hallazgos_start is not None else 0
-    scan_end = proposals_start if proposals_start is not None else len(lines)
-
-    findings_raw = []
+    findings = []
     current_finding = None
+    reading_proposal = False  # Flag: estamos leyendo líneas de propuesta
 
-    # Pattern: explicit "Hallazgo N" or "Observación N" labels
-    finding_label_re = re.compile(
-        r"^(?:hallazgo|observaci[oó]n|desviaci[oó]n|punto|ítem|item)\s*(?:n[°º]?\s*)?\d+",
-        re.IGNORECASE
-    )
-    # Pattern: "Propuesta de mejora" or "Recomendación" inline label
-    proposal_label_re = re.compile(
-        r"^(?:propuesta\s+de\s+mejora|recomendaci[oó]n|propuesta|accion\s+correctiva)[:\s]",
-        re.IGNORECASE
-    )
+    for line in lines:
+        norm = normalize_text(line)
 
-    for i in range(scan_start, scan_end):
-        line = lines[i]
-        norm_line = normalize_text(line)
-
-        # Skip lines that belong to non-finding administrative sections
-        if _is_non_finding_section(norm_line):
+        # Ignorar secciones administrativas
+        if _is_non_finding_header(norm) and len(line) < 120:
+            # Si estábamos en un hallazgo, guardarlo antes de saltar
+            if current_finding:
+                findings.append(current_finding)
+                current_finding = None
+                reading_proposal = False
             continue
 
-        is_finding_start = bool(finding_label_re.match(line))
-
-        # Also treat as finding start if there is no explicit hallazgos section,
-        # the line is a short heading (< 120 chars) and contains "hallazgo" or "observación"
-        if not is_finding_start and hallazgos_start is None:
-            if ("hallazgo" in norm_line or "observacion" in norm_line) and len(line) < 120:
-                is_finding_start = True
-
-        if is_finding_start:
+        # ¿Es inicio de un nuevo hallazgo?
+        if _looks_like_finding_start(line, norm):
+            # Guardar el anterior si existe
             if current_finding:
-                findings_raw.append(current_finding)
+                findings.append(current_finding)
+
             current_finding = {
-                "title": line[:100],
+                "title": line[:120],
                 "situation": "",
-                "severity": "Alto" if "alto" in norm_line else ("Bajo" if "bajo" in norm_line else "Medio"),
+                "proposal": "",
+                "severity": _detect_severity(line),
                 "responsible_area": explicit_area,
-                "proposal": ""
             }
-        elif current_finding is not None:
-            if proposal_label_re.match(line):
-                # Everything after the label keyword is the proposal text
-                proposal_text = re.sub(proposal_label_re, "", line).strip()
-                current_finding["proposal"] = proposal_text
-            elif current_finding["proposal"]:
-                # Continue appending to the proposal if it spans multiple lines
-                current_finding["proposal"] += " " + line
+            reading_proposal = False
+            continue
+
+        # ¿Es inicio de una propuesta de mejora?
+        if current_finding and _looks_like_proposal_start(line, norm):
+            proposal_text = _extract_after_keyword(line, norm)
+            current_finding["proposal"] = proposal_text
+            reading_proposal = True
+            continue
+
+        # Acumular texto en el hallazgo actual
+        if current_finding:
+            if reading_proposal:
+                # Seguir agregando líneas a la propuesta
+                # Pero si la línea parece un nuevo título/sección, parar
+                if len(line) < 80 and line.endswith(":"):
+                    reading_proposal = False
+                    current_finding["situation"] += " " + line
+                else:
+                    current_finding["proposal"] += " " + line
             else:
-                # Append to situation text
                 current_finding["situation"] += " " + line
 
+    # Guardar el último hallazgo
     if current_finding:
-        findings_raw.append(current_finding)
+        findings.append(current_finding)
 
-    # Clean up whitespace
-    for f in findings_raw:
+    # ── EXCEL ESPECIAL: buscar hallazgos en filas tabulares ──
+    # Si no encontramos hallazgos con el approach anterior,
+    # intentamos con parsing tabular (típico de Excel)
+    if not findings and "|" in raw_text:
+        findings = _parse_tabular_findings(lines, explicit_area)
+
+    # Limpiar textos
+    for f in findings:
         f["title"] = clean_text(f["title"])
         f["situation"] = clean_text(f["situation"]) or f["title"]
         f["proposal"] = clean_text(f["proposal"])
+        if not f["proposal"]:
+            f["proposal"] = f"Implementar medidas de control y mejora para: {f['title'][:60]}."
 
-    # If still no findings found, try a last-resort approach: look anywhere in doc
-    # for "Hallazgo X" / "Observación X" patterns, without section constraints
-    if not findings_raw:
-        current_finding = None
-        for line in lines:
-            norm_line = normalize_text(line)
-            if _is_non_finding_section(norm_line):
-                continue
-            is_finding_start = bool(finding_label_re.match(line))
-            if is_finding_start:
-                if current_finding:
-                    findings_raw.append(current_finding)
-                current_finding = {
-                    "title": line[:100],
-                    "situation": "",
-                    "severity": "Medio",
-                    "responsible_area": explicit_area,
-                    "proposal": ""
-                }
-            elif current_finding is not None:
-                if proposal_label_re.match(line):
-                    current_finding["proposal"] = re.sub(proposal_label_re, "", line).strip()
-                elif current_finding["proposal"]:
-                    current_finding["proposal"] += " " + line
-                else:
-                    current_finding["situation"] += " " + line
-        if current_finding:
-            findings_raw.append(current_finding)
-
-        for f in findings_raw:
-            f["title"] = clean_text(f["title"])
-            f["situation"] = clean_text(f["situation"]) or f["title"]
-            f["proposal"] = clean_text(f["proposal"])
+    print(f"[Parser] Documento '{filename}': {len(findings)} hallazgos encontrados")
+    for i, f in enumerate(findings, 1):
+        print(f"  H-{i}: {f['title'][:60]} | Propuesta: {f['proposal'][:60]}")
 
     return {
         "report_title": report_title,
         "area": explicit_area,
         "auditor": explicit_auditor,
-        "findings": findings_raw
+        "findings": findings
     }
 
 
+def _parse_tabular_findings(lines, default_area):
+    """
+    Parser para documentos tabulares (Excel).
+    Busca filas con separador | que contengan datos de hallazgos.
+    """
+    findings = []
+
+    # Buscar filas que parezcan datos de hallazgo
+    # Típicamente: Nro | Hallazgo | Propuesta | Área | Riesgo
+    header_idx = None
+    col_hallazgo = None
+    col_propuesta = None
+    col_area = None
+    col_riesgo = None
+
+    for i, line in enumerate(lines):
+        if "|" not in line:
+            continue
+        cols = [c.strip() for c in line.split("|")]
+        norm_cols = [normalize_text(c) for c in cols]
+
+        # Detectar header
+        if header_idx is None:
+            for j, nc in enumerate(norm_cols):
+                if any(kw in nc for kw in ["hallazgo", "observacion", "desviacion", "descripcion", "situacion"]):
+                    col_hallazgo = j
+                if any(kw in nc for kw in ["propuesta", "recomendacion", "mejora", "accion"]):
+                    col_propuesta = j
+                if any(kw in nc for kw in ["area", "proceso", "sector", "gerencia"]):
+                    col_area = j
+                if any(kw in nc for kw in ["riesgo", "severidad", "criticidad", "impacto"]):
+                    col_riesgo = j
+            if col_hallazgo is not None:
+                header_idx = i
+                continue
+
+        # Leer filas de datos
+        if header_idx is not None and col_hallazgo is not None:
+            if len(cols) > col_hallazgo:
+                hallazgo_text = cols[col_hallazgo]
+                if len(hallazgo_text) < 5:
+                    continue
+
+                proposal_text = ""
+                if col_propuesta is not None and len(cols) > col_propuesta:
+                    proposal_text = cols[col_propuesta]
+
+                area = default_area
+                if col_area is not None and len(cols) > col_area:
+                    area = cols[col_area] or default_area
+
+                severity = "Medio"
+                if col_riesgo is not None and len(cols) > col_riesgo:
+                    severity = _detect_severity(cols[col_riesgo])
+
+                findings.append({
+                    "title": hallazgo_text[:120],
+                    "situation": hallazgo_text,
+                    "proposal": proposal_text,
+                    "severity": severity,
+                    "responsible_area": area,
+                })
+
+    return findings
+
+
+# ──────────────────────────────────────────────────────────────
+#  FUNCIÓN PRINCIPAL
+# ──────────────────────────────────────────────────────────────
 
 def parse_audit_report(file_path, filename):
+    """Punto de entrada principal. Parsea el archivo y devuelve estructura relacional."""
     raw_text = extract_raw_text_from_file(file_path)
 
-    # STEP 1: Attempt AI parsing with GPT-4o-mini
-    ai_result = parse_with_openai_gpt(raw_text, filename)
-    extracted_findings = []
-    report_title = f"Informe de Auditoría - {filename}"
-    explicit_area = extract_explicit_area(raw_text)
-    explicit_auditor = extract_explicit_auditor(raw_text)
+    if not raw_text.strip():
+        print(f"[Parser] ERROR: No se pudo extraer texto de '{filename}'")
+        return {
+            "report": {"title": f"Error - {filename}", "process": "Control Interno",
+                        "area": "Operaciones", "period": "2026",
+                        "auditor": "Auditoría Interna", "summary": "No se pudo leer el archivo."},
+            "findings": []
+        }
 
-    if ai_result and ai_result.get("findings"):
-        report_title = ai_result.get("report_title") or report_title
-        explicit_area = ai_result.get("area") or explicit_area
-        explicit_auditor = ai_result.get("auditor") or explicit_auditor
-        extracted_findings = ai_result.get("findings")
-    else:
-        # STEP 2: Flexible native parsing from actual document content
-        parsed_doc = parse_flexible_doc(file_path, filename, raw_text)
-        if parsed_doc and parsed_doc.get("findings"):
-            report_title = parsed_doc.get("report_title")
-            explicit_area = parsed_doc.get("area")
-            explicit_auditor = parsed_doc.get("auditor")
-            extracted_findings = parsed_doc.get("findings")
+    parsed = parse_document(raw_text, filename)
+    extracted_findings = parsed.get("findings", [])
+    report_title = parsed.get("report_title", f"Informe de Auditoría - {filename}")
+    explicit_area = parsed.get("area", "Operaciones")
+    explicit_auditor = parsed.get("auditor", "Auditoría Interna")
 
-    # Format findings into AuditTrack relational structure
+    # Formatear hallazgos en la estructura relacional de AuditTrack
     relational_findings = []
     for idx, f in enumerate(extracted_findings, start=1):
         h_code = f"H-2026-{idx:03d}"
@@ -424,14 +420,11 @@ def parse_audit_report(file_path, filename):
 
         title = clean_text(f.get("title", f"Hallazgo {idx}"))
         situation = clean_text(f.get("situation", title))
-        raw_proposal = f.get("proposal", "") or f.get("recommendation", "") or f.get("propuesta", "")
-        proposal = clean_text(raw_proposal)
+        proposal = clean_text(f.get("proposal", ""))
         if not proposal:
             proposal = f"Implementar medidas de control y mejora para: {title[:60]}."
         severity = f.get("severity", "Medio")
         area = f.get("responsible_area") or explicit_area
-
-        print(f"[DEBUG Parser] H-{idx}: title={title[:50]}, proposal={proposal[:80]}")
 
         relational_findings.append({
             "code": h_code,
