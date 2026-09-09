@@ -200,16 +200,17 @@
                             <tr>
                                 <th style="width: 120px;">Área / Proceso</th>
                                 <th style="width: 85px;">ID Hallazgo</th>
-                                <th style="min-width: 320px;">Hallazgo (Situación Observada)</th>
+                                <th style="min-width: 280px;">Hallazgo (Situación Observada)</th>
                                 <th style="width: 90px;">ID Propuesta</th>
-                                <th style="min-width: 320px;">Propuesta de Mejora (Recomendación)</th>
+                                <th style="min-width: 280px;">Propuesta de Mejora (Recomendación)</th>
                                 <th style="width: 80px;">Archivo</th>
                                 <th style="width: 70px;">Riesgo</th>
                                 <th style="width: 120px;">Responsable</th>
                                 <th style="width: 100px;">Fecha compromiso</th>
-                                <th style="width: 85px;">Estado</th>
+                                <th style="width: 95px;">Estado</th>
                                 <th style="width: 65px;">Avance</th>
                                 <th style="width: 75px;">Acciones</th>
+                                <th style="min-width: 160px;">Observaciones</th>
                             </tr>
                         </thead>
                         <tbody id="auditTrackTableBody">
@@ -228,7 +229,11 @@
                 <div class="view-header">
                     <div>
                         <h2>Propuestas de Mejora</h2>
-                        <p>Catálogo de recomendaciones estratégicas vinculadas a los hallazgos de auditoría.</p>
+                        <p>Catálogo relacional y repositorio acumulativo de propuestas de auditoría.</p>
+                    </div>
+
+                    <div class="view-actions">
+                        <button class="btn btn-outlined" id="btnRepoToggle" onclick="toggleProposalRepoView(true)">🗃️ Repositorio Plan 2026</button>
                     </div>
                 </div>
 
@@ -237,7 +242,40 @@
                     <div class="kpi-card"><div class="kpi-label">Total Propuestas</div><div class="kpi-value" id="propKpiTotal">0</div></div>
                     <div class="kpi-card"><div class="kpi-label">Sin Plan de Acción</div><div class="kpi-value" style="color: #991B1B;" id="propKpiNoPlan">0</div></div>
                     <div class="kpi-card"><div class="kpi-label">En Implementación</div><div class="kpi-value" style="color: #D97706;" id="propKpiInProcess">0</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Implementadas</div><div class="kpi-value" style="color: #16A34A;" id="propKpiCompleted">0</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Finalizadas / Archivadas</div><div class="kpi-value" style="color: #16A34A;" id="propKpiCompleted">0</div></div>
+                </div>
+
+                <!-- Sub-toggle Tabs for All vs Repository -->
+                <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+                    <button class="btn btn-outlined active-subtab" id="subtabAllProp" onclick="switchProposalView('all')">📋 Todas las Propuestas</button>
+                    <button class="btn btn-outlined" id="subtabRepoProp" onclick="switchProposalView('repo')">🗃️ Repositorio Plan 2026 (Archivadas)</button>
+                </div>
+
+                <!-- Filter Bar for Proposals -->
+                <div class="filter-bar" id="proposalFilterBarContainer" style="margin-bottom: 16px;">
+                    <select id="filterPropReportSelect" onchange="applyProposalFilters()">
+                        <option value="">Todos los informes</option>
+                    </select>
+
+                    <select id="filterPropAreaSelect" onchange="applyProposalFilters()">
+                        <option value="">Todas las áreas</option>
+                    </select>
+
+                    <select id="filterPropStatusSelect" onchange="applyProposalFilters()">
+                        <option value="">Todos los estados</option>
+                        <option value="En proceso">En proceso</option>
+                        <option value="En suspensión">En suspensión</option>
+                        <option value="Finalizado">Finalizado</option>
+                    </select>
+
+                    <select id="filterPropRiskSelect" onchange="applyProposalFilters()">
+                        <option value="">Todos los niveles de riesgo</option>
+                        <option value="Alto">Alto</option>
+                        <option value="Medio">Medio</option>
+                        <option value="Bajo">Bajo</option>
+                    </select>
+
+                    <button type="button" class="btn-link" onclick="clearProposalFilters()">Limpiar filtros</button>
                 </div>
 
                 <div class="table-card">
@@ -253,6 +291,7 @@
                                 <th>Responsable</th>
                                 <th>Planes de Acción</th>
                                 <th>Fecha Compromiso</th>
+                                <th>Repositorio / Acción</th>
                             </tr>
                         </thead>
                         <tbody id="proposalsTableBody">
@@ -468,7 +507,7 @@
     </div>
 </div>
 
-<!-- SLIDE-OVER DRAWER: DETALLE COMPLETO DEL HALLAZGO Y TRAZABILIDAD -->
+<!-- SLIDE-OVER DRAWER: DETALLE COMPLETO DEL HALLAZGO Y TRAZABILIDAD (EDITABLE CON LÁPIZ ✏️) -->
 <div id="drawerFindingDetail" class="drawer-overlay" style="display:none;" onclick="if(event.target===this) closeFindingDrawer()">
     <div class="drawer-panel">
         <div class="drawer-header">
@@ -476,28 +515,68 @@
                 <span class="pill pill-alto" id="drawerRiskPill">Alto</span>
                 <span class="pill pill-en-proceso" id="drawerStatusPill">En proceso</span>
                 <h2 id="drawerCodeTitle" style="font-size: 18px; margin-top: 6px;">H-2026-001</h2>
-                <h3 id="drawerFindingTitle" style="font-size: 14px; font-weight: 500; color: #475569;">Título del Hallazgo</h3>
+                <div style="display:flex; align-items:center; gap:6px; margin-top:4px;">
+                    <span style="font-size:12px;">✏️</span>
+                    <input type="text" id="drawerInputTitle" class="drawer-edit-input" style="font-size: 14px; font-weight: 600; width:100%; border:1px solid #CBD5E1; border-radius:4px; padding:3px 8px;" placeholder="Título del Hallazgo" />
+                </div>
             </div>
             <button class="drawer-close-btn" onclick="closeFindingDrawer()">×</button>
         </div>
 
         <div class="drawer-body">
-            <!-- Origen -->
+            <!-- Formulario Editable del Hallazgo -->
+            <div class="drawer-section" style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:12px;">
+                <h4 style="margin-bottom:10px;">✏️ Edición de Atributos del Hallazgo</h4>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
+                    <div>
+                        <label style="font-size:11px; font-weight:600; color:#64748B; display:block; margin-bottom:2px;">Nivel de Riesgo ✏️</label>
+                        <select id="drawerSelectRisk" class="drawer-edit-input" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1;">
+                            <option value="Alto">Alto</option>
+                            <option value="Medio">Medio</option>
+                            <option value="Bajo">Bajo</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:11px; font-weight:600; color:#64748B; display:block; margin-bottom:2px;">Estado de Gestión ✏️</label>
+                        <select id="drawerSelectStatus" class="drawer-edit-input" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1;">
+                            <option value="En proceso">En proceso</option>
+                            <option value="En suspensión">En suspensión</option>
+                            <option value="Finalizado">Finalizado</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
+                    <div>
+                        <label style="font-size:11px; font-weight:600; color:#64748B; display:block; margin-bottom:2px;">Área / Proceso ✏️</label>
+                        <input type="text" id="drawerInputArea" class="drawer-edit-input" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1;" />
+                    </div>
+                    <div>
+                        <label style="font-size:11px; font-weight:600; color:#64748B; display:block; margin-bottom:2px;">Responsable Asignado ✏️</label>
+                        <input type="text" id="drawerInputOwner" class="drawer-edit-input" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1;" />
+                    </div>
+                </div>
+
+                <div style="margin-bottom:10px;">
+                    <label style="font-size:11px; font-weight:600; color:#64748B; display:block; margin-bottom:2px;">Situación Observada ✏️</label>
+                    <textarea id="drawerTextSituation" rows="3" class="drawer-edit-input" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1; font-size:12px;"></textarea>
+                </div>
+
+                <div style="margin-bottom:12px;">
+                    <label style="font-size:11px; font-weight:600; color:#64748B; display:block; margin-bottom:2px;">Observaciones Adicionales ✏️</label>
+                    <textarea id="drawerTextObservations" rows="2" class="drawer-edit-input" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1; font-size:12px;" placeholder="Notas adicionales o comentarios de seguimiento..."></textarea>
+                </div>
+
+                <button type="button" class="btn btn-primary" style="width:100%; justify-content:center;" onclick="saveFindingFromDrawer()">💾 Guardar Cambios del Hallazgo</button>
+            </div>
+
+            <!-- Origen e Informe -->
             <div class="drawer-section">
                 <h4>📁 Origen e Informe</h4>
                 <div class="drawer-meta-grid">
                     <div><small>Informe:</small> <strong id="drawerReportName">-</strong></div>
-                    <div><small>Archivo:</small> <strong id="drawerFileName">-</strong></div>
-                    <div><small>Área / Proceso:</small> <strong id="drawerArea">-</strong></div>
-                    <div><small>Responsable:</small> <strong id="drawerOwner">-</strong></div>
+                    <div><small>Archivo origen:</small> <strong id="drawerFileName">-</strong></div>
                 </div>
-            </div>
-
-            <!-- Descripción Hallazgo -->
-            <div class="drawer-section">
-                <h4>🔎 Hallazgo (Situación Observada)</h4>
-                <p id="drawerSituationText" class="drawer-box-text"></p>
-                <div style="font-size: 11px; color: #64748B; margin-top: 4px;"><strong>Riesgo:</strong> <span id="drawerRiskText"></span></div>
             </div>
 
             <!-- Propuestas de mejora vinculadas -->

@@ -18,6 +18,8 @@ from database import (
     get_all_action_plans,
     create_action_plan,
     update_action_plan,
+    update_finding,
+    update_proposal,
     delete_finding,
     delete_report,
     get_dashboard_stats,
@@ -181,6 +183,26 @@ def finding_detail_route(finding_id):
     if not finding:
         return jsonify({"error": "Hallazgo no encontrado."}), 404
     return jsonify(finding)
+
+
+@app.route("/findings/<finding_id>/update", methods=["POST"])
+def update_finding_route(finding_id):
+    data = request.get_json(silent=True) or {}
+    user_name = data.pop("user_name", "Auditoría Interna")
+    updated = update_finding(finding_id, data, user_name)
+    if updated:
+        return jsonify({"message": "Hallazgo actualizado correctamente."})
+    return jsonify({"error": "Hallazgo no encontrado o sin cambios."}), 404
+
+
+@app.route("/proposals/<proposal_id>/update", methods=["POST"])
+def update_proposal_route(proposal_id):
+    data = request.get_json(silent=True) or {}
+    user_name = data.pop("user_name", "Auditoría Interna")
+    updated = update_proposal(proposal_id, data, user_name)
+    if updated:
+        return jsonify({"message": "Propuesta actualizada correctamente."})
+    return jsonify({"error": "Propuesta no encontrada o sin cambios."}), 404
 
 
 @app.route("/proposals", methods=["GET"])

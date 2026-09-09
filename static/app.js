@@ -300,18 +300,12 @@ function renderAuditTrackTable(items) {
     }
 
     if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="12" style="text-align: center; color: #64748b; padding: 36px;">No hay hallazgos con los filtros aplicados. Cargar informe arriba.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="13" style="text-align: center; color: #64748b; padding: 36px;">No hay hallazgos con los filtros aplicados. Cargar informe arriba.</td></tr>`;
         return;
     }
 
     let html = "";
     items.forEach((item) => {
-        const riskPill = item.severity === "Alto"
-            ? `<span class="pill pill-alto">Alto</span>`
-            : item.severity === "Medio"
-            ? `<span class="pill pill-medio">Medio</span>`
-            : `<span class="pill pill-bajo">Bajo</span>`;
-
         const filename = item.source_filename || "Informe.xlsx";
         const firstProp = (item.proposals && item.proposals.length > 0) ? item.proposals[0] : null;
 
@@ -319,21 +313,35 @@ function renderAuditTrackTable(items) {
             ? `<a href="#" class="id-cell" style="color: #16A34A; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(firstProp.code)}</a>`
             : `<span style="color:#94A3B8; font-size:11px;">Sin propuesta</span>`;
 
-        const propTextCell = firstProp
-            ? `<div class="truncate-2-lines" style="color:#16A34A; font-weight:500;" title="${escapeHtml(firstProp.proposal_text || firstProp.title)}">💡 ${escapeHtml(firstProp.proposal_text || firstProp.title)}</div>`
-            : `<button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">+ Agregar Propuesta</button>`;
+        const propText = firstProp ? (firstProp.proposal_text || firstProp.title) : "";
 
         let firstAction = (firstProp && firstProp.action_plans && firstProp.action_plans.length > 0) ? firstProp.action_plans[0] : null;
         let owner = (firstProp && firstProp.action_owner) ? firstProp.action_owner : (firstAction ? firstAction.action_owner : (item.action_owner || "Sin asignar"));
-        let targetDate = (firstProp && firstProp.target_date) ? firstProp.target_date : (firstAction ? firstAction.target_date : "-");
+        let targetDate = (firstProp && firstProp.target_date) ? firstProp.target_date : (firstAction ? firstAction.target_date : "");
         let status = (firstProp && firstProp.status) ? firstProp.status : (item.status || "Pendiente");
         let pct = firstAction ? (firstAction.progress_pct || 0) : 0;
+        let observations = item.observations || "";
 
-        const statusSlug = status.toLowerCase().replace(/\s+/g, "-");
-        const statusPill = `<span class="pill pill-${statusSlug}">${escapeHtml(status)}</span>`;
+        // Risk dropdown options
+        const riskOptions = ["Alto", "Medio", "Bajo"];
+        const currentRisk = item.severity || "Medio";
+        const riskSelectHtml = `<select class="inline-select inline-select-risk" data-finding-id="${item.id}" data-field="severity" onchange="inlineUpdateFinding(this)">
+            ${riskOptions.map(r => `<option value="${r}" ${r === currentRisk ? 'selected' : ''}>${r}</option>`).join('')}
+        </select>`;
+
+        // Status dropdown options
+        const statusOptions = ["En proceso", "En suspensión", "Finalizado"];
+        const statusSelectHtml = `<select class="inline-select inline-select-status" data-finding-id="${item.id}" data-proposal-id="${firstProp ? firstProp.id : ''}" data-field="status" onchange="inlineUpdateStatus(this)">
+            ${statusOptions.map(s => `<option value="${s}" ${s === status ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>`;
+
+        // Proposal text cell (editable or add button)
+        const propTextCell = firstProp
+            ? `<div class="truncate-2-lines" style="color:#16A34A; font-weight:500;" title="${escapeHtml(propText)}">💡 ${escapeHtml(propText)}</div>`
+            : `<button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">+ Agregar Propuesta</button>`;
 
         html += `
-            <tr>
+            <tr data-row-id="${item.id}">
                 <td style="font-weight: 700; color: #1E293B;">${escapeHtml(item.responsible_area || 'Pendiente de definir')}</td>
                 <td>
                     <a href="#" class="id-cell" style="color: #0055D4; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(item.code)}</a>
@@ -350,10 +358,18 @@ function renderAuditTrackTable(items) {
                         <span style="font-size:11px;">${escapeHtml(filename)}</span>
                     </div>
                 </td>
-                <td>${riskPill}</td>
-                <td><strong>${escapeHtml(owner)}</strong></td>
-                <td><span style="font-size:11px;">${escapeHtml(targetDate)}</span></td>
-                <td>${statusPill}</td>
+                <td>${riskSelectHtml}</td>
+                <td>
+                    <input type="text" class="inline-input" value="${escapeHtml(owner)}"
+                        data-finding-id="${item.id}" data-proposal-id="${firstProp ? firstProp.id : ''}" data-field="action_owner"
+                        onchange="inlineUpdateOwner(this)" placeholder="Responsable" />
+                </td>
+                <td>
+                    <input type="date" class="inline-input" value="${escapeHtml(targetDate)}"
+                        data-finding-id="${item.id}" data-proposal-id="${firstProp ? firstProp.id : ''}" data-field="target_date"
+                        onchange="inlineUpdateDate(this)" />
+                </td>
+                <td>${statusSelectHtml}</td>
                 <td>
                     <div style="display:flex; align-items:center; gap:4px;">
                         <div style="background:#CBD5E1; border-radius:4px; height:6px; flex:1; overflow:hidden;">
@@ -363,13 +379,112 @@ function renderAuditTrackTable(items) {
                     </div>
                 </td>
                 <td>
-                    <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">👁️ Ver</button>
+                    <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')" title="Ver / Editar detalle">✏️ Editar</button>
+                </td>
+                <td>
+                    <input type="text" class="inline-input inline-input-obs" value="${escapeHtml(observations)}"
+                        data-finding-id="${item.id}" data-field="observations"
+                        onchange="inlineUpdateFinding(this)" placeholder="Agregar observación..." />
                 </td>
             </tr>
         `;
     });
 
     tbody.innerHTML = html;
+}
+
+
+// ============================================================
+// INLINE EDITING FUNCTIONS
+// ============================================================
+
+async function inlineUpdateFinding(el) {
+    const findingId = el.dataset.findingId;
+    const field = el.dataset.field;
+    const value = el.value;
+    try {
+        const resp = await fetch(`/findings/${findingId}/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ [field]: value })
+        });
+        if (resp.ok) {
+            showToast("Registro actualizado", "success");
+        } else {
+            showToast("Error al actualizar", "error");
+        }
+    } catch (e) {
+        showToast("Error de conexión", "error");
+    }
+}
+
+async function inlineUpdateStatus(el) {
+    const findingId = el.dataset.findingId;
+    const proposalId = el.dataset.proposalId;
+    const value = el.value;
+
+    try {
+        // Update finding status
+        await fetch(`/findings/${findingId}/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: value })
+        });
+        // Also update linked proposal status
+        if (proposalId) {
+            await fetch(`/proposals/${proposalId}/update`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: value })
+            });
+        }
+        showToast(`Estado actualizado a "${value}"`, "success");
+    } catch (e) {
+        showToast("Error al actualizar estado", "error");
+    }
+}
+
+async function inlineUpdateOwner(el) {
+    const findingId = el.dataset.findingId;
+    const proposalId = el.dataset.proposalId;
+    const value = el.value;
+
+    try {
+        await fetch(`/findings/${findingId}/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action_owner: value })
+        });
+        if (proposalId) {
+            await fetch(`/proposals/${proposalId}/update`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action_owner: value })
+            });
+        }
+        showToast("Responsable actualizado", "success");
+    } catch (e) {
+        showToast("Error al actualizar responsable", "error");
+    }
+}
+
+async function inlineUpdateDate(el) {
+    const findingId = el.dataset.findingId;
+    const proposalId = el.dataset.proposalId;
+    const value = el.value;
+
+    try {
+        if (proposalId) {
+            await fetch(`/proposals/${proposalId}/update`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ target_date: value })
+            });
+        }
+        showToast("Fecha actualizada", "success");
+    } catch (e) {
+        showToast("Error al actualizar fecha", "error");
+    }
 }
 
 
@@ -432,44 +547,158 @@ function toggleTraceRow(rowId, findingId) {
 // 2. PROPUESTAS DE MEJORA TAB
 // ============================================================
 
+// ============================================================
+// 2. PROPUESTAS DE MEJORA TAB & REPOSITORIO PLAN 2026
+// ============================================================
+
+let currentProposalViewMode = "all"; // "all" or "repo"
+let proposalFilters = {
+    report_id: "",
+    area: "",
+    status: "",
+    risk: ""
+};
+
+function switchProposalView(mode) {
+    currentProposalViewMode = mode;
+    const btnAll = el("subtabAllProp");
+    const btnRepo = el("subtabRepoProp");
+
+    if (mode === "repo") {
+        if (btnAll) btnAll.classList.remove("active-subtab");
+        if (btnRepo) btnRepo.classList.add("active-subtab");
+    } else {
+        if (btnRepo) btnRepo.classList.remove("active-subtab");
+        if (btnAll) btnAll.classList.add("active-subtab");
+    }
+    renderProposalsTab();
+}
+
+function toggleProposalRepoView(openRepo = true) {
+    switchTab('propuestas');
+    switchProposalView(openRepo ? 'repo' : 'all');
+}
+
+function populateProposalFilterDropdowns() {
+    const reportSelect = el("filterPropReportSelect");
+    const areaSelect = el("filterPropAreaSelect");
+
+    if (reportSelect && currentReports.length) {
+        const currentVal = reportSelect.value;
+        reportSelect.innerHTML = `<option value="">Todos los informes</option>` +
+            currentReports.map(r => `<option value="${r.id}">${escapeHtml(r.title)} (${r.code})</option>`).join("");
+        reportSelect.value = currentVal;
+    }
+
+    if (areaSelect && currentProposals.length) {
+        const currentVal = areaSelect.value;
+        const areas = Array.from(new Set(currentProposals.map(p => p.responsible_area).filter(Boolean)));
+        areaSelect.innerHTML = `<option value="">Todas las áreas</option>` +
+            areas.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join("");
+        areaSelect.value = currentVal;
+    }
+}
+
+function applyProposalFilters() {
+    proposalFilters.report_id = el("filterPropReportSelect")?.value || "";
+    proposalFilters.area = el("filterPropAreaSelect")?.value || "";
+    proposalFilters.status = el("filterPropStatusSelect")?.value || "";
+    proposalFilters.risk = el("filterPropRiskSelect")?.value || "";
+    renderProposalsTab();
+}
+
+function clearProposalFilters() {
+    if (el("filterPropReportSelect")) el("filterPropReportSelect").value = "";
+    if (el("filterPropAreaSelect")) el("filterPropAreaSelect").value = "";
+    if (el("filterPropStatusSelect")) el("filterPropStatusSelect").value = "";
+    if (el("filterPropRiskSelect")) el("filterPropRiskSelect").value = "";
+    proposalFilters = { report_id: "", area: "", status: "", risk: "" };
+    renderProposalsTab();
+}
+
+async function archiveProposal(proposalId) {
+    try {
+        const res = await fetch(`/proposals/${proposalId}/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "Finalizado" })
+        });
+        if (res.ok) {
+            showToast("Propuesta archivada en Repositorio Plan 2026", "success");
+            loadAllData();
+        } else {
+            showToast("Error al archivar propuesta", "error");
+        }
+    } catch (e) {
+        showToast("Error de conexión", "error");
+    }
+}
+
 function renderProposalsTab() {
     const tbody = el("proposalsTableBody");
     if (!tbody) return;
 
+    populateProposalFilterDropdowns();
+
     const total = currentProposals.length;
     const noPlan = currentProposals.filter(p => (p.action_plans_count || 0) === 0).length;
     const inProcess = currentProposals.filter(p => (p.status || "").toLowerCase() === "en proceso").length;
-    const completed = currentProposals.filter(p => ["completada", "implementada"].includes((p.status || "").toLowerCase())).length;
+    const completed = currentProposals.filter(p => ["finalizado", "completada", "implementada", "archivada"].includes((p.status || "").toLowerCase())).length;
 
     if (el("propKpiTotal")) el("propKpiTotal").textContent = total;
     if (el("propKpiNoPlan")) el("propKpiNoPlan").textContent = noPlan;
     if (el("propKpiInProcess")) el("propKpiInProcess").textContent = inProcess;
     if (el("propKpiCompleted")) el("propKpiCompleted").textContent = completed;
 
-    if (!currentProposals.length) {
-        tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: #64748b; padding: 36px;">No hay propuestas registradas. Cargar informe en la pestaña <strong>Informes</strong>.</td></tr>`;
+    // Filter proposals based on active filters & mode
+    let filtered = currentProposals.filter(p => {
+        if (currentProposalViewMode === "repo") {
+            const isFinished = ["finalizado", "completada", "implementada", "archivada"].includes((p.status || "").toLowerCase());
+            if (!isFinished) return false;
+        }
+        if (proposalFilters.report_id && p.report_id !== proposalFilters.report_id) return false;
+        if (proposalFilters.area && p.responsible_area !== proposalFilters.area) return false;
+        if (proposalFilters.status && (p.status || "").toLowerCase() !== proposalFilters.status.toLowerCase()) return false;
+        return true;
+    });
+
+    if (!filtered.length) {
+        const msg = currentProposalViewMode === "repo"
+            ? "No hay propuestas archivadas en el <strong>Repositorio Plan 2026</strong>."
+            : "No hay propuestas registradas con los filtros aplicados.";
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #64748b; padding: 36px;">${msg}</td></tr>`;
         return;
     }
 
-    tbody.innerHTML = currentProposals.map(p => `
-        <tr>
-            <td class="id-cell">${escapeHtml(p.code)}</td>
-            <td><strong style="color:#16A34A;">💡 ${escapeHtml(p.proposal_text || p.title)}</strong></td>
-            <td>
-                <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${p.finding_id}'); return false;">${escapeHtml(p.finding_code)}</a>
-            </td>
-            <td>${escapeHtml(p.report_title)}</td>
-            <td><strong>${escapeHtml(p.responsible_area || 'Operaciones')}</strong></td>
-            <td><span class="pill pill-${(p.status||'en-proceso').toLowerCase()}">${escapeHtml(p.status)}</span></td>
-            <td>${escapeHtml(p.action_owner || 'Auditoría')}</td>
-            <td>
-                <button class="btn btn-outlined" style="padding:2px 8px; font-size:11px;" onclick="switchTab('planes')">
-                    ${p.action_plans_count || 0} plan(es)
-                </button>
-            </td>
-            <td>${escapeHtml(p.target_date || '31/10/2026')}</td>
-        </tr>
-    `).join("");
+    tbody.innerHTML = filtered.map(p => {
+        const isArchived = ["finalizado", "completada", "implementada", "archivada"].includes((p.status || "").toLowerCase());
+        const statusClass = (p.status || "en-proceso").toLowerCase().replace(/\s+/g, '-');
+
+        const archiveActionCell = isArchived
+            ? `<span class="repo-badge">🗃️ Plan 2026</span>`
+            : `<button class="btn btn-outlined" style="padding:2px 8px; font-size:11px;" onclick="archiveProposal('${p.id}')">🗃️ Archivar</button>`;
+
+        return `
+            <tr>
+                <td class="id-cell">${escapeHtml(p.code)}</td>
+                <td><strong style="color:#16A34A;">💡 ${escapeHtml(p.proposal_text || p.title)}</strong></td>
+                <td>
+                    <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${p.finding_id}'); return false;">${escapeHtml(p.finding_code)}</a>
+                </td>
+                <td>${escapeHtml(p.report_title)}</td>
+                <td><strong>${escapeHtml(p.responsible_area || 'Operaciones')}</strong></td>
+                <td><span class="pill pill-${statusClass}">${escapeHtml(p.status || 'En proceso')}</span></td>
+                <td>${escapeHtml(p.action_owner || 'Auditoría')}</td>
+                <td>
+                    <button class="btn btn-outlined" style="padding:2px 8px; font-size:11px;" onclick="switchTab('planes')">
+                        ${p.action_plans_count || 0} plan(es)
+                    </button>
+                </td>
+                <td>${escapeHtml(p.target_date || '31/10/2026')}</td>
+                <td>${archiveActionCell}</td>
+            </tr>
+        `;
+    }).join("");
 }
 
 // ============================================================
@@ -1119,33 +1348,39 @@ async function deleteReportItem(reportId) {
 }
 
 // ============================================================
-// 7. DETALLE DEL HALLAZGO (DRAWER SLIDE-OVER CON TRAZABILIDAD COMPLETA)
+// 7. DETALLE DEL HALLAZGO (DRAWER SLIDE-OVER CON EDICIÓN INTERACTIVA)
 // ============================================================
+
+let currentDrawerFindingId = null;
 
 async function openFindingDrawer(findingId) {
     try {
         const res = await fetch(`/findings/${findingId}`);
         if (!res.ok) return;
         const f = await res.json();
+        currentDrawerFindingId = f.id;
 
         if (el("drawerCodeTitle")) el("drawerCodeTitle").textContent = f.code;
-        if (el("drawerFindingTitle")) el("drawerFindingTitle").textContent = f.title;
+        if (el("drawerInputTitle")) el("drawerInputTitle").value = f.title || "";
+        if (el("drawerSelectRisk")) el("drawerSelectRisk").value = f.severity || "Medio";
+        if (el("drawerSelectStatus")) el("drawerSelectStatus").value = f.status || "En proceso";
+        if (el("drawerInputArea")) el("drawerInputArea").value = f.responsible_area || "";
+        if (el("drawerInputOwner")) el("drawerInputOwner").value = f.action_owner || "";
+        if (el("drawerTextSituation")) el("drawerTextSituation").value = f.situation || f.title || "";
+        if (el("drawerTextObservations")) el("drawerTextObservations").value = f.observations || "";
+
         if (el("drawerRiskPill")) {
             el("drawerRiskPill").textContent = f.severity || "Medio";
             el("drawerRiskPill").className = `pill pill-${(f.severity||'medio').toLowerCase()}`;
         }
         if (el("drawerStatusPill")) {
-            el("drawerStatusPill").textContent = f.status || "Pendiente";
-            el("drawerStatusPill").className = `pill pill-${(f.status||'pendiente').toLowerCase().replace(/\s+/g, '-')}`;
+            const st = f.status || "En proceso";
+            el("drawerStatusPill").textContent = st;
+            el("drawerStatusPill").className = `pill pill-${st.toLowerCase().replace(/\s+/g, '-')}`;
         }
 
-        if (el("drawerReportName")) el("drawerReportName").textContent = `${f.report_title} (${f.report_code})`;
+        if (el("drawerReportName")) el("drawerReportName").textContent = `${f.report_title || ''} (${f.report_code || ''})`;
         if (el("drawerFileName")) el("drawerFileName").textContent = f.source_filename || "Informe.xlsx";
-        if (el("drawerArea")) el("drawerArea").textContent = f.responsible_area || "Operaciones";
-        if (el("drawerOwner")) el("drawerOwner").textContent = f.action_owner || "Auditoría Interna";
-
-        if (el("drawerSituationText")) el("drawerSituationText").textContent = f.situation || f.title;
-        if (el("drawerRiskText")) el("drawerRiskText").textContent = f.risk || "Riesgo de control interno.";
 
         // Propuestas vinculadas
         const propBox = el("drawerProposalsList");
@@ -1222,6 +1457,46 @@ async function openFindingDrawer(findingId) {
 
 function closeFindingDrawer() {
     if (el("drawerFindingDetail")) el("drawerFindingDetail").style.display = "none";
+    currentDrawerFindingId = null;
+}
+
+async function saveFindingFromDrawer() {
+    if (!currentDrawerFindingId) return;
+
+    const title = el("drawerInputTitle")?.value;
+    const severity = el("drawerSelectRisk")?.value;
+    const status = el("drawerSelectStatus")?.value;
+    const responsible_area = el("drawerInputArea")?.value;
+    const action_owner = el("drawerInputOwner")?.value;
+    const situation = el("drawerTextSituation")?.value;
+    const observations = el("drawerTextObservations")?.value;
+
+    try {
+        const res = await fetch(`/findings/${currentDrawerFindingId}/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                title,
+                severity,
+                status,
+                responsible_area,
+                action_owner,
+                situation,
+                observations
+            })
+        });
+
+        if (res.ok) {
+            showToast("Cambios guardados correctamente en AuditTrack.", "success");
+            closeFindingDrawer();
+            await loadAllData();
+        } else {
+            showToast("Error al guardar cambios del hallazgo.", "error");
+        }
+    } catch (e) {
+        console.error(e);
+        showToast("Error de conexión al guardar cambios.", "error");
+    }
 }
 
 function updateSidebarMetrics() {

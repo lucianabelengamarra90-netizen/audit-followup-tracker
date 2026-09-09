@@ -28,6 +28,13 @@ def init_db():
         cursor.execute("DROP TABLE IF EXISTS audit_history")
         conn.commit()
 
+    # Migrate: add observations column if missing
+    cursor.execute("PRAGMA table_info(findings)")
+    finding_cols = [r['name'] for r in cursor.fetchall()]
+    if 'observations' not in finding_cols:
+        cursor.execute("ALTER TABLE findings ADD COLUMN observations TEXT DEFAULT ''")
+        conn.commit()
+
     # 1. Informes (Registro Padre)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reports (
@@ -59,6 +66,7 @@ def init_db():
             status TEXT DEFAULT 'Pendiente',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            observations TEXT DEFAULT '',
             FOREIGN KEY (report_id) REFERENCES reports (id) ON DELETE CASCADE
         )
     """)
@@ -214,9 +222,9 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
         status = (f_item.get("status") or "Pendiente").strip()
 
         cursor.execute("""
-            INSERT INTO findings (id, report_id, code, title, situation, risk, severity, responsible_area, action_owner, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (finding_id, report_id, f_code, f_title, situation, risk, severity, responsible_area, action_owner, status))
+            INSERT INTO findings (id, report_id, code, title, situation, risk, severity, responsible_area, action_owner, status, observations)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (finding_id, report_id, f_code, f_title, situation, risk, severity, responsible_area, action_owner, status, ""))
 
         add_history_log("finding", finding_id, auditor, f"Creación de hallazgo {f_code}: {f_title}", cursor=cursor)
 
@@ -455,6 +463,90 @@ def get_finding_detail(finding_id):
 
     conn.close()
     return f
+
+
+def update_finding(finding_id, data, user_name="Auditoría Interna"):
+    init_db()
+    conn = get_db()
+    cursor = conn.cursor()
+
+    fields = ["last_updated = CURRENT_TIMESTAMP"]
+    params = []
+    changes = []
+
+    updatable = {
+        "title": "title",
+        "situation": "situation",
+        "severity": "severity",
+        "responsible_area": "responsible_area",
+        "action_owner": "action_owner",
+        "status": "status",
+        "observations": "observations"
+    }
+
+    for key, col in updatable.items():
+        if key in data and data[key] is not None:
+            fields.append(f"{col} = ?")
+            params.append(data[key])
+            changes.append(f"{key}={data[key]}")
+
+    if len(fields) <= 1:
+        conn.close()
+        return False
+
+    params.append(finding_id)
+    params.append(finding_id)
+    sql = f"UPDATE findings SET {', '.join(fields)} WHERE id = ? OR code = ?"
+    cursor.execute(sql, params)
+    updated = cursor.rowcount > 0
+
+    if updated:
+        add_history_log("finding", finding_id, user_name, f"Edición inline: {', '.join(changes)}", cursor=cursor)
+
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def update_proposal(proposal_id, data, user_name="Auditoría Interna"):
+    init_db()
+    conn = get_db()
+    cursor = conn.cursor()
+
+    fields = ["last_updated = CURRENT_TIMESTAMP"]
+    params = []
+    changes = []
+
+    updatable = {
+        "proposal_text": "proposal_text",
+        "title": "title",
+        "action_owner": "action_owner",
+        "target_date": "target_date",
+        "status": "status"
+    }
+
+    for key, col in updatable.items():
+        if key in data and data[key] is not None:
+            fields.append(f"{col} = ?")
+            params.append(data[key])
+            changes.append(f"{key}={data[key]}")
+
+    if len(fields) <= 1:
+        conn.close()
+        return False
+
+    params.append(proposal_id)
+    params.append(proposal_id)
+    sql = f"UPDATE proposals SET {', '.join(fields)} WHERE id = ? OR code = ?"
+    cursor.execute(sql, params)
+    updated = cursor.rowcount > 0
+
+    if updated:
+        add_history_log("proposal", proposal_id, user_name, f"Edición inline: {', '.join(changes)}", cursor=cursor)
+
+    conn.commit()
+    conn.close()
+    return updated
 
 
 def get_all_proposals(filters=None):
