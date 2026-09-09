@@ -242,27 +242,118 @@ def _clean_finding_title(raw_title):
     return title
 
 
-def _summarize_text(text, max_chars=500):
+def _summarize_text(text, max_chars=500, mode="finding"):
     """
-    Toma el texto acumulado y devuelve un resumen acotado:
-    - Las primeras oraciones que quepan en max_chars
-    - Corta en punto o en el último espacio
+    Genera un resumen inteligente del texto:
+    - Divide en oraciones
+    - Elimina frases administrativas/relleno
+    - Puntúa cada oración por relevancia según keywords de auditoría
+    - Selecciona las mejores oraciones que quepan en max_chars
+    - mode='finding' prioriza vocabulario de hallazgos
+    - mode='proposal' prioriza verbos de acción y mejora
     """
     text = clean_text(text)
+    if not text:
+        return ""
     if len(text) <= max_chars:
         return text
 
-    # Buscar el último punto dentro del límite
-    truncated = text[:max_chars]
-    last_period = truncated.rfind(".")
-    if last_period > max_chars * 0.4:  # Si hay un punto razonable
-        return truncated[:last_period + 1]
+    # Dividir en oraciones (por punto seguido de espacio o mayúscula)
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
 
-    # Sino, cortar en el último espacio
-    last_space = truncated.rfind(" ")
-    if last_space > 20:
-        return truncated[:last_space] + "..."
-    return truncated + "..."
+    if not sentences:
+        return text[:max_chars]
+
+    # Frases administrativas a eliminar
+    filler_patterns = [
+        r"se\s+(?:vio|conversó|habló|consultó|reunió|acordó)\s+con",
+        r"según\s+(?:reunión|lo\s+informado|lo\s+conversado)",
+        r"de\s+acuerdo\s+con\s+lo\s+informado",
+        r"se\s+(?:adjunta|acompaña|incluye)\s+(?:como\s+)?anexo",
+        r"ver\s+anexo",
+        r"durante\s+(?:la\s+)?(?:reunión|visita|entrevista)",
+        r"el\s+(?:área|sector)\s+(?:informó|comentó|indicó|manifestó)\s+que",
+    ]
+
+    # Keywords de hallazgos (para scoring)
+    finding_keywords = [
+        "no se cumple", "incumplimiento", "ausencia", "falta de", "carencia",
+        "deficiencia", "debilidad", "riesgo", "vulnerabilidad", "desviación",
+        "irregularidad", "no cuenta con", "no dispone", "no existe",
+        "no se evidencia", "no se observa", "no se registra", "sin registro",
+        "inadecuado", "insuficiente", "incompleto", "desactualizado",
+        "no cumple", "omisión", "error", "diferencia", "discrepancia",
+        "exposición", "impacto", "control interno", "normativa",
+        "procedimiento", "política", "segregación", "conciliación",
+        "inventario", "faltante", "sobrante", "material", "stock",
+    ]
+
+    # Keywords de propuestas (para scoring)
+    proposal_keywords = [
+        "implementar", "establecer", "diseñar", "fortalecer", "desarrollar",
+        "generar", "elaborar", "definir", "documentar", "formalizar",
+        "automatizar", "capacitar", "instruir", "controlar", "verificar",
+        "asegurar", "garantizar", "mejorar", "optimizar", "revisar",
+        "actualizar", "segregar", "conciliar", "regularizar", "normalizar",
+        "mitigar", "prevenir", "corregir", "subsanar", "remediar",
+        "se recomienda", "se sugiere", "se propone", "es necesario",
+        "resulta necesario", "se deberá", "se deberían", "plan de acción",
+    ]
+
+    keywords = proposal_keywords if mode == "proposal" else finding_keywords
+
+    scored_sentences = []
+    for sent in sentences:
+        norm_sent = normalize_text(sent)
+
+        # Descartar frases administrativas/relleno
+        is_filler = False
+        for fp in filler_patterns:
+            if re.search(fp, norm_sent):
+                is_filler = True
+                break
+        if is_filler:
+            continue
+
+        # Calcular score
+        score = 0
+        for kw in keywords:
+            if kw in norm_sent:
+                score += 2
+
+        # Bonus por longitud razonable (ni muy corta ni muy larga)
+        if 30 < len(sent) < 200:
+            score += 1
+
+        # Penalizar oraciones que son solo referencias o números
+        if re.match(r'^[\d\s,.\-/]+$', sent):
+            score -= 5
+
+        scored_sentences.append((score, sent))
+
+    # Ordenar por score (mayor primero)
+    scored_sentences.sort(key=lambda x: x[0], reverse=True)
+
+    # Seleccionar las mejores oraciones que quepan
+    selected = []
+    total_len = 0
+    for score, sent in scored_sentences:
+        if total_len + len(sent) + 2 > max_chars:
+            if not selected:  # Al menos una oración
+                selected.append(sent[:max_chars])
+            break
+        selected.append(sent)
+        total_len += len(sent) + 2  # +2 por ". "
+
+    if not selected:
+        return text[:max_chars]
+
+    result = " ".join(selected)
+    # Asegurar que termina con punto
+    if result and not result.endswith((".","!","?")):
+        result += "."
+    return result
 
 
 def parse_document(raw_text, filename):
@@ -352,10 +443,10 @@ def parse_document(raw_text, filename):
             proposal_full = " ".join(f.get("proposal_lines", []))
 
             title = _clean_finding_title(raw_title)
-            situation = _summarize_text(situation_full, max_chars=500)
+            situation = _summarize_text(situation_full, max_chars=500, mode="finding")
             if not situation:
                 situation = title
-            proposal = _summarize_text(proposal_full, max_chars=400)
+            proposal = _summarize_text(proposal_full, max_chars=400, mode="proposal")
             if not proposal:
                 proposal = f"Implementar medidas de control y mejora para: {title[:60]}."
 
