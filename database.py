@@ -570,6 +570,38 @@ def update_proposal(proposal_id, data, user_name="Auditoría Interna"):
     return updated
 
 
+def create_proposal_for_finding(finding_id, proposal_text, action_owner="", target_date="", status="En proceso", user_name="Auditoría Interna"):
+    init_db()
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM findings WHERE id = ? OR code = ?", (finding_id, finding_id))
+    f_row = cursor.fetchone()
+    if not f_row:
+        conn.close()
+        return None, None
+    finding = dict(f_row)
+    actual_finding_id = finding["id"]
+
+    proposal_id = str(uuid.uuid4())
+    idx_cursor = conn.cursor()
+    idx_cursor.execute("SELECT COUNT(*) FROM proposals")
+    pm_num = idx_cursor.fetchone()[0] + 1
+    pm_code = f"PM-2026-{pm_num:03d}"
+
+    p_title = f"Propuesta {pm_code}"
+    cursor.execute("""
+        INSERT INTO proposals (id, finding_id, code, title, proposal_text, severity, responsible_area, action_owner, target_date, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (proposal_id, actual_finding_id, pm_code, p_title, proposal_text, finding.get("severity", ""), finding.get("responsible_area", ""), action_owner or finding.get("action_owner", ""), target_date, status))
+
+    add_history_log("proposal", proposal_id, user_name, f"Nueva propuesta agregada {pm_code}: {proposal_text}", cursor=cursor)
+    conn.commit()
+    conn.close()
+    return proposal_id, pm_code
+
+
+
 def get_all_proposals(filters=None):
     init_db()
     conn = get_db()

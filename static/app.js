@@ -338,7 +338,7 @@ function renderAuditTrackTable(items) {
 
             const propTextCell = prop
                 ? `<div class="truncate-2-lines" style="color:#16A34A; font-weight:500;" title="${escapeHtml(propText)}">💡 ${escapeHtml(propText)}</div>`
-                : `<button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">+ Agregar Propuesta</button>`;
+                : `<span style="color:#94A3B8; font-size:11px;">Sin propuesta</span>`;
 
             html += `
                 <tr data-row-id="${item.id}">
@@ -1424,20 +1424,28 @@ async function openFindingDrawer(findingId) {
         if (el("drawerReportName")) el("drawerReportName").textContent = `${f.report_title || ''} (${f.report_code || ''})`;
         if (el("drawerFileName")) el("drawerFileName").textContent = f.source_filename || "Informe.xlsx";
 
-        // Propuestas vinculadas
+        // Propuestas vinculadas (Editables desde el panel de edición)
         const propBox = el("drawerProposalsList");
         if (propBox) {
             const props = f.proposals || [];
-            if (!props.length) {
-                propBox.innerHTML = `<div style="font-size:12px; color:#94A3B8;">Sin propuestas registradas.</div>`;
-            } else {
-                propBox.innerHTML = props.map(p => `
-                    <div style="background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px; padding:10px; margin-bottom:8px; font-size:12px;">
-                        <strong style="color:#0055D4;">💡 ${p.code}:</strong> ${escapeHtml(p.proposal_text || p.title)}
-                        <div style="font-size:11px; color:#64748B; margin-top:2px;">Estado: <strong>${p.status}</strong> · Fecha: <strong>${p.target_date}</strong></div>
-                    </div>
-                `).join("");
+            let propHtml = "";
+            if (props.length > 0) {
+                props.forEach((p) => {
+                    propHtml += `
+                        <div style="background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px; padding:10px; margin-bottom:8px;">
+                            <label style="font-size:11px; font-weight:600; color:#0055D4; display:block; margin-bottom:4px;">💡 ${escapeHtml(p.code)} - Propuesta de Mejora ✏️</label>
+                            <textarea class="drawer-prop-input" data-prop-id="${p.id}" rows="2" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1; font-size:12px;">${escapeHtml(p.proposal_text || p.title)}</textarea>
+                        </div>
+                    `;
+                });
             }
+            propHtml += `
+                <div style="background:#F8FAFC; border:1px dashed #CBD5E1; border-radius:8px; padding:10px; margin-top:8px;">
+                    <label style="font-size:11px; font-weight:600; color:#475569; display:block; margin-bottom:4px;">➕ Agregar Nueva Propuesta de Mejora ✏️</label>
+                    <textarea id="drawerNewProposalText" rows="2" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1; font-size:12px;" placeholder="Escribir nueva recomendación o propuesta de mejora..."></textarea>
+                </div>
+            `;
+            propBox.innerHTML = propHtml;
         }
 
         // Planes de acción vinculados
@@ -1527,6 +1535,30 @@ async function saveFindingFromDrawer() {
                 observations
             })
         });
+
+        // Guardar cambios en las propuestas existentes
+        const propInputs = document.querySelectorAll(".drawer-prop-input");
+        for (const input of propInputs) {
+            const propId = input.dataset.propId;
+            const newText = input.value.trim();
+            if (propId && newText) {
+                await fetch(`/proposals/${propId}/update`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ proposal_text: newText, title: newText })
+                });
+            }
+        }
+
+        // Agregar nueva propuesta si fue ingresada
+        const newPropInput = el("drawerNewProposalText");
+        if (newPropInput && newPropInput.value.trim()) {
+            await fetch(`/findings/${currentDrawerFindingId}/add-proposal`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ proposal_text: newPropInput.value.trim() })
+            });
+        }
 
         if (res.ok) {
             showToast("Cambios guardados correctamente en AuditTrack.", "success");
