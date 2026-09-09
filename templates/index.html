@@ -58,11 +58,7 @@
         <!-- Top Navigation Bar (horizontal tabs) -->
         <nav class="topnav-bar">
             <div class="topnav-tabs">
-                <button class="topnav-tab active" data-tab="informes" onclick="switchTab('informes')">
-                    <span class="topnav-icon">📄</span>
-                    <span>Informes</span>
-                </button>
-                <button class="topnav-tab" data-tab="hallazgos" onclick="switchTab('hallazgos')">
+                <button class="topnav-tab active" data-tab="hallazgos" onclick="switchTab('hallazgos')">
                     <span class="topnav-icon">📘</span>
                     <span>Hallazgos y Propuestas</span>
                 </button>
@@ -81,6 +77,10 @@
                 <button class="topnav-tab" data-tab="configuracion" onclick="switchTab('configuracion')">
                     <span class="topnav-icon">⚙️</span>
                     <span>Configuración</span>
+                </button>
+                <button class="topnav-tab" data-tab="informes" onclick="switchTab('informes')">
+                    <span class="topnav-icon">📜</span>
+                    <span>Historial de informes</span>
                 </button>
             </div>
 
@@ -102,12 +102,12 @@
         <!-- Content Area -->
         <main class="content-area">
 
-            <!-- 1. INFORMES -->
-            <section class="tab-pane active" id="tab-informes">
+            <!-- 1. HISTORIAL DE INFORMES -->
+            <section class="tab-pane" id="tab-informes">
                 <div class="view-header">
                     <div>
-                        <h2>Informes de Auditoría</h2>
-                        <p>Gestión de informes de auditoría con trazabilidad completa de hallazgos, propuestas y planes.</p>
+                        <h2>Historial de Informes de Auditoría</h2>
+                        <p>Gestión e historial de informes cargados con trazabilidad relacional.</p>
                     </div>
                 </div>
 
@@ -115,9 +115,9 @@
                     <div id="dropZone" class="drop-zone" onclick="document.getElementById('reportInput').click()">
                         <div class="drop-icon">↑</div>
                         <p><strong>Hacé clic para seleccionar</strong> o arrastrá tu informe de auditoría acá</p>
-                        <span style="font-size: 12px; color: #64748B;">Formatos soportados: Word (.docx), PDF (.pdf), Excel (.xlsx)</span>
+                        <span style="font-size: 12px; color: #64748B;">Formatos soportados: PDF (.pdf), Word (.docx), Excel (.xlsx), CSV (.csv) y Texto (.txt)</span>
                     </div>
-                    <input type="file" id="reportInput" hidden accept=".pdf,.docx,.xlsx,.csv" onchange="uploadAuditReport(this.files[0])">
+                    <input type="file" id="reportInput" hidden accept=".pdf,.docx,.xlsx,.csv,.txt" onchange="uploadAuditReport(this.files[0])">
                 </div>
 
                 <div class="card">
@@ -151,7 +151,7 @@
             </section>
 
             <!-- 2. HALLAZGOS Y PROPUESTAS (ÁREA PRIMERO + TRAZABILIDAD DESPLEGABLE) -->
-            <section class="tab-pane" id="tab-hallazgos">
+            <section class="tab-pane active" id="tab-hallazgos">
                 <div class="view-header">
                     <div>
                         <h2>Hallazgos y Propuestas de Mejora</h2>
@@ -160,7 +160,7 @@
 
                     <div class="view-actions">
                         <button class="btn btn-primary" onclick="document.getElementById('reportInputMainTab').click()">📤 Subir Informe de Auditoría</button>
-                        <input type="file" id="reportInputMainTab" hidden accept=".pdf,.docx,.xlsx,.csv" onchange="uploadAuditReport(this.files[0])">
+                        <input type="file" id="reportInputMainTab" hidden accept=".pdf,.docx,.xlsx,.csv,.txt" onchange="uploadAuditReport(this.files[0])">
                         <button class="btn btn-outlined" onclick="exportExcelReport()">↓ Exportar Excel</button>
                         <button class="btn btn-outlined" onclick="toggleFilterBar()">⚙️ Filtros</button>
                     </div>

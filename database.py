@@ -213,8 +213,15 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
 
     for f_item in findings_hierarchy:
         finding_id = str(uuid.uuid4())
-        f_code = f_item.get("code") or f"H-2026-{finding_counter:03d}"
+        raw_f_code = f_item.get("code") or f"H-2026-{finding_counter:03d}"
         finding_counter += 1
+
+        chk_f = conn.cursor()
+        chk_f.execute("SELECT COUNT(*) FROM findings WHERE code = ?", (raw_f_code,))
+        if chk_f.fetchone()[0] > 0:
+            f_code = f"{raw_f_code}-{finding_counter:03d}"
+        else:
+            f_code = raw_f_code
 
         f_title = (f_item.get("title") or "Observación de Auditoría").strip()
         situation = (f_item.get("situation") or f_title).strip()
@@ -245,8 +252,15 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
 
         for p_item in proposals_list:
             proposal_id = str(uuid.uuid4())
-            p_code = p_item.get("code") or f"PM-2026-{proposal_counter:03d}"
+            raw_p_code = p_item.get("code") or f"PM-2026-{proposal_counter:03d}"
             proposal_counter += 1
+
+            chk_p = conn.cursor()
+            chk_p.execute("SELECT COUNT(*) FROM proposals WHERE code = ?", (raw_p_code,))
+            if chk_p.fetchone()[0] > 0:
+                p_code = f"{raw_p_code}-{proposal_counter:03d}"
+            else:
+                p_code = raw_p_code
 
             p_title = (p_item.get("title") or f"Propuesta para {f_title}").strip()
             p_text = (p_item.get("proposal_text") or p_item.get("proposal") or p_title).strip()
@@ -260,15 +274,19 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
 
             add_history_log("proposal", proposal_id, auditor, f"Creación de propuesta {p_code} vinculada a {f_code}", cursor=cursor)
 
-            # Planes de Acción asociados a esta Propuesta.
-            # AuditTrack no inventa planes de acción: solo crea los que
-            # vienen explícitamente en la estructura validada.
             plans_list = p_item.get("action_plans") or []
 
             for pa_item in plans_list:
                 plan_id = str(uuid.uuid4())
-                pa_code = pa_item.get("code") or f"PA-2026-{action_counter:03d}"
+                raw_pa_code = pa_item.get("code") or f"PA-2026-{action_counter:03d}"
                 action_counter += 1
+
+                chk_pa = conn.cursor()
+                chk_pa.execute("SELECT COUNT(*) FROM action_plans WHERE code = ?", (raw_pa_code,))
+                if chk_pa.fetchone()[0] > 0:
+                    pa_code = f"{raw_pa_code}-{action_counter:03d}"
+                else:
+                    pa_code = raw_pa_code
 
                 pa_title = (pa_item.get("title") or f"Acción para {p_code}").strip()
                 pa_text = (pa_item.get("action_text") or pa_title).strip()

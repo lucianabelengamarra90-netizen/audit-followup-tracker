@@ -1022,5 +1022,44 @@ body {
     border: 1px solid #CBD5E1;
 }
 
+/* Semáforo de colores de Riesgo */
+.risk-badge-alto, select.risk-badge-alto {
+    background-color: #FEE2E2 !important;
+    color: #991B1B !important;
+    font-weight: 700 !important;
+    border: 1px solid #FCA5A5 !important;
+    border-radius: 6px;
+    padding: 2px 6px;
+}
+
+.risk-badge-medio, select.risk-badge-medio {
+    background-color: #FEF3C7 !important;
+    color: #92400E !important;
+    font-weight: 700 !important;
+    border: 1px solid #FDE68A !important;
+    border-radius: 6px;
+    padding: 2px 6px;
+}
+
+.risk-badge-bajo, select.risk-badge-bajo {
+    background-color: #D1FAE5 !important;
+    color: #065F46 !important;
+    font-weight: 700 !important;
+    border: 1px solid #A7F3D0 !important;
+    border-radius: 6px;
+    padding: 2px 6px;
+}
+
+.table-card {
+    overflow-x: auto;
+    width: 100%;
+}
+
+.audittrack-table {
+    width: 100%;
+    min-width: 1500px;
+    border-collapse: collapse;
+}
+
 
 

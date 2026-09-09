@@ -307,87 +307,88 @@ function renderAuditTrackTable(items) {
     let html = "";
     items.forEach((item) => {
         const filename = item.source_filename || "Informe.xlsx";
-        const firstProp = (item.proposals && item.proposals.length > 0) ? item.proposals[0] : null;
+        const proposalsToRender = (item.proposals && item.proposals.length > 0) ? item.proposals : [null];
 
-        const propCodeCell = firstProp
-            ? `<a href="#" class="id-cell" style="color: #16A34A; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(firstProp.code)}</a>`
-            : `<span style="color:#94A3B8; font-size:11px;">Sin propuesta</span>`;
+        proposalsToRender.forEach((prop) => {
+            const propCodeCell = prop
+                ? `<a href="#" class="id-cell" style="color: #16A34A; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(prop.code)}</a>`
+                : `<span style="color:#94A3B8; font-size:11px;">Sin propuesta</span>`;
 
-        const propText = firstProp ? (firstProp.proposal_text || firstProp.title) : "";
+            const propText = prop ? (prop.proposal_text || prop.title) : "";
+            let firstAction = (prop && prop.action_plans && prop.action_plans.length > 0) ? prop.action_plans[0] : null;
+            let owner = (prop && prop.action_owner) ? prop.action_owner : (firstAction ? firstAction.action_owner : (item.action_owner || "Sin asignar"));
+            let targetDate = (prop && prop.target_date) ? prop.target_date : (firstAction ? firstAction.target_date : "");
+            let status = (prop && prop.status) ? prop.status : (item.status || "Pendiente");
+            let pct = firstAction ? (firstAction.progress_pct || 0) : 0;
+            let observations = item.observations || "";
 
-        let firstAction = (firstProp && firstProp.action_plans && firstProp.action_plans.length > 0) ? firstProp.action_plans[0] : null;
-        let owner = (firstProp && firstProp.action_owner) ? firstProp.action_owner : (firstAction ? firstAction.action_owner : (item.action_owner || "Sin asignar"));
-        let targetDate = (firstProp && firstProp.target_date) ? firstProp.target_date : (firstAction ? firstAction.target_date : "");
-        let status = (firstProp && firstProp.status) ? firstProp.status : (item.status || "Pendiente");
-        let pct = firstAction ? (firstAction.progress_pct || 0) : 0;
-        let observations = item.observations || "";
+            const currentRisk = item.severity || "Medio";
+            const badgeClass = currentRisk === "Alto" ? "risk-badge-alto" : (currentRisk === "Bajo" ? "risk-badge-bajo" : "risk-badge-medio");
 
-        // Risk dropdown options
-        const riskOptions = ["Alto", "Medio", "Bajo"];
-        const currentRisk = item.severity || "Medio";
-        const riskSelectHtml = `<select class="inline-select inline-select-risk" data-finding-id="${item.id}" data-field="severity" onchange="inlineUpdateFinding(this)">
-            ${riskOptions.map(r => `<option value="${r}" ${r === currentRisk ? 'selected' : ''}>${r}</option>`).join('')}
-        </select>`;
+            const riskSelectHtml = `<select class="inline-select inline-select-risk ${badgeClass}" data-finding-id="${item.id}" data-field="severity" onchange="inlineUpdateFindingRisk(this)">
+                <option value="Alto" ${currentRisk === 'Alto' ? 'selected' : ''}>Alto</option>
+                <option value="Medio" ${currentRisk === 'Medio' ? 'selected' : ''}>Medio</option>
+                <option value="Bajo" ${currentRisk === 'Bajo' ? 'selected' : ''}>Bajo</option>
+            </select>`;
 
-        // Status dropdown options
-        const statusOptions = ["En proceso", "En suspensión", "Finalizado"];
-        const statusSelectHtml = `<select class="inline-select inline-select-status" data-finding-id="${item.id}" data-proposal-id="${firstProp ? firstProp.id : ''}" data-field="status" onchange="inlineUpdateStatus(this)">
-            ${statusOptions.map(s => `<option value="${s}" ${s === status ? 'selected' : ''}>${s}</option>`).join('')}
-        </select>`;
+            const statusOptions = ["En proceso", "En suspensión", "Finalizado"];
+            const statusSelectHtml = `<select class="inline-select inline-select-status" data-finding-id="${item.id}" data-proposal-id="${prop ? prop.id : ''}" data-field="status" onchange="inlineUpdateStatus(this)">
+                ${statusOptions.map(s => `<option value="${s}" ${s === status ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>`;
 
-        // Proposal text cell (editable or add button)
-        const propTextCell = firstProp
-            ? `<div class="truncate-2-lines" style="color:#16A34A; font-weight:500;" title="${escapeHtml(propText)}">💡 ${escapeHtml(propText)}</div>`
-            : `<button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">+ Agregar Propuesta</button>`;
+            const propTextCell = prop
+                ? `<div class="truncate-2-lines" style="color:#16A34A; font-weight:500;" title="${escapeHtml(propText)}">💡 ${escapeHtml(propText)}</div>`
+                : `<button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">+ Agregar Propuesta</button>`;
 
-        html += `
-            <tr data-row-id="${item.id}">
-                <td style="font-weight: 700; color: #1E293B;">${escapeHtml(item.responsible_area || 'Pendiente de definir')}</td>
-                <td>
-                    <a href="#" class="id-cell" style="color: #0055D4; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(item.code)}</a>
-                </td>
-                <td>
-                    <strong style="color: #0F172A; cursor:pointer;" onclick="openFindingDrawer('${item.id}')">${escapeHtml(item.title)}</strong>
-                    <div class="truncate-2-lines" style="font-size: 11px; color: #64748B; margin-top: 3px;" title="${escapeHtml(item.situation)}">${escapeHtml(item.situation)}</div>
-                </td>
-                <td>${propCodeCell}</td>
-                <td>${propTextCell}</td>
-                <td>
-                    <div class="file-cell">
-                        <span>📄</span>
-                        <span style="font-size:11px;">${escapeHtml(filename)}</span>
-                    </div>
-                </td>
-                <td>${riskSelectHtml}</td>
-                <td>
-                    <input type="text" class="inline-input" value="${escapeHtml(owner)}"
-                        data-finding-id="${item.id}" data-proposal-id="${firstProp ? firstProp.id : ''}" data-field="action_owner"
-                        onchange="inlineUpdateOwner(this)" placeholder="Responsable" />
-                </td>
-                <td>
-                    <input type="date" class="inline-input" value="${escapeHtml(targetDate)}"
-                        data-finding-id="${item.id}" data-proposal-id="${firstProp ? firstProp.id : ''}" data-field="target_date"
-                        onchange="inlineUpdateDate(this)" />
-                </td>
-                <td>${statusSelectHtml}</td>
-                <td>
-                    <div style="display:flex; align-items:center; gap:4px;">
-                        <div style="background:#CBD5E1; border-radius:4px; height:6px; flex:1; overflow:hidden;">
-                            <div style="background:#16A34A; width:${pct}%; height:100%;"></div>
+            html += `
+                <tr data-row-id="${item.id}">
+                    <td style="font-weight: 700; color: #1E293B;">${escapeHtml(item.responsible_area || 'Pendiente de definir')}</td>
+                    <td>
+                        <a href="#" class="id-cell" style="color: #0055D4; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(item.code)}</a>
+                    </td>
+                    <td>
+                        <strong style="color: #0F172A; cursor:pointer;" onclick="openFindingDrawer('${item.id}')">${escapeHtml(item.title)}</strong>
+                        <div class="truncate-2-lines" style="font-size: 11px; color: #64748B; margin-top: 3px;" title="${escapeHtml(item.situation)}">${escapeHtml(item.situation)}</div>
+                    </td>
+                    <td>${propCodeCell}</td>
+                    <td>${propTextCell}</td>
+                    <td>
+                        <div class="file-cell">
+                            <span>📄</span>
+                            <span style="font-size:11px;">${escapeHtml(filename)}</span>
                         </div>
-                        <span style="font-size:10px;">${pct}%</span>
-                    </div>
-                </td>
-                <td>
-                    <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')" title="Ver / Editar detalle">✏️ Editar</button>
-                </td>
-                <td>
-                    <input type="text" class="inline-input inline-input-obs" value="${escapeHtml(observations)}"
-                        data-finding-id="${item.id}" data-field="observations"
-                        onchange="inlineUpdateFinding(this)" placeholder="Agregar observación..." />
-                </td>
-            </tr>
-        `;
+                    </td>
+                    <td>${riskSelectHtml}</td>
+                    <td>
+                        <input type="text" class="inline-input" value="${escapeHtml(owner)}"
+                            data-finding-id="${item.id}" data-proposal-id="${prop ? prop.id : ''}" data-field="action_owner"
+                            onchange="inlineUpdateOwner(this)" placeholder="Responsable" />
+                    </td>
+                    <td>
+                        <input type="date" class="inline-input" value="${escapeHtml(targetDate)}"
+                            data-finding-id="${item.id}" data-proposal-id="${prop ? prop.id : ''}" data-field="target_date"
+                            onchange="inlineUpdateDate(this)" />
+                    </td>
+                    <td>${statusSelectHtml}</td>
+                    <td>
+                        <div style="display:flex; align-items:center; gap:4px;">
+                            <div style="background:#CBD5E1; border-radius:4px; height:6px; flex:1; overflow:hidden;">
+                                <div style="background:#16A34A; width:${pct}%; height:100%;"></div>
+                            </div>
+                            <span style="font-size:10px;">${pct}%</span>
+                        </div>
+                    </td>
+                    <td>
+                        <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')" title="Ver / Editar detalle">✏️ Editar</button>
+                    </td>
+                    <td>
+                        <input type="text" class="inline-input inline-input-obs" value="${escapeHtml(observations)}"
+                            data-finding-id="${item.id}" data-field="observations"
+                            onchange="inlineUpdateFinding(this)" placeholder="Agregar observación..." />
+                    </td>
+                </tr>
+            `;
+        });
     });
 
     tbody.innerHTML = html;
@@ -397,6 +398,32 @@ function renderAuditTrackTable(items) {
 // ============================================================
 // INLINE EDITING FUNCTIONS
 // ============================================================
+
+async function inlineUpdateFindingRisk(el) {
+    const findingId = el.dataset.findingId;
+    const value = el.value;
+    const badgeClass = value === "Alto" ? "risk-badge-alto" : (value === "Bajo" ? "risk-badge-bajo" : "risk-badge-medio");
+
+    document.querySelectorAll(`select[data-finding-id="${findingId}"][data-field="severity"]`).forEach(s => {
+        s.value = value;
+        s.className = `inline-select inline-select-risk ${badgeClass}`;
+    });
+
+    try {
+        const resp = await fetch(`/findings/${findingId}/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ severity: value })
+        });
+        if (resp.ok) {
+            showToast(`Riesgo actualizado a "${value}"`, "success");
+        } else {
+            showToast("Error al actualizar riesgo", "error");
+        }
+    } catch (e) {
+        showToast("Error de conexión", "error");
+    }
+}
 
 async function inlineUpdateFinding(el) {
     const findingId = el.dataset.findingId;
@@ -1173,7 +1200,10 @@ let currentPreviewData = null;
 
 async function uploadAuditReport(file) {
     if (!file) return;
-    showToast(`Analizando e interpretando '${file.name}' con IA...`, "info");
+    const inputMain = el("reportInputMainTab");
+    const inputHist = el("reportInput");
+
+    showToast(`Analizando e interpretando '${file.name}' con IA Analista y Revisora...`, "info");
 
     const form = new FormData();
     form.append("file", file);
@@ -1181,15 +1211,27 @@ async function uploadAuditReport(file) {
     try {
         const response = await fetch("/parse-preview", { method: "POST", body: form });
         let data = {};
-        try { data = await response.json(); } catch (_) {}
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+            data = await response.json();
+        } else {
+            const rawText = await response.text();
+            data = { error: `Error del servidor (${response.status}): ${rawText.slice(0, 200)}` };
+        }
 
-        if (!response.ok) throw new Error(data.error || "No se pudo procesar el informe.");
+        if (!response.ok) {
+            showToast(data.error || "No se pudo procesar el informe.", "error");
+            return;
+        }
 
         currentPreviewData = data;
         openPreviewValidationModal(data);
     } catch (err) {
         console.error(err);
-        showToast(err.message || "Error al analizar el informe.", "error");
+        showToast(err.message || "Error de conexión al analizar el informe.", "error");
+    } finally {
+        if (inputMain) inputMain.value = "";
+        if (inputHist) inputHist.value = "";
     }
 }
 

@@ -38,11 +38,42 @@ UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "upload
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-ALLOWED_EXTENSIONS = {"xlsx", "csv", "docx", "pdf", "txt"}
+import uuid
+
+ALLOWED_EXTENSIONS = {"xlsx", "csv", "docx", "doc", "pdf", "txt"}
+MAX_SIZE_MAP = {
+    "pdf": 50 * 1024 * 1024,
+    "xlsx": 50 * 1024 * 1024,
+    "docx": 25 * 1024 * 1024,
+    "doc": 25 * 1024 * 1024,
+    "csv": 20 * 1024 * 1024,
+    "txt": 20 * 1024 * 1024,
+}
 
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def validate_file_content(file_storage, ext):
+    file_storage.seek(0, os.SEEK_END)
+    size = file_storage.tell()
+    file_storage.seek(0)
+
+    max_size = MAX_SIZE_MAP.get(ext, 25 * 1024 * 1024)
+    if size > max_size:
+        return False, f"El archivo excede el tamaño máximo permitido ({max_size // (1024 * 1024)} MB).", 413
+    if size == 0:
+        return False, "El archivo subido está vacío (0 bytes).", 422
+
+    header = file_storage.read(1024)
+    file_storage.seek(0)
+
+    if ext == "pdf":
+        if not header.startswith(b"%PDF"):
+            return False, "Firma de archivo inválida. El archivo no es un documento PDF válido.", 400
+
+    return True, "", 200
 
 
 @app.route("/")
@@ -65,10 +96,16 @@ def upload_report():
         return jsonify({"error": "El archivo enviado no es válido."}), 400
 
     if not allowed_file(file.filename):
-        return jsonify({"error": "Formato no soportado. Usá PDF, Word (.docx) o Excel (.xlsx)."}), 400
+        return jsonify({"error": "Formato no soportado. Usá PDF (.pdf), Word (.docx), Excel (.xlsx), CSV (.csv) o Texto (.txt)."}), 400
+
+    ext = file.filename.rsplit(".", 1)[1].lower() if "." in file.filename else ""
+    valid, err_msg, status_code = validate_file_content(file, ext)
+    if not valid:
+        return jsonify({"error": err_msg}), status_code
 
     safe_filename = clean_text(file.filename).replace(" ", "_")
-    saved_path = os.path.join(app.config["UPLOAD_FOLDER"], safe_filename)
+    unique_filename = f"{uuid.uuid4().hex}_{safe_filename}"
+    saved_path = os.path.join(app.config["UPLOAD_FOLDER"], unique_filename)
     file.save(saved_path)
 
     try:
@@ -83,9 +120,19 @@ def upload_report():
             "report_id": report_id,
             "findings_count": len(findings_hierarchy)
         })
+    except ValueError as ve:
+        err_str = str(ve)
+        status = 422 if ("requiere OCR" in err_str or "vacío" in err_str or "texto" in err_str) else 400
+        return jsonify({"error": err_str}), status
     except Exception as exc:
         print(f"Error procesando informe: {exc}")
         return jsonify({"error": f"No se pudo procesar el informe: {str(exc)}"}), 500
+    finally:
+        if os.path.exists(saved_path):
+            try:
+                os.remove(saved_path)
+            except Exception as e:
+                print(f"Error eliminando archivo temporal: {e}")
 
 
 @app.route("/parse-preview", methods=["POST"])
@@ -98,10 +145,16 @@ def parse_preview():
         return jsonify({"error": "El archivo enviado no es válido."}), 400
 
     if not allowed_file(file.filename):
-        return jsonify({"error": "Formato no soportado. Usá PDF, Word (.docx) o Excel (.xlsx)."}), 400
+        return jsonify({"error": "Formato no soportado. Usá PDF (.pdf), Word (.docx), Excel (.xlsx), CSV (.csv) o Texto (.txt)."}), 400
+
+    ext = file.filename.rsplit(".", 1)[1].lower() if "." in file.filename else ""
+    valid, err_msg, status_code = validate_file_content(file, ext)
+    if not valid:
+        return jsonify({"error": err_msg}), status_code
 
     safe_filename = clean_text(file.filename).replace(" ", "_")
-    saved_path = os.path.join(app.config["UPLOAD_FOLDER"], safe_filename)
+    unique_filename = f"{uuid.uuid4().hex}_{safe_filename}"
+    saved_path = os.path.join(app.config["UPLOAD_FOLDER"], unique_filename)
     file.save(saved_path)
 
     try:
@@ -111,9 +164,19 @@ def parse_preview():
             "report": parsed_data.get("report", {}),
             "findings": parsed_data.get("findings", [])
         })
+    except ValueError as ve:
+        err_str = str(ve)
+        status = 422 if ("requiere OCR" in err_str or "vacío" in err_str or "texto" in err_str) else 400
+        return jsonify({"error": err_str}), status
     except Exception as exc:
         print(f"Error procesando vista previa: {exc}")
         return jsonify({"error": f"No se pudo procesar la vista previa: {str(exc)}"}), 500
+    finally:
+        if os.path.exists(saved_path):
+            try:
+                os.remove(saved_path)
+            except Exception as e:
+                print(f"Error eliminando archivo temporal: {e}")
 
 
 @app.route("/save-validated-report", methods=["POST"])

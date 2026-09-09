@@ -1,6 +1,10 @@
 import os
 import re
 import unicodedata
+import csv
+import io
+import uuid
+import hashlib
 from typing import Optional, List
 
 from openpyxl import load_workbook
@@ -8,6 +12,7 @@ from docx import Document
 from pypdf import PdfReader
 from openai import OpenAI
 from pydantic import BaseModel, Field
+
 
 
 # ============================================================
@@ -161,7 +166,7 @@ def extract_raw_text_from_file(file_path):
 
     text_content = ""
 
-    if ext == "docx":
+    if ext in ("docx", "doc"):
         try:
             doc = Document(file_path)
 
@@ -184,15 +189,29 @@ def extract_raw_text_from_file(file_path):
                             " | ".join(row_cells)
                         )
 
+            for section in doc.sections:
+                if section.header:
+                    hdr_txt = "\n".join([p.text.strip() for p in section.header.paragraphs if p.text.strip()])
+                    if hdr_txt:
+                        paragraphs.insert(0, f"[Encabezado: {hdr_txt}]")
+
             text_content = "\n".join(paragraphs)
 
         except Exception as exc:
-            print(f"Error leyendo DOCX: {exc}")
+            try:
+                with open(file_path, "rb") as f_raw:
+                    raw_b = f_raw.read()
+                decoded = raw_b.decode("latin-1", errors="ignore")
+                printable = re.findall(r'[A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s\.,;:!\?\-\(\)\$/]{4,}', decoded)
+                text_content = "\n".join([p.strip() for p in printable if len(p.strip()) > 5])
+            except Exception:
+                raise ValueError(f"No se pudo leer el documento Word (.docx/.doc): {str(exc)}")
 
     elif ext == "pdf":
         try:
             reader = PdfReader(file_path)
             pages_text = []
+            total_pages = len(reader.pages)
 
             for idx, page in enumerate(reader.pages):
                 txt = page.extract_text() or ""
@@ -204,8 +223,13 @@ def extract_raw_text_from_file(file_path):
 
             text_content = "\n".join(pages_text)
 
+            if total_pages > 0 and not text_content.strip():
+                raise ValueError("El archivo PDF no contiene texto seleccionable o es una imagen escaneada (requiere OCR).")
+
+        except ValueError:
+            raise
         except Exception as exc:
-            print(f"Error leyendo PDF: {exc}")
+            raise ValueError(f"No se pudo procesar el archivo PDF: {str(exc)}")
 
     elif ext == "xlsx":
         try:
@@ -215,17 +239,24 @@ def extract_raw_text_from_file(file_path):
             )
 
             lines = []
+            max_sheets = 10
 
-            for sheet_name in wb.sheetnames:
+            for sheet_name in wb.sheetnames[:max_sheets]:
                 ws = wb[sheet_name]
 
                 lines.append(
                     f"=== SOLAPA: {sheet_name} ==="
                 )
 
+                row_count = 0
                 for row in ws.iter_rows(
                     values_only=True
                 ):
+                    row_count += 1
+                    if row_count > 2000:
+                        lines.append("... [Límite de 2000 filas alcanzado en esta solapa] ...")
+                        break
+
                     row_vals = [
                         clean_text(v)
                         for v in row
@@ -239,34 +270,65 @@ def extract_raw_text_from_file(file_path):
 
             text_content = "\n".join(lines)
 
+            if not text_content.strip():
+                wb_fallback = load_workbook(file_path, data_only=False)
+                lines_fb = []
+                for sheet_name in wb_fallback.sheetnames[:max_sheets]:
+                    ws = wb_fallback[sheet_name]
+                    lines_fb.append(f"=== SOLAPA: {sheet_name} ===")
+                    for row in ws.iter_rows(values_only=True):
+                        row_vals = [clean_text(v) for v in row if clean_text(v)]
+                        if row_vals:
+                            lines_fb.append(" | ".join(row_vals))
+                text_content = "\n".join(lines_fb)
+
         except Exception as exc:
-            print(f"Error leyendo Excel: {exc}")
+            raise ValueError(f"No se pudo procesar la planilla Excel: {str(exc)}")
 
     elif ext == "csv":
         try:
-            with open(
-                file_path,
-                "r",
-                encoding="utf-8",
-                errors="ignore"
-            ) as file:
-                text_content = file.read()
+            with open(file_path, "rb") as f_raw:
+                raw_bytes = f_raw.read()
+
+            try:
+                content_str = raw_bytes.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                content_str = raw_bytes.decode("latin-1", errors="ignore")
+
+            sample = content_str[:4096]
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=[',', ';', '\t', '|'])
+                delimiter = dialect.delimiter
+            except Exception:
+                delimiter = ';' if ';' in sample else ','
+
+            reader = csv.reader(io.StringIO(content_str), delimiter=delimiter)
+            rows_str = []
+            for row in reader:
+                cleaned_cells = [clean_text(c) for c in row if clean_text(c)]
+                if cleaned_cells:
+                    rows_str.append(" | ".join(cleaned_cells))
+
+            text_content = "\n".join(rows_str)
 
         except Exception as exc:
-            print(f"Error leyendo CSV: {exc}")
+            raise ValueError(f"No se pudo procesar el archivo CSV: {str(exc)}")
 
     elif ext == "txt":
         try:
-            with open(
-                file_path,
-                "r",
-                encoding="utf-8",
-                errors="ignore"
-            ) as file:
-                text_content = file.read()
+            with open(file_path, "rb") as f_raw:
+                raw_bytes = f_raw.read()
+
+            try:
+                text_content = raw_bytes.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text_content = raw_bytes.decode("latin-1", errors="ignore")
 
         except Exception as exc:
-            print(f"Error leyendo TXT: {exc}")
+            raise ValueError(f"No se pudo procesar el archivo TXT: {str(exc)}")
+
+    if not text_content or not text_content.strip():
+        raise ValueError("El archivo no contiene texto interpretable o está vacío.")
 
     return text_content[:60000]
 
@@ -1497,6 +1559,45 @@ def _parse_tabular_findings(
     return findings
 
 
+def _extract_findings_directly_via_ai(raw_text, filename):
+    client = _get_openai_client()
+    if not client:
+        return []
+
+    chunks = [raw_text[i:i+4000] for i in range(0, len(raw_text), 4000)]
+    extracted = []
+
+    for idx, chunk in enumerate(chunks[:5], start=1):
+        ai_res = run_double_ai_review(
+            source_text=chunk,
+            fallback_title=f"Hallazgo Detectado por IA #{idx}",
+            fallback_area="Operaciones",
+            fallback_severity="Medio"
+        )
+
+        if ai_res and ai_res.situation:
+            proposals = [clean_text(p.proposal_text) for p in ai_res.proposals if clean_text(p.proposal_text)]
+            extracted.append({
+                "title": clean_text(ai_res.title) or f"Hallazgo {idx}",
+                "situation": clean_text(ai_res.situation),
+                "risk": clean_text(ai_res.risk),
+                "severity": ai_res.severity if ai_res.severity in ("Alto", "Medio", "Bajo") else "Medio",
+                "responsible_area": clean_text(ai_res.responsible_area) or "Operaciones",
+                "evidence": clean_text(ai_res.evidence),
+                "cause": clean_text(ai_res.cause),
+                "affected_process_or_control": clean_text(ai_res.affected_process_or_control),
+                "impact": clean_text(ai_res.impact),
+                "proposals_ai": proposals,
+                "ai_confidence": ai_res.confidence,
+                "ai_validated": True,
+                "ai_status": "IA completa",
+                "source_text": chunk,
+                "source_location": f"Bloque de texto {idx}"
+            })
+
+    return extracted
+
+
 # ============================================================
 # FUNCIÓN PRINCIPAL
 # ============================================================
@@ -1505,247 +1606,119 @@ def parse_audit_report(
     file_path,
     filename
 ):
-    raw_text = (
-        extract_raw_text_from_file(
-            file_path
-        )
-    )
+    raw_text = extract_raw_text_from_file(file_path)
 
-    if not raw_text.strip():
-        print(
-            f"[Parser] No se pudo leer "
-            f"'{filename}'."
-        )
-
-        return {
-            "report": {
-                "title": (
-                    f"Error - {filename}"
-                ),
-                "process": (
-                    "Control Interno"
-                ),
-                "area": "Operaciones",
-                "period": "2026",
-                "auditor": (
-                    "Auditoría Interna"
-                ),
-                "summary": (
-                    "No se pudo leer "
-                    "el archivo."
-                ),
-            },
-            "findings": [],
-        }
+    if not raw_text or not raw_text.strip():
+        raise ValueError("No se pudo extraer texto del archivo o el contenido está vacío.")
 
     parsed = parse_document(
         raw_text,
         filename
     )
 
-    extracted_findings = (
-        parsed.get(
-            "findings",
-            []
-        )
+    extracted_findings = parsed.get("findings", [])
+
+    if not extracted_findings and raw_text.strip():
+        ai_direct_findings = _extract_findings_directly_via_ai(raw_text, filename)
+        if ai_direct_findings:
+            extracted_findings = ai_direct_findings
+
+    report_title = parsed.get(
+        "report_title",
+        f"Informe de Auditoría - {filename}"
     )
 
-    report_title = (
-        parsed.get(
-            "report_title",
-            f"Informe de Auditoría - {filename}"
-        )
-    )
-
-    explicit_area = (
-        parsed.get(
-            "area",
-            "Operaciones"
-        )
-    )
-
-    explicit_auditor = (
-        parsed.get(
-            "auditor",
-            "Auditoría Interna"
-        )
-    )
+    explicit_area = parsed.get("area", "Operaciones")
+    explicit_auditor = parsed.get("auditor", "Auditoría Interna")
 
     relational_findings = []
-
     proposal_counter = 1
 
-    for index, finding in enumerate(
-        extracted_findings,
-        start=1
-    ):
-        h_code = (
-            f"H-2026-{index:03d}"
-        )
+    for index, finding in enumerate(extracted_findings, start=1):
+        finding_id = str(uuid.uuid4())
+        source_key = finding.get("source_key") or hashlib.md5(f"{filename}_{index}_{finding.get('title','')}".encode('utf-8')).hexdigest()[:12]
+        source_item_id = finding.get("source_item_id") or f"src_{source_key}"
+        source_item_ids = finding.get("source_item_ids") or [source_item_id]
 
-        title = clean_text(
-            finding.get(
-                "title",
-                f"Hallazgo {index}"
-            )
-        )
+        h_code = finding.get("code") or f"H-2026-{index:03d}"
 
-        situation = clean_text(
-            finding.get(
-                "situation",
-                title
-            )
-        )
-
-        risk = clean_text(
-            finding.get(
-                "risk",
-                ""
-            )
-        )
-
-        severity = finding.get(
-            "severity",
-            "Medio"
-        )
-
-        if severity not in (
-            "Alto",
-            "Medio",
-            "Bajo"
-        ):
+        title = clean_text(finding.get("title", f"Hallazgo {index}"))
+        situation = clean_text(finding.get("situation", title))
+        risk = clean_text(finding.get("risk", ""))
+        severity = finding.get("severity", "Medio")
+        if severity not in ("Alto", "Medio", "Bajo"):
             severity = "Medio"
 
-        area = (
-            clean_text(
-                finding.get(
-                    "responsible_area"
-                )
-            )
-            or explicit_area
-        )
+        area = clean_text(finding.get("responsible_area")) or explicit_area
+        action_owner = clean_text(finding.get("action_owner")) or "Pendiente de definir"
 
-        proposal_texts = (
-            finding.get(
-                "proposals_ai"
-            )
-            or []
-        )
-
+        proposal_texts = finding.get("proposals_ai") or []
         if not proposal_texts:
-            legacy_proposal = (
-                clean_text(
-                    finding.get(
-                        "proposal",
-                        ""
-                    )
-                )
-            )
-
+            legacy_proposal = clean_text(finding.get("proposal", ""))
             if legacy_proposal:
-                proposal_texts = [
-                    legacy_proposal
-                ]
+                proposal_texts = [legacy_proposal]
 
         proposals = []
-
         for proposal_text in proposal_texts:
-            proposal_text = (
-                clean_text(
-                    proposal_text
-                )
-            )
-
+            proposal_text = clean_text(proposal_text)
             if not proposal_text:
                 continue
 
-            pm_code = (
-                f"PM-2026-"
-                f"{proposal_counter:03d}"
-            )
-
+            pm_code = f"PM-2026-{proposal_counter:03d}"
             proposal_counter += 1
 
             proposals.append({
+                "id": str(uuid.uuid4()),
+                "finding_id": finding_id,
                 "code": pm_code,
                 "title": proposal_text,
-                "proposal_text": (
-                    proposal_text
-                ),
+                "proposal_text": proposal_text,
+                "severity": severity,
+                "responsible_area": area,
+                "action_owner": action_owner,
                 "target_date": "",
                 "status": "Pendiente",
                 "action_plans": [],
             })
 
         relational_findings.append({
+            "id": finding_id,
+            "sourceItemId": source_item_id,
+            "sourceItemIds": source_item_ids,
+            "sourceKey": source_key,
+            "sourceFile": filename,
+            "sourceLocation": finding.get("source_location") or f"Sección / Fila {index}",
+            "evidence": clean_text(finding.get("evidence", "")),
+            "included": True,
+            "selectedAsFinding": True,
+            "converted": False,
             "code": h_code,
             "title": title,
             "situation": situation,
             "risk": risk,
             "severity": severity,
             "responsible_area": area,
-            "action_owner": (
-                "Pendiente de definir"
-            ),
+            "action_owner": action_owner,
             "status": "Pendiente",
+            "observations": finding.get("observations", ""),
             "proposals": proposals,
-            "evidence": (
-                finding.get(
-                    "evidence",
-                    ""
-                )
-            ),
-            "cause": (
-                finding.get(
-                    "cause",
-                    ""
-                )
-            ),
-            "affected_process_or_control":
-                finding.get(
-                    "affected_process_or_control",
-                    ""
-                ),
-            "impact": (
-                finding.get(
-                    "impact",
-                    ""
-                )
-            ),
-            "ai_confidence": (
-                finding.get(
-                    "ai_confidence",
-                    0
-                )
-            ),
-            "ai_validated": (
-                finding.get(
-                    "ai_validated",
-                    False
-                )
-            ),
+            "cause": clean_text(finding.get("cause", "")),
+            "affected_process_or_control": clean_text(finding.get("affected_process_or_control", "")),
+            "impact": clean_text(finding.get("impact", "")),
+            "ai_confidence": finding.get("ai_confidence", 0),
+            "ai_validated": finding.get("ai_validated", False),
+            "ai_status": finding.get("ai_status") or ("IA completa" if finding.get("ai_validated") else "Fallback heurístico")
         })
 
     return {
         "report": {
             "title": report_title,
-            "process": (
-                explicit_area
-                or "Control Interno"
-            ),
+            "process": explicit_area or "Control Interno",
             "area": explicit_area,
             "period": "2026",
-            "auditor": (
-                explicit_auditor
-            ),
-            "summary": (
-                f"Informe {filename} "
-                f"procesado con "
-                f"{len(relational_findings)} "
-                f"hallazgos."
-            ),
+            "auditor": explicit_auditor,
+            "summary": f"Informe {filename} procesado con {len(relational_findings)} hallazgos.",
+            "source_filename": filename
         },
-        "findings": (
-            relational_findings
-        ),
+        "findings": relational_findings
     }
