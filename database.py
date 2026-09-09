@@ -83,7 +83,7 @@ def init_db():
             responsible_area TEXT,
             action_owner TEXT,
             target_date TEXT,
-            status TEXT DEFAULT 'En proceso',
+            status TEXT DEFAULT 'Pendiente',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (finding_id) REFERENCES findings (id) ON DELETE CASCADE
@@ -100,7 +100,7 @@ def init_db():
             action_text TEXT NOT NULL,
             action_owner TEXT,
             target_date TEXT,
-            status TEXT DEFAULT 'En proceso',
+            status TEXT DEFAULT 'Pendiente',
             progress_pct INTEGER DEFAULT 0,
             notes TEXT,
             evidence_file TEXT,
@@ -164,6 +164,16 @@ def get_history_logs(entity_type=None, entity_id=None):
 
 
 def save_relational_report_structure(report_data, findings_hierarchy, source_filename=""):
+    """
+    Guarda la relación Informe -> Hallazgos -> Propuestas -> Planes.
+
+    Reglas:
+    - No inventa riesgo si no viene informado.
+    - No inventa fecha compromiso.
+    - No inventa planes de acción.
+    - Una propuesta puede existir sin plan.
+    - Un hallazgo puede tener múltiples propuestas.
+    """
     init_db()
     conn = get_db()
     cursor = conn.cursor()
@@ -208,7 +218,7 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
 
         f_title = (f_item.get("title") or "Observación de Auditoría").strip()
         situation = (f_item.get("situation") or f_title).strip()
-        risk = (f_item.get("risk") or "Riesgo de control interno.").strip()
+        risk = (f_item.get("risk") or "").strip()
         severity = (f_item.get("severity") or "Medio").strip()
         if severity.lower() in ("alto", "alta"):
             severity = "Alto"
@@ -218,7 +228,7 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
             severity = "Medio"
 
         responsible_area = (f_item.get("responsible_area") or area).strip()
-        action_owner = (f_item.get("action_owner") or "Responsable del Área").strip()
+        action_owner = (f_item.get("action_owner") or "Pendiente de definir").strip()
         status = (f_item.get("status") or "Pendiente").strip()
 
         cursor.execute("""
@@ -240,8 +250,8 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
 
             p_title = (p_item.get("title") or f"Propuesta para {f_title}").strip()
             p_text = (p_item.get("proposal_text") or p_item.get("proposal") or p_title).strip()
-            p_target_date = (p_item.get("target_date") or "2026-10-31").strip()
-            p_status = (p_item.get("status") or "En proceso").strip()
+            p_target_date = (p_item.get("target_date") or "").strip()
+            p_status = (p_item.get("status") or "Pendiente").strip()
 
             cursor.execute("""
                 INSERT INTO proposals (id, finding_id, code, title, proposal_text, severity, responsible_area, action_owner, target_date, status)
@@ -250,17 +260,10 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
 
             add_history_log("proposal", proposal_id, auditor, f"Creación de propuesta {p_code} vinculada a {f_code}", cursor=cursor)
 
-            # Planes de Acción asociados a esta Propuesta
+            # Planes de Acción asociados a esta Propuesta.
+            # AuditTrack no inventa planes de acción: solo crea los que
+            # vienen explícitamente en la estructura validada.
             plans_list = p_item.get("action_plans") or []
-            if not plans_list and (p_item.get("action_text") or p_status != "Pendiente"):
-                plans_list = [{
-                    "title": f"Plan de acción para {p_code}",
-                    "action_text": p_item.get("action_text") or f"Ejecutar implementación de {p_title}",
-                    "target_date": p_target_date,
-                    "action_owner": action_owner,
-                    "progress_pct": 25 if p_status == "En proceso" else 0,
-                    "status": "En proceso" if p_status == "En proceso" else "Pendiente"
-                }]
 
             for pa_item in plans_list:
                 plan_id = str(uuid.uuid4())
@@ -272,7 +275,7 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
                 pa_owner = (pa_item.get("action_owner") or action_owner).strip()
                 pa_date = (pa_item.get("target_date") or p_target_date).strip()
                 pa_pct = int(pa_item.get("progress_pct") or 0)
-                pa_status = (pa_item.get("status") or "En proceso").strip()
+                pa_status = (pa_item.get("status") or "Pendiente").strip()
                 pa_notes = (pa_item.get("notes") or "").strip()
                 pa_evidence = (pa_item.get("evidence_file") or "").strip()
 
