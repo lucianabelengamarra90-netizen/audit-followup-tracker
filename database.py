@@ -28,13 +28,6 @@ def init_db():
         cursor.execute("DROP TABLE IF EXISTS audit_history")
         conn.commit()
 
-    # Migrate: add observations column if missing
-    cursor.execute("PRAGMA table_info(findings)")
-    finding_cols = [r['name'] for r in cursor.fetchall()]
-    if 'observations' not in finding_cols:
-        cursor.execute("ALTER TABLE findings ADD COLUMN observations TEXT DEFAULT ''")
-        conn.commit()
-
     # 1. Informes (Registro Padre)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reports (
@@ -70,6 +63,13 @@ def init_db():
             FOREIGN KEY (report_id) REFERENCES reports (id) ON DELETE CASCADE
         )
     """)
+
+    # Migrate: add observations column if missing in existing databases
+    cursor.execute("PRAGMA table_info(findings)")
+    finding_cols = [r['name'] for r in cursor.fetchall()]
+    if finding_cols and 'observations' not in finding_cols:
+        cursor.execute("ALTER TABLE findings ADD COLUMN observations TEXT DEFAULT ''")
+        conn.commit()
 
     # 3. Propuestas de Mejora
     cursor.execute("""
