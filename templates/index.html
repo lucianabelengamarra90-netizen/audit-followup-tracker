@@ -107,17 +107,8 @@
                 <div class="view-header">
                     <div>
                         <h2>Historial de Informes de Auditoría</h2>
-                        <p>Gestión e historial de informes cargados con trazabilidad relacional.</p>
+                        <p>Historial y registro de informes de auditoría cargados previamente.</p>
                     </div>
-                </div>
-
-                <div class="card">
-                    <div id="dropZone" class="drop-zone" onclick="document.getElementById('reportInput').click()">
-                        <div class="drop-icon">↑</div>
-                        <p><strong>Hacé clic para seleccionar</strong> o arrastrá tu informe de auditoría acá</p>
-                        <span style="font-size: 12px; color: #64748B;">Formatos soportados: PDF (.pdf), Word (.docx), Excel (.xlsx), CSV (.csv) y Texto (.txt)</span>
-                    </div>
-                    <input type="file" id="reportInput" hidden accept=".pdf,.docx,.xlsx,.csv,.txt" onchange="uploadAuditReport(this.files[0])">
                 </div>
 
                 <div class="card">
@@ -160,9 +151,18 @@
 
                     <div class="view-actions">
                         <button class="btn btn-primary" onclick="document.getElementById('reportInputMainTab').click()">📤 Subir Informe de Auditoría</button>
-                        <input type="file" id="reportInputMainTab" hidden accept=".pdf,.docx,.xlsx,.csv,.txt" onchange="uploadAuditReport(this.files[0])">
+                        <input type="file" id="reportInputMainTab" hidden accept=".pdf,.docx,.doc,.xlsx,.csv,.txt" onchange="uploadAuditReport(this.files[0])">
                         <button class="btn btn-outlined" onclick="exportExcelReport()">↓ Exportar Excel</button>
                         <button class="btn btn-outlined" onclick="toggleFilterBar()">⚙️ Filtros</button>
+                    </div>
+                </div>
+
+                <!-- Dropzone de Carga en Vista Inicial -->
+                <div class="card" style="margin-bottom: 16px;">
+                    <div id="dropZone" class="drop-zone" onclick="document.getElementById('reportInputMainTab').click()">
+                        <div class="drop-icon">↑</div>
+                        <p><strong>Hacé clic para seleccionar</strong> o arrastrá tu informe de auditoría acá</p>
+                        <span style="font-size: 12px; color: #64748B;">Formatos soportados: Word (.docx/.doc), PDF (.pdf), Excel (.xlsx), CSV (.csv) y Texto (.txt)</span>
                     </div>
                 </div>
 
