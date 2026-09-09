@@ -29,7 +29,13 @@ def clean_text(value):
 
 def get_openai_client():
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    return OpenAI(api_key=api_key) if api_key else None
+    if not api_key:
+        return None
+    try:
+        return OpenAI(api_key=api_key)
+    except Exception as exc:
+        print(f"Error instanciando cliente OpenAI: {exc}")
+        return None
 
 
 def extract_explicit_area(raw_text):
