@@ -735,13 +735,7 @@ de acción son conceptos diferentes.
 """
 
     try:
-        response = client.responses.parse(
-            model=os.getenv(
-                "OPENAI_AUDIT_MODEL",
-                "gpt-4o"
-            ),
-            instructions=instructions,
-            input=f"""
+        user_prompt = f"""
 Analizá este bloque de un informe de Auditoría Interna.
 
 TÍTULO PRELIMINAR DETECTADO:
@@ -765,17 +759,20 @@ Los valores preliminares fueron obtenidos mediante reglas heurísticas.
 Usalos únicamente como referencia.
 
 La fuente original prevalece sobre cualquier dato preliminar.
-""",
-            text_format=AuditAnalysis,
+"""
+        response = client.beta.chat.completions.parse(
+            model=os.getenv("OPENAI_AUDIT_MODEL", "gpt-4o"),
+            messages=[
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format=AuditAnalysis,
         )
 
-        return response.output_parsed
+        return response.choices[0].message.parsed
 
     except Exception as exc:
-        print(
-            f"[IA Analista] Error: {exc}"
-        )
-
+        print(f"[IA Analista] Error de API u OpenAI sin crédito: {exc}")
         return None
 
 
@@ -841,13 +838,7 @@ No agregar información nueva durante la corrección.
 """
 
     try:
-        response = client.responses.parse(
-            model=os.getenv(
-                "OPENAI_AUDIT_REVIEW_MODEL",
-                "gpt-4o"
-            ),
-            instructions=instructions,
-            input=f"""
+        user_prompt = f"""
 TEXTO FUENTE ORIGINAL
 
 --- INICIO FUENTE ---
@@ -867,17 +858,20 @@ RESULTADO GENERADO POR LA PRIMERA IA
 
 
 Revisá exclusivamente la trazabilidad, consistencia y calidad del resultado.
-""",
-            text_format=AuditReview,
+"""
+        response = client.beta.chat.completions.parse(
+            model=os.getenv("OPENAI_AUDIT_REVIEW_MODEL", "gpt-4o"),
+            messages=[
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format=AuditReview,
         )
 
-        return response.output_parsed
+        return response.choices[0].message.parsed
 
     except Exception as exc:
-        print(
-            f"[IA Revisora] Error: {exc}"
-        )
-
+        print(f"[IA Revisora] Error de API u OpenAI sin crédito: {exc}")
         return None
 
 
@@ -1559,6 +1553,71 @@ def _parse_tabular_findings(
     return findings
 
 
+def _extract_heuristic_paragraph_findings(raw_text, explicit_area="Operaciones"):
+    lines = [clean_text(l) for l in raw_text.splitlines() if clean_text(l)]
+    valid_lines = [l for l in lines if len(l) > 15 and not _is_non_finding_header(normalize_text(l))]
+
+    if not valid_lines:
+        return []
+
+    findings = []
+    chunk = []
+    chunk_len = 0
+    chunk_idx = 1
+
+    for line in valid_lines:
+        chunk.append(line)
+        chunk_len += len(line)
+        if chunk_len >= 300:
+            full_block = " ".join(chunk)
+            title = chunk[0][:90]
+            findings.append({
+                "title": title,
+                "situation": full_block,
+                "proposal": "",
+                "proposals_ai": [],
+                "risk": "",
+                "severity": "Medio",
+                "responsible_area": explicit_area,
+                "evidence": "",
+                "cause": "",
+                "affected_process_or_control": "",
+                "impact": "",
+                "ai_confidence": 0,
+                "ai_validated": False,
+                "ai_status": "Fallback heurístico (Párrafos)",
+                "source_text": full_block,
+                "source_location": f"Párrafo / Bloque {chunk_idx}"
+            })
+            chunk_idx += 1
+            chunk = []
+            chunk_len = 0
+
+    if chunk:
+        full_block = " ".join(chunk)
+        title = chunk[0][:90]
+        findings.append({
+            "title": title,
+            "situation": full_block,
+            "proposal": "",
+            "proposals_ai": [],
+            "risk": "",
+            "severity": "Medio",
+            "responsible_area": explicit_area,
+            "evidence": "",
+            "cause": "",
+            "affected_process_or_control": "",
+            "impact": "",
+            "ai_confidence": 0,
+            "ai_validated": False,
+            "ai_status": "Fallback heurístico (Párrafos)",
+            "source_text": full_block,
+            "source_location": f"Párrafo / Bloque {chunk_idx}"
+        })
+
+    return findings[:10]
+
+
 def _extract_findings_directly_via_ai(raw_text, filename):
     client = _get_openai_client()
     if not client:
@@ -1622,6 +1681,8 @@ def parse_audit_report(
         ai_direct_findings = _extract_findings_directly_via_ai(raw_text, filename)
         if ai_direct_findings:
             extracted_findings = ai_direct_findings
+        else:
+            extracted_findings = _extract_heuristic_paragraph_findings(raw_text, parsed.get("area", "Operaciones"))
 
     report_title = parsed.get(
         "report_title",
