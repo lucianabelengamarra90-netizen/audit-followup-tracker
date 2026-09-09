@@ -3,3 +3,5 @@ openpyxl==3.1.5
 python-docx==1.1.2
 pypdf==4.3.1
 gunicorn==22.0.0
+openai>=2.0.0
+pydantic>=2.0.0
