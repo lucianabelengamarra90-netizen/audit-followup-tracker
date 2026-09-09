@@ -93,48 +93,62 @@ def rewrite_audit_text(raw_narrative, is_proposal=False):
     if not cleaned:
         return "Pendiente de definir"
 
-    words = cleaned.split()
-    if len(words) <= 25 and len(words) >= 8:
-        return cleaned
-
     openai_client = get_openai_client()
     if openai_client:
-        prompt_role = "Propuesta de Mejora (Recomendación)" if is_proposal else "Hallazgo (Situación Observada)"
-        sys_prompt = (
-            "Actuá como un Editor Senior de Auditoría Interna. Tu tarea es analizar el bloque completo del informe y redactar "
-            f"una {prompt_role} concisa, ejecutiva, profesional y objetiva. "
-            "REGLAS OBLIGATORIAS:\n"
-            "1. DEBE tener entre 1 y 3 líneas (20 a 40 palabras).\n"
-            "2. Jamás devuelvas títulos incompletos de 2 o 3 palabras (Ej. NO escribir 'Posible hurto', 'Vida útil', 'Diferencias Gift Cards').\n"
-            "3. En Hallazgos, explicá concretamente qué ocurrió, sobre qué proceso/elemento y la desviación observada.\n"
-            "4. Filtrá frases administrativas de trámite ('Se vio con el área...', 'Se conversó con...').\n"
-            "5. NO inventes soluciones de Inteligencia Artificial ni sistemas automatizados no mencionados en el informe.\n"
-            "6. Devuelvé únicamente el texto mejorado sin comillas ni encabezados extra."
-        )
+        if is_proposal:
+            sys_prompt = (
+                "Sos un Editor Senior de Auditoría Interna. Reescribí completamente el siguiente texto como una "
+                "Propuesta de Mejora profesional y ejecutiva.\n"
+                "REGLAS OBLIGATORIAS:\n"
+                "1. NO copies frases textuales del informe original. Reformulá con tus propias palabras.\n"
+                "2. Redactá entre 25 y 50 palabras. Debe ser concisa pero suficientemente descriptiva.\n"
+                "3. Empezá con un verbo en infinitivo (Implementar, Establecer, Diseñar, Fortalecer, etc.).\n"
+                "4. Incluí: qué acción tomar, sobre qué proceso/elemento, y el objetivo esperado.\n"
+                "5. NO inventes tecnologías, IA ni sistemas no mencionados en el informe.\n"
+                "6. Evitá frases genéricas vacías. Sé específico y accionable.\n"
+                "7. Devolvé únicamente el texto reescrito, sin comillas, sin encabezados, sin numeración."
+            )
+        else:
+            sys_prompt = (
+                "Sos un Editor Senior de Auditoría Interna. Reescribí completamente el siguiente texto como un "
+                "Hallazgo de auditoría profesional, claro y ejecutivo.\n"
+                "REGLAS OBLIGATORIAS:\n"
+                "1. NO copies frases textuales del informe original. Reformulá con tus propias palabras.\n"
+                "2. Redactá entre 25 y 50 palabras. Conciso pero que se entienda el problema.\n"
+                "3. Describí concretamente: qué se observó, en qué proceso/área, y cuál es la desviación o riesgo.\n"
+                "4. Filtrá frases administrativas ('Se vio con el área...', 'Se conversó con...', 'Según reunión...').\n"
+                "5. NO inventes datos ni soluciones. Solo describí la situación observada.\n"
+                "6. Usá un tono objetivo, profesional y directo.\n"
+                "7. Devolvé únicamente el texto reescrito, sin comillas, sin encabezados, sin numeración."
+            )
         try:
             response = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": cleaned}
+                    {"role": "user", "content": f"Texto original del informe:\n\n{cleaned}"}
                 ],
-                temperature=0.2,
-                max_tokens=120
+                temperature=0.4,
+                max_tokens=150
             )
             rewritten = clean_text(response.choices[0].message.content)
-            if rewritten and len(rewritten.split()) >= 6:
+            if rewritten and len(rewritten.split()) >= 8:
                 return rewritten
         except Exception as exc:
             print(f"Error reescribiendo con IA: {exc}")
 
-    # Fallback heurístico
+    # Fallback heurístico: tomar las primeras oraciones relevantes
+    words = cleaned.split()
+    if len(words) <= 50 and len(words) >= 8:
+        return cleaned
+
     sentences = [s.strip() for s in re.split(r"[.!?]\s+", cleaned) if len(s.strip().split()) >= 5]
     if not sentences:
         sentences = [cleaned]
-    res = " ".join(sentences[:2])
+    res = ". ".join(sentences[:2])
     res_words = res.split()
-    if len(res_words) > 35:
-        res = " ".join(res_words[:35]) + "..."
+    if len(res_words) > 45:
+        res = " ".join(res_words[:45]) + "..."
     return res + ("." if not res.endswith(".") else "")
 
 
