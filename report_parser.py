@@ -5,6 +5,8 @@ import csv
 import io
 import uuid
 import hashlib
+import zipfile
+import xml.etree.ElementTree as ET
 from typing import Optional, List
 
 from openpyxl import load_workbook
@@ -157,6 +159,30 @@ def extract_explicit_auditor(raw_text):
 # EXTRACCIÓN DE TEXTO DE ARCHIVOS
 # ============================================================
 
+def extract_docx_xml_deep(file_path):
+    text_parts = []
+    try:
+        with zipfile.ZipFile(file_path, 'r') as z:
+            for name in z.namelist():
+                if name.startswith("word/") and name.endswith(".xml"):
+                    try:
+                        xml_bytes = z.read(name)
+                        root = ET.fromstring(xml_bytes)
+                        for elem in root.iter():
+                            if elem.tag.endswith('}t') and elem.text:
+                                text_parts.append(elem.text.strip())
+                            elif elem.tag.endswith('}p') or elem.tag.endswith('}tr'):
+                                text_parts.append("\n")
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"[Parser] Excepción en extracción XML de ZIP: {e}")
+
+    raw_res = " ".join(text_parts)
+    lines = [clean_text(l) for l in raw_res.splitlines() if clean_text(l)]
+    return "\n".join(lines)
+
+
 def extract_raw_text_from_file(file_path):
     ext = (
         file_path.rsplit(".", 1)[-1].lower()
@@ -167,6 +193,7 @@ def extract_raw_text_from_file(file_path):
     text_content = ""
 
     if ext in ("docx", "doc"):
+        # Tier 1: python-docx (párrafos, tablas y encabezados)
         try:
             doc = Document(file_path)
 
@@ -198,6 +225,14 @@ def extract_raw_text_from_file(file_path):
             text_content = "\n".join(paragraphs)
 
         except Exception as exc:
+            print(f"[Parser] python-docx aviso en {file_path}: {exc}")
+
+        # Tier 2: Extracción profunda XML del archivo ZIP (cuadros de texto, formas, marcos)
+        if not text_content.strip():
+            text_content = extract_docx_xml_deep(file_path)
+
+        # Tier 3: Fallback de decodificación directa de cadenas para archivos binarios (.doc)
+        if not text_content.strip():
             try:
                 with open(file_path, "rb") as f_raw:
                     raw_b = f_raw.read()
@@ -205,7 +240,7 @@ def extract_raw_text_from_file(file_path):
                 printable = re.findall(r'[A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s\.,;:!\?\-\(\)\$/]{4,}', decoded)
                 text_content = "\n".join([p.strip() for p in printable if len(p.strip()) > 5])
             except Exception:
-                raise ValueError(f"No se pudo leer el documento Word (.docx/.doc): {str(exc)}")
+                pass
 
     elif ext == "pdf":
         try:
