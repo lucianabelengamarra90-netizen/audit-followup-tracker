@@ -216,16 +216,64 @@ def _detect_severity(text):
     return "Medio"
 
 
+def _clean_finding_title(raw_title):
+    """
+    Limpia el título del hallazgo:
+    - Quita prefijos como "Hallazgo 1:", "Observación N°3:", "Hallazgo 1 -", etc.
+    - Limita a ~80 caracteres
+    - Capitaliza la primera letra
+    """
+    title = clean_text(raw_title)
+    # Quitar prefijo "Hallazgo 1:", "Observación N°3 -", "Punto 2.", etc.
+    title = re.sub(
+        r"^(?:hallazgo|observaci[oó]n|desviaci[oó]n|punto|ítem|item)\s*(?:n[°º]?\s*)?\d*\s*[:\-\.]\s*",
+        "", title, flags=re.IGNORECASE
+    ).strip()
+    if not title:
+        return raw_title[:80]
+    # Limitar longitud
+    if len(title) > 80:
+        # Cortar en el último espacio antes del límite
+        cut = title[:80].rfind(" ")
+        title = title[:cut] if cut > 20 else title[:80]
+    # Capitalizar primera letra
+    if title:
+        title = title[0].upper() + title[1:]
+    return title
+
+
+def _summarize_text(text, max_chars=500):
+    """
+    Toma el texto acumulado y devuelve un resumen acotado:
+    - Las primeras oraciones que quepan en max_chars
+    - Corta en punto o en el último espacio
+    """
+    text = clean_text(text)
+    if len(text) <= max_chars:
+        return text
+
+    # Buscar el último punto dentro del límite
+    truncated = text[:max_chars]
+    last_period = truncated.rfind(".")
+    if last_period > max_chars * 0.4:  # Si hay un punto razonable
+        return truncated[:last_period + 1]
+
+    # Sino, cortar en el último espacio
+    last_space = truncated.rfind(" ")
+    if last_space > 20:
+        return truncated[:last_space] + "..."
+    return truncated + "..."
+
+
 def parse_document(raw_text, filename):
     """
     Parser inteligente que extrae hallazgos y propuestas de mejora del texto.
     
     Estrategia:
     1. Recorre el documento línea por línea
-    2. Cuando detecta el inicio de un hallazgo, comienza a acumular texto
-    3. Cuando detecta una propuesta de mejora dentro del bloque del hallazgo,
-       la asocia al hallazgo actual
-    4. Filtra secciones administrativas (Alcance, Metodología, etc.)
+    2. Cuando detecta el inicio de un hallazgo, acumula el texto
+    3. Cuando detecta una propuesta de mejora, la asocia al hallazgo actual
+    4. Al finalizar, limpia y acota el texto de cada hallazgo
     """
     explicit_area = extract_explicit_area(raw_text)
     explicit_auditor = extract_explicit_auditor(raw_text)
@@ -249,7 +297,6 @@ def parse_document(raw_text, filename):
 
         # Ignorar secciones administrativas
         if _is_non_finding_header(norm) and len(line) < 120:
-            # Si estábamos en un hallazgo, guardarlo antes de saltar
             if current_finding:
                 findings.append(current_finding)
                 current_finding = None
@@ -258,14 +305,13 @@ def parse_document(raw_text, filename):
 
         # ¿Es inicio de un nuevo hallazgo?
         if _looks_like_finding_start(line, norm):
-            # Guardar el anterior si existe
             if current_finding:
                 findings.append(current_finding)
 
             current_finding = {
-                "title": line[:120],
-                "situation": "",
-                "proposal": "",
+                "raw_title": line,      # Título bruto para limpiar después
+                "situation_lines": [],  # Acumular líneas de situación
+                "proposal_lines": [],   # Acumular líneas de propuesta
                 "severity": _detect_severity(line),
                 "responsible_area": explicit_area,
             }
@@ -275,40 +321,52 @@ def parse_document(raw_text, filename):
         # ¿Es inicio de una propuesta de mejora?
         if current_finding and _looks_like_proposal_start(line, norm):
             proposal_text = _extract_after_keyword(line, norm)
-            current_finding["proposal"] = proposal_text
+            current_finding["proposal_lines"].append(proposal_text)
             reading_proposal = True
             continue
 
         # Acumular texto en el hallazgo actual
         if current_finding:
             if reading_proposal:
-                # Seguir agregando líneas a la propuesta
-                # Pero si la línea parece un nuevo título/sección, parar
                 if len(line) < 80 and line.endswith(":"):
                     reading_proposal = False
-                    current_finding["situation"] += " " + line
+                    current_finding["situation_lines"].append(line)
                 else:
-                    current_finding["proposal"] += " " + line
+                    current_finding["proposal_lines"].append(line)
             else:
-                current_finding["situation"] += " " + line
+                current_finding["situation_lines"].append(line)
 
     # Guardar el último hallazgo
     if current_finding:
         findings.append(current_finding)
 
     # ── EXCEL ESPECIAL: buscar hallazgos en filas tabulares ──
-    # Si no encontramos hallazgos con el approach anterior,
-    # intentamos con parsing tabular (típico de Excel)
     if not findings and "|" in raw_text:
         findings = _parse_tabular_findings(lines, explicit_area)
+    else:
+        # ── Post-procesamiento: limpiar y acotar textos ──
+        cleaned_findings = []
+        for f in findings:
+            raw_title = f.get("raw_title", "")
+            situation_full = " ".join(f.get("situation_lines", []))
+            proposal_full = " ".join(f.get("proposal_lines", []))
 
-    # Limpiar textos
-    for f in findings:
-        f["title"] = clean_text(f["title"])
-        f["situation"] = clean_text(f["situation"]) or f["title"]
-        f["proposal"] = clean_text(f["proposal"])
-        if not f["proposal"]:
-            f["proposal"] = f"Implementar medidas de control y mejora para: {f['title'][:60]}."
+            title = _clean_finding_title(raw_title)
+            situation = _summarize_text(situation_full, max_chars=500)
+            if not situation:
+                situation = title
+            proposal = _summarize_text(proposal_full, max_chars=400)
+            if not proposal:
+                proposal = f"Implementar medidas de control y mejora para: {title[:60]}."
+
+            cleaned_findings.append({
+                "title": title,
+                "situation": situation,
+                "proposal": proposal,
+                "severity": f.get("severity", "Medio"),
+                "responsible_area": f.get("responsible_area", explicit_area),
+            })
+        findings = cleaned_findings
 
     print(f"[Parser] Documento '{filename}': {len(findings)} hallazgos encontrados")
     for i, f in enumerate(findings, 1):
