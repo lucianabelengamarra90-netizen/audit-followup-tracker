@@ -1570,3 +1570,55 @@ document.addEventListener("DOMContentLoaded", () => {
     switchTab("informes");
     loadAllData();
 });
+// ============================================================
+// SCROLL HORIZONTAL STICKY PARA TABLA AUDITTRACK
+// ============================================================
+
+function initAuditStickyScroll() {
+    const tableCard = document.querySelector(".table-card");
+    const table = document.querySelector(".audittrack-table");
+
+    if (!tableCard || !table) return;
+
+    let stickyScroll = document.getElementById("auditStickyScroll");
+
+    if (!stickyScroll) {
+        stickyScroll = document.createElement("div");
+        stickyScroll.id = "auditStickyScroll";
+
+        const inner = document.createElement("div");
+        inner.id = "auditStickyScrollInner";
+
+        stickyScroll.appendChild(inner);
+        document.body.appendChild(stickyScroll);
+    }
+
+    const inner = document.getElementById("auditStickyScrollInner");
+
+    function refreshStickyWidth() {
+        inner.style.width = `${table.scrollWidth}px`;
+    }
+
+    refreshStickyWidth();
+
+    let syncingFromTable = false;
+    let syncingFromSticky = false;
+
+    tableCard.addEventListener("scroll", () => {
+        if (syncingFromSticky) return;
+
+        syncingFromTable = true;
+        stickyScroll.scrollLeft = tableCard.scrollLeft;
+        syncingFromTable = false;
+    });
+
+    stickyScroll.addEventListener("scroll", () => {
+        if (syncingFromTable) return;
+
+        syncingFromSticky = true;
+        tableCard.scrollLeft = stickyScroll.scrollLeft;
+        syncingFromSticky = false;
+    });
+
+    window.addEventListener("resize", refreshStickyWidth);
+}
