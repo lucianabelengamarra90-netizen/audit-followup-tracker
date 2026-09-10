@@ -1730,3 +1730,108 @@ body:has(#drawerFindingDetail[style*="flex"]) #auditStickyScroll {
     color: #94a3b8 !important;
     font-size: 12px !important;
 }
+/* ============================================================
+   DRAWER - EDICIÓN DE PROPUESTAS
+   ============================================================ */
+
+.drawer-proposal-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.drawer-proposal-code {
+    font-size: 11px;
+    font-weight: 700;
+    color: #15803d;
+    margin-bottom: 8px;
+}
+
+.drawer-proposal-text {
+    font-size: 12px;
+    line-height: 1.55;
+    color: #334155;
+    white-space: pre-wrap;
+}
+
+.drawer-edit-field {
+    width: 100%;
+    min-height: 110px;
+    resize: vertical;
+
+    border: 1px solid #cbd5e1;
+    border-radius: 9px;
+
+    background: #ffffff;
+    color: #0f172a;
+
+    padding: 10px 12px;
+
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+
+    box-sizing: border-box;
+}
+
+.drawer-edit-field:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
+}
+
+.drawer-edit-actions {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 10px;
+}
+
+.drawer-save-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    border: none;
+    border-radius: 7px;
+
+    background: #0055d4;
+    color: #ffffff;
+
+    padding: 7px 12px;
+
+    font-size: 11px;
+    font-weight: 600;
+
+    cursor: pointer;
+}
+
+.drawer-save-btn:hover {
+    background: #0047b3;
+}
+
+.drawer-cancel-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+
+    background: #ffffff;
+    color: #475569;
+
+    padding: 7px 12px;
+
+    font-size: 11px;
+    font-weight: 600;
+
+    cursor: pointer;
+}
+
+.drawer-cancel-btn:hover {
+    background: #f8fafc;
+}
