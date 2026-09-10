@@ -293,99 +293,252 @@ function filterAndRenderAll() {
 function renderAuditTrackTable(items) {
     const tbody = el("auditTrackTableBody");
     const countSpan = el("showingRecordsCount");
+
     if (!tbody) return;
 
     if (countSpan) {
-        countSpan.textContent = `Mostrando ${items.length} de ${currentFindings.length} hallazgos`;
+        countSpan.textContent =
+            `Mostrando ${items.length} de ${currentFindings.length} hallazgos`;
     }
 
     if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="13" style="text-align: center; color: #64748b; padding: 36px;">No hay hallazgos con los filtros aplicados. Cargar informe arriba.</td></tr>`;
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="13" class="audit-empty-state">
+                    No hay hallazgos con los filtros aplicados.
+                </td>
+            </tr>
+        `;
         return;
     }
 
     let html = "";
-    items.forEach((item) => {
-        const filename = item.source_filename || "Informe.xlsx";
-        const proposalsToRender = (item.proposals && item.proposals.length > 0) ? item.proposals : [null];
 
-        proposalsToRender.forEach((prop) => {
-            const propCodeCell = prop
-                ? `<a href="#" class="id-cell" style="color: #16A34A; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(prop.code)}</a>`
-                : `<span style="color:#94A3B8; font-size:11px;">Sin propuesta</span>`;
+    items.forEach(item => {
 
-            const propText = prop ? (prop.proposal_text || prop.title) : "";
-            let firstAction = (prop && prop.action_plans && prop.action_plans.length > 0) ? prop.action_plans[0] : null;
-            let owner = (prop && prop.action_owner) ? prop.action_owner : (firstAction ? firstAction.action_owner : (item.action_owner || "Sin asignar"));
-            let targetDate = (prop && prop.target_date) ? prop.target_date : (firstAction ? firstAction.target_date : "");
-            let status = (prop && prop.status) ? prop.status : (item.status || "Pendiente");
-            let pct = firstAction ? (firstAction.progress_pct || 0) : 0;
-            let observations = item.observations || "";
+        const filename =
+            item.source_filename || "Informe.xlsx";
 
-            const currentRisk = item.severity || "Medio";
-            const badgeClass = currentRisk === "Alto" ? "risk-badge-alto" : (currentRisk === "Bajo" ? "risk-badge-bajo" : "risk-badge-medio");
+        const proposals =
+            item.proposals && item.proposals.length
+                ? item.proposals
+                : [null];
 
-            const riskSelectHtml = `<select class="inline-select inline-select-risk ${badgeClass}" data-finding-id="${item.id}" data-field="severity" onchange="inlineUpdateFindingRisk(this)">
-                <option value="Alto" ${currentRisk === 'Alto' ? 'selected' : ''}>Alto</option>
-                <option value="Medio" ${currentRisk === 'Medio' ? 'selected' : ''}>Medio</option>
-                <option value="Bajo" ${currentRisk === 'Bajo' ? 'selected' : ''}>Bajo</option>
-            </select>`;
+        proposals.forEach(prop => {
 
-            const statusOptions = ["En proceso", "En suspensión", "Finalizado"];
-            const statusSelectHtml = `<select class="inline-select inline-select-status" data-finding-id="${item.id}" data-proposal-id="${prop ? prop.id : ''}" data-field="status" onchange="inlineUpdateStatus(this)">
-                ${statusOptions.map(s => `<option value="${s}" ${s === status ? 'selected' : ''}>${s}</option>`).join('')}
-            </select>`;
+            const firstAction =
+                prop &&
+                prop.action_plans &&
+                prop.action_plans.length
+                    ? prop.action_plans[0]
+                    : null;
 
-            const propTextCell = prop
-                ? `<div class="truncate-2-lines" style="color:#16A34A; font-weight:500;" title="${escapeHtml(propText)}">💡 ${escapeHtml(propText)}</div>`
-                : `<button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')">+ Agregar Propuesta</button>`;
+            const proposalText =
+                prop
+                    ? (prop.proposal_text || prop.title || "")
+                    : "";
+
+            const owner =
+                (prop && prop.action_owner) ||
+                (firstAction && firstAction.action_owner) ||
+                item.action_owner ||
+                "";
+
+            const targetDate =
+                (prop && prop.target_date) ||
+                (firstAction && firstAction.target_date) ||
+                "";
+
+            const status =
+                (prop && prop.status) ||
+                item.status ||
+                "Pendiente";
+
+            const progress =
+                firstAction
+                    ? (firstAction.progress_pct || 0)
+                    : 0;
+
+            const observations =
+                item.observations || "";
+
+            const risk =
+                item.severity || "Medio";
+
+            const riskClass =
+                risk.toLowerCase() === "alto"
+                    ? "audit-risk-high"
+                    : risk.toLowerCase() === "bajo"
+                    ? "audit-risk-low"
+                    : "audit-risk-medium";
+
+            const statusClass =
+                status.toLowerCase().includes("final")
+                    ? "audit-status-done"
+                    : status.toLowerCase().includes("susp")
+                    ? "audit-status-suspended"
+                    : "audit-status-progress";
+
+            const proposalCode = prop
+                ? `
+                    <span class="audit-proposal-id">
+                        ${escapeHtml(prop.code)}
+                    </span>
+                  `
+                : `
+                    <span class="audit-muted">
+                        —
+                    </span>
+                  `;
+
+            const proposalCell = prop
+                ? `
+                    <div class="audit-proposal-text">
+                        ${escapeHtml(proposalText)}
+                    </div>
+                  `
+                : `
+                    <span class="audit-no-data">
+                        Sin propuesta
+                    </span>
+                  `;
+
+            const ownerCell = owner
+                ? escapeHtml(owner)
+                : `<span class="audit-no-data">Sin asignar</span>`;
+
+            const dateCell = targetDate
+                ? formatAuditDate(targetDate)
+                : `<span class="audit-no-data">Sin fecha</span>`;
+
+            const observationsCell = observations
+                ? `
+                    <div class="audit-observation">
+                        ${escapeHtml(observations)}
+                    </div>
+                  `
+                : `
+                    <span class="audit-no-data">—</span>
+                  `;
 
             html += `
-                <tr data-row-id="${item.id}">
-                    <td style="font-weight: 700; color: #1E293B;">${escapeHtml(item.responsible_area || 'Pendiente de definir')}</td>
+                <tr class="audit-main-row"
+                    data-row-id="${item.id}">
+
                     <td>
-                        <a href="#" class="id-cell" style="color: #0055D4; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(item.code)}</a>
-                    </td>
-                    <td>
-                        <strong style="color: #0F172A; cursor:pointer;" onclick="openFindingDrawer('${item.id}')">${escapeHtml(item.title)}</strong>
-                        <div class="truncate-2-lines" style="font-size: 11px; color: #64748B; margin-top: 3px;" title="${escapeHtml(item.situation)}">${escapeHtml(item.situation)}</div>
-                    </td>
-                    <td>${propCodeCell}</td>
-                    <td>${propTextCell}</td>
-                    <td>
-                        <div class="file-cell">
-                            <span>📄</span>
-                            <span style="font-size:11px;">${escapeHtml(filename)}</span>
+                        <div class="audit-area">
+                            ${escapeHtml(
+                                item.responsible_area ||
+                                "Pendiente de definir"
+                            )}
                         </div>
                     </td>
-                    <td>${riskSelectHtml}</td>
+
                     <td>
-                        <input type="text" class="inline-input" value="${escapeHtml(owner)}"
-                            data-finding-id="${item.id}" data-proposal-id="${prop ? prop.id : ''}" data-field="action_owner"
-                            onchange="inlineUpdateOwner(this)" placeholder="Responsable" />
+                        <button
+                            class="audit-id-link"
+                            onclick="openFindingDrawer('${item.id}')">
+                            ${escapeHtml(item.code)}
+                        </button>
                     </td>
+
                     <td>
-                        <input type="date" class="inline-input" value="${escapeHtml(targetDate)}"
-                            data-finding-id="${item.id}" data-proposal-id="${prop ? prop.id : ''}" data-field="target_date"
-                            onchange="inlineUpdateDate(this)" />
+                        <div class="audit-finding-title">
+                            ${escapeHtml(item.title || "")}
+                        </div>
+
+                        ${
+                            item.situation &&
+                            item.situation !== item.title
+                                ? `
+                                <div class="audit-finding-description">
+                                    ${escapeHtml(item.situation)}
+                                </div>
+                                `
+                                : ""
+                        }
                     </td>
-                    <td>${statusSelectHtml}</td>
+
                     <td>
-                        <div style="display:flex; align-items:center; gap:4px;">
-                            <div style="background:#CBD5E1; border-radius:4px; height:6px; flex:1; overflow:hidden;">
-                                <div style="background:#16A34A; width:${pct}%; height:100%;"></div>
+                        ${proposalCode}
+                    </td>
+
+                    <td>
+                        ${proposalCell}
+                    </td>
+
+                    <td>
+                        <div
+                            class="audit-file"
+                            title="${escapeHtml(filename)}">
+                            <span class="audit-file-icon">📄</span>
+
+                            <span class="audit-file-name">
+                                ${escapeHtml(filename)}
+                            </span>
+                        </div>
+                    </td>
+
+                    <td>
+                        <span class="audit-risk ${riskClass}">
+                            ${escapeHtml(risk)}
+                        </span>
+                    </td>
+
+                    <td>
+                        <div class="audit-owner">
+                            ${ownerCell}
+                        </div>
+                    </td>
+
+                    <td>
+                        <div class="audit-date">
+                            ${dateCell}
+                        </div>
+                    </td>
+
+                    <td>
+                        <span class="audit-status ${statusClass}">
+                            ${escapeHtml(status)}
+                        </span>
+                    </td>
+
+                    <td>
+                        <div class="audit-progress">
+
+                            <div class="audit-progress-track">
+                                <div
+                                    class="audit-progress-value"
+                                    style="width:${Math.min(
+                                        100,
+                                        Math.max(0, progress)
+                                    )}%">
+                                </div>
                             </div>
-                            <span style="font-size:10px;">${pct}%</span>
+
+                            <span class="audit-progress-number">
+                                ${progress}%
+                            </span>
+
                         </div>
                     </td>
-                    <td>
-                        <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')" title="Ver / Editar detalle">✏️ Editar</button>
+
+                    <td class="audit-action-cell">
+
+                        <button
+                            type="button"
+                            class="audit-edit-button"
+                            onclick="openFindingDrawer('${item.id}')"
+                            title="Editar hallazgo">
+                            ✏️
+                        </button>
+
                     </td>
+
                     <td>
-                        <input type="text" class="inline-input inline-input-obs" value="${escapeHtml(observations)}"
-                            data-finding-id="${item.id}" data-field="observations"
-                            onchange="inlineUpdateFinding(this)" placeholder="Agregar observación..." />
+                        ${observationsCell}
                     </td>
+
                 </tr>
             `;
         });
@@ -393,7 +546,6 @@ function renderAuditTrackTable(items) {
 
     tbody.innerHTML = html;
 }
-
 
 // ============================================================
 // INLINE EDITING FUNCTIONS
