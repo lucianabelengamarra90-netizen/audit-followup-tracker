@@ -1,24 +1,47 @@
 import os
 import re
-import unicodedata
 import csv
 import io
 import uuid
 import hashlib
 import zipfile
+import unicodedata
 import xml.etree.ElementTree as ET
-from typing import Optional, List
+from typing import List, Optional
 
 from openpyxl import load_workbook
 from docx import Document
+from docx.document import Document as _Document
+from docx.table import Table
+from docx.text.paragraph import Paragraph
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
 from pypdf import PdfReader
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
 
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
+MAX_SOURCE_CHARS = int(
+    os.getenv("OPENAI_AUDIT_MAX_CHARS", "100000")
+)
+
+DEFAULT_MODEL = os.getenv(
+    "OPENAI_AUDIT_MODEL",
+    "gpt-4o"
+)
+
+REVIEW_MODEL = os.getenv(
+    "OPENAI_AUDIT_REVIEW_MODEL",
+    DEFAULT_MODEL
+)
+
 
 # ============================================================
-# MODELOS ESTRUCTURADOS DE IA
+# MODELOS ESTRUCTURADOS
 # ============================================================
 
 class AuditProposal(BaseModel):
@@ -26,9 +49,10 @@ class AuditProposal(BaseModel):
     source_supported: bool = True
 
 
-class AuditAnalysis(BaseModel):
-    title: str
-    situation: str
+class AuditDocumentFinding(BaseModel):
+    original_title: str = ""
+    title: str = ""
+    situation: str = ""
     evidence: str = ""
     affected_process_or_control: str = ""
     cause: Optional[str] = None
@@ -37,14 +61,24 @@ class AuditAnalysis(BaseModel):
     severity: str = "Medio"
     responsible_area: Optional[str] = None
     proposals: List[AuditProposal] = Field(default_factory=list)
+    source_excerpt: str = ""
     confidence: float = 0.0
 
 
-class AuditReview(BaseModel):
-    approved: bool
-    score: float
+class AuditDocumentExtraction(BaseModel):
+    report_title: Optional[str] = None
+    process: Optional[str] = None
+    area: Optional[str] = None
+    auditor: Optional[str] = None
+    declared_finding_count: int = 0
+    findings: List[AuditDocumentFinding] = Field(default_factory=list)
+
+
+class AuditDocumentReview(BaseModel):
+    approved: bool = False
+    score: float = 0.0
     issues: List[str] = Field(default_factory=list)
-    corrected_result: Optional[AuditAnalysis] = None
+    corrected_result: Optional[AuditDocumentExtraction] = None
 
 
 # ============================================================
@@ -61,12 +95,17 @@ def normalize_text(value):
         return ""
 
     text = unicodedata.normalize("NFD", text)
+
     text = "".join(
         ch for ch in text
         if unicodedata.category(ch) != "Mn"
     )
 
-    text = re.sub(r"\s+", " ", text.lower())
+    text = re.sub(
+        r"\s+",
+        " ",
+        text.lower()
+    )
 
     return text.strip()
 
@@ -82,36 +121,72 @@ def clean_text(value):
     ).strip()
 
 
-# ============================================================
-# CLIENTE OPENAI
-# ============================================================
+def _clip_text(text, max_chars=1000):
+    text = clean_text(text)
+
+    if len(text) <= max_chars:
+        return text
+
+    cut = text[:max_chars].rfind(" ")
+
+    if cut < int(max_chars * 0.65):
+        cut = max_chars
+
+    return text[:cut].rstrip() + "…"
+
+
+def _safe_severity(value):
+    norm = normalize_text(value)
+
+    if norm in (
+        "alto",
+        "alta",
+        "critico",
+        "critica"
+    ):
+        return "Alto"
+
+    if norm in (
+        "bajo",
+        "baja",
+        "leve",
+        "menor"
+    ):
+        return "Bajo"
+
+    return "Medio"
+
 
 def _get_openai_client():
     api_key = os.getenv("OPENAI_API_KEY")
 
     if not api_key:
-        print("[IA] OPENAI_API_KEY no configurada. Se usará fallback heurístico.")
+        print(
+            "[IA] OPENAI_API_KEY no configurada. "
+            "No se generarán hallazgos por bloques arbitrarios."
+        )
         return None
 
-    return OpenAI(api_key=api_key)
+    return OpenAI(
+        api_key=api_key
+    )
 
 
 # ============================================================
-# EXTRACCIÓN DE METADATOS
+# METADATOS EXPLÍCITOS DEL INFORME
 # ============================================================
 
 def extract_explicit_area(raw_text):
     if not raw_text:
-        return "Operaciones"
+        return ""
 
     patterns = [
         r"(?:área auditada|area auditada)\s*[:\-]\s*([^\n\r\|]+)",
-        r"(?:proceso auditado|proceso)\s*[:\-]\s*([^\n\r\|]+)",
-        r"(?:sector)\s*[:\-]\s*([^\n\r\|]+)",
-        r"(?:gerencia)\s*[:\-]\s*([^\n\r\|]+)",
-        r"(?:departamento)\s*[:\-]\s*([^\n\r\|]+)",
+        r"(?:proceso auditado)\s*[:\-]\s*([^\n\r\|]+)",
+        r"(?:sector auditado)\s*[:\-]\s*([^\n\r\|]+)",
+        r"(?:gerencia auditada)\s*[:\-]\s*([^\n\r\|]+)",
+        r"(?:departamento auditado)\s*[:\-]\s*([^\n\r\|]+)",
         r"(?:unidad auditada)\s*[:\-]\s*([^\n\r\|]+)",
-        r"(?:alcance)\s*[:\-]\s*([^\n\r\|]+)",
     ]
 
     for pattern in patterns:
@@ -122,21 +197,23 @@ def extract_explicit_area(raw_text):
         )
 
         if match:
-            result = clean_text(match.group(1))
+            result = clean_text(
+                match.group(1)
+            )
 
-            if 3 < len(result) < 80:
+            if 2 < len(result) < 100:
                 return result
 
-    return "Operaciones"
+    return ""
 
 
 def extract_explicit_auditor(raw_text):
     if not raw_text:
-        return "Auditoría Interna"
+        return ""
 
     pattern = (
         r"(?:auditor responsable|auditor líder|auditor lider|"
-        r"auditor encargado|auditor|elaborado por|realizado por)"
+        r"auditor encargado|elaborado por|realizado por)"
         r"\s*[:\-]\s*([^\n\r\|]+)"
     )
 
@@ -147,1549 +224,2229 @@ def extract_explicit_auditor(raw_text):
     )
 
     if match:
-        result = clean_text(match.group(1))
+        result = clean_text(
+            match.group(1)
+        )
 
-        if 2 < len(result) < 80:
+        if 2 < len(result) < 100:
             return result
 
-    return "Auditoría Interna"
+    return ""
 
 
-# ============================================================
-# EXTRACCIÓN DE TEXTO DE ARCHIVOS
-# ============================================================
-
-def extract_docx_xml_deep(file_path):
-    text_parts = []
-    try:
-        with zipfile.ZipFile(file_path, 'r') as z:
-            for name in z.namelist():
-                if name.startswith("word/") and name.endswith(".xml"):
-                    try:
-                        xml_bytes = z.read(name)
-                        root = ET.fromstring(xml_bytes)
-                        for elem in root.iter():
-                            if elem.tag.endswith('}t') and elem.text:
-                                text_parts.append(elem.text.strip())
-                            elif elem.tag.endswith('}p') or elem.tag.endswith('}tr'):
-                                text_parts.append("\n")
-                    except Exception:
-                        pass
-    except Exception as e:
-        print(f"[Parser] Excepción en extracción XML de ZIP: {e}")
-
-    raw_res = " ".join(text_parts)
-    lines = [clean_text(l) for l in raw_res.splitlines() if clean_text(l)]
-    return "\n".join(lines)
-
-
-def extract_raw_text_from_file(file_path):
-    ext = (
-        file_path.rsplit(".", 1)[-1].lower()
-        if "." in file_path
-        else ""
-    )
-
-    text_content = ""
-
-    if ext in ("docx", "doc"):
-        # Tier 1: python-docx (párrafos, tablas y encabezados)
-        try:
-            doc = Document(file_path)
-
-            paragraphs = [
-                p.text.strip()
-                for p in doc.paragraphs
-                if p.text.strip()
-            ]
-
-            for table in doc.tables:
-                for row in table.rows:
-                    row_cells = [
-                        c.text.strip()
-                        for c in row.cells
-                        if c.text.strip()
-                    ]
-
-                    if row_cells:
-                        paragraphs.append(
-                            " | ".join(row_cells)
-                        )
-
-            for section in doc.sections:
-                if section.header:
-                    hdr_txt = "\n".join([p.text.strip() for p in section.header.paragraphs if p.text.strip()])
-                    if hdr_txt:
-                        paragraphs.insert(0, f"[Encabezado: {hdr_txt}]")
-
-            text_content = "\n".join(paragraphs)
-
-        except Exception as exc:
-            print(f"[Parser] python-docx aviso en {file_path}: {exc}")
-
-        # Tier 2: Extracción profunda XML del archivo ZIP (cuadros de texto, formas, marcos)
-        if not text_content.strip():
-            text_content = extract_docx_xml_deep(file_path)
-
-        # Tier 3: Fallback de decodificación directa de cadenas para archivos binarios (.doc)
-        if not text_content.strip():
-            try:
-                with open(file_path, "rb") as f_raw:
-                    raw_b = f_raw.read()
-                decoded = raw_b.decode("latin-1", errors="ignore")
-                printable = re.findall(r'[A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s\.,;:!\?\-\(\)\$/]{4,}', decoded)
-                text_content = "\n".join([p.strip() for p in printable if len(p.strip()) > 5])
-            except Exception:
-                pass
-
-    elif ext == "pdf":
-        try:
-            reader = PdfReader(file_path)
-            pages_text = []
-            total_pages = len(reader.pages)
-
-            for idx, page in enumerate(reader.pages):
-                txt = page.extract_text() or ""
-
-                if txt.strip():
-                    pages_text.append(
-                        f"--- PÁGINA {idx + 1} ---\n{txt}"
-                    )
-
-            text_content = "\n".join(pages_text)
-
-            if total_pages > 0 and not text_content.strip():
-                raise ValueError("El archivo PDF no contiene texto seleccionable o es una imagen escaneada (requiere OCR).")
-
-        except ValueError:
-            raise
-        except Exception as exc:
-            raise ValueError(f"No se pudo procesar el archivo PDF: {str(exc)}")
-
-    elif ext == "xlsx":
-        try:
-            wb = load_workbook(
-                file_path,
-                data_only=True
-            )
-
-            lines = []
-            max_sheets = 10
-
-            for sheet_name in wb.sheetnames[:max_sheets]:
-                ws = wb[sheet_name]
-
-                lines.append(
-                    f"=== SOLAPA: {sheet_name} ==="
-                )
-
-                row_count = 0
-                for row in ws.iter_rows(
-                    values_only=True
-                ):
-                    row_count += 1
-                    if row_count > 2000:
-                        lines.append("... [Límite de 2000 filas alcanzado en esta solapa] ...")
-                        break
-
-                    row_vals = [
-                        clean_text(v)
-                        for v in row
-                        if clean_text(v)
-                    ]
-
-                    if row_vals:
-                        lines.append(
-                            " | ".join(row_vals)
-                        )
-
-            text_content = "\n".join(lines)
-
-            if not text_content.strip():
-                wb_fallback = load_workbook(file_path, data_only=False)
-                lines_fb = []
-                for sheet_name in wb_fallback.sheetnames[:max_sheets]:
-                    ws = wb_fallback[sheet_name]
-                    lines_fb.append(f"=== SOLAPA: {sheet_name} ===")
-                    for row in ws.iter_rows(values_only=True):
-                        row_vals = [clean_text(v) for v in row if clean_text(v)]
-                        if row_vals:
-                            lines_fb.append(" | ".join(row_vals))
-                text_content = "\n".join(lines_fb)
-
-        except Exception as exc:
-            raise ValueError(f"No se pudo procesar la planilla Excel: {str(exc)}")
-
-    elif ext == "csv":
-        try:
-            with open(file_path, "rb") as f_raw:
-                raw_bytes = f_raw.read()
-
-            try:
-                content_str = raw_bytes.decode("utf-8-sig")
-            except UnicodeDecodeError:
-                content_str = raw_bytes.decode("latin-1", errors="ignore")
-
-            sample = content_str[:4096]
-            try:
-                dialect = csv.Sniffer().sniff(sample, delimiters=[',', ';', '\t', '|'])
-                delimiter = dialect.delimiter
-            except Exception:
-                delimiter = ';' if ';' in sample else ','
-
-            reader = csv.reader(io.StringIO(content_str), delimiter=delimiter)
-            rows_str = []
-            for row in reader:
-                cleaned_cells = [clean_text(c) for c in row if clean_text(c)]
-                if cleaned_cells:
-                    rows_str.append(" | ".join(cleaned_cells))
-
-            text_content = "\n".join(rows_str)
-
-        except Exception as exc:
-            raise ValueError(f"No se pudo procesar el archivo CSV: {str(exc)}")
-
-    elif ext == "txt":
-        try:
-            with open(file_path, "rb") as f_raw:
-                raw_bytes = f_raw.read()
-
-            try:
-                text_content = raw_bytes.decode("utf-8-sig")
-            except UnicodeDecodeError:
-                text_content = raw_bytes.decode("latin-1", errors="ignore")
-
-        except Exception as exc:
-            raise ValueError(f"No se pudo procesar el archivo TXT: {str(exc)}")
-
-    if not text_content or not text_content.strip():
-        raise ValueError("El archivo no contiene texto interpretable o está vacío.")
-
-    return text_content[:60000]
-
-
-# ============================================================
-# PARSER HEURÍSTICO - EXTRACTOR / FALLBACK
-# ============================================================
-
-NON_FINDING_KEYWORDS = {
-    "alcance",
-    "metodologia",
-    "metodología",
-    "objetivo",
-    "objetivos",
-    "introduccion",
-    "introducción",
-    "antecedentes",
-    "contexto",
-    "conclusion",
-    "conclusión",
-    "conclusiones",
-    "resumen ejecutivo",
-    "anexo",
-    "anexos",
-    "referencias",
-    "glosario",
-    "índice",
-    "indice",
-    "marco normativo",
-    "marco de referencia",
-    "cronograma",
-    "equipo auditor",
-    "distribucion",
-    "distribución",
-    "carátula",
-    "caratula",
-    "portada",
-    "periodo",
-    "período",
-    "tabla de contenido",
-    "contenido",
-    "contenidos",
-}
-
-
-FINDING_KEYWORDS = [
-    "hallazgo",
-    "observacion",
-    "observación",
-    "desviacion",
-    "desviación",
-    "debilidad",
-    "deficiencia",
-    "incumplimiento",
-    "punto de atención",
-    "punto de atencion",
-    "irregularidad",
-]
-
-
-PROPOSAL_KEYWORDS = [
-    "propuesta de mejora",
-    "propuesta",
-    "recomendacion",
-    "recomendación",
-    "accion correctiva",
-    "acción correctiva",
-    "mejora sugerida",
-    "sugerencia",
-    "medida correctiva",
-    "accion recomendada",
-    "acción recomendada",
-]
-
-
-def _is_non_finding_header(norm_line):
-    for kw in NON_FINDING_KEYWORDS:
-        pattern = (
-            r"(?:^|\d+[\.\s]+)"
-            + re.escape(kw)
-            + r"s?\s*[:.]?\s*$"
-        )
-
-        if re.search(
-            pattern,
-            norm_line
-        ):
-            return True
-
-        if (
-            norm_line
-            .strip()
-            .rstrip(":. ")
-            == kw
-        ):
-            return True
-
-    return False
-
-
-def _looks_like_finding_start(
-    line,
-    norm_line
-):
-    explicit_re = re.compile(
-        r"^(?:hallazgo|observaci[oó]n|"
-        r"desviaci[oó]n|punto|ítem|item)"
-        r"\s*(?:n[°º]?\s*)?\d+",
-        re.IGNORECASE
-    )
-
-    if explicit_re.match(line):
-        return True
-
-    if len(line) < 140:
-        for kw in FINDING_KEYWORDS:
-            if kw in norm_line:
-                return True
-
-    return False
-
-
-def _looks_like_proposal_start(
-    line,
-    norm_line
-):
-    for kw in PROPOSAL_KEYWORDS:
-        if norm_line.startswith(kw):
-            return True
-
-        pattern = (
-            re.escape(kw)
-            + r"\s*[:\-]"
-        )
-
-        if re.match(
-            pattern,
-            norm_line
-        ):
-            return True
-
-    return False
-
-
-def _extract_after_keyword(
-    line
-):
-    for kw in PROPOSAL_KEYWORDS:
-        pattern = re.compile(
-            re.escape(kw)
-            + r"\s*[:\-]\s*",
-            re.IGNORECASE
-        )
-
-        match = pattern.match(line)
-
-        if match:
-            return line[
-                match.end():
-            ].strip()
-
-    return line
-
-
-def _detect_severity(text):
-    norm = normalize_text(text)
-
-    if any(
-        word in norm
-        for word in [
-            "alto",
-            "alta",
-            "critico",
-            "critica",
-            "crítico",
-            "crítica",
-        ]
-    ):
-        return "Alto"
-
-    if any(
-        word in norm
-        for word in [
-            "bajo",
-            "baja",
-            "leve",
-            "menor",
-        ]
-    ):
-        return "Bajo"
-
-    return "Medio"
-
-
-def _clean_finding_title(
-    raw_title
-):
-    title = clean_text(raw_title)
-
-    title = re.sub(
-        r"^(?:hallazgo|observaci[oó]n|"
-        r"desviaci[oó]n|punto|ítem|item)"
-        r"\s*(?:n[°º]?\s*)?\d*"
-        r"\s*[:\-\.]\s*",
-        "",
-        title,
-        flags=re.IGNORECASE
-    ).strip()
-
-    if not title:
-        return clean_text(raw_title)[:100]
-
-    if len(title) > 100:
-        cut = title[:100].rfind(" ")
-
-        title = (
-            title[:cut]
-            if cut > 25
-            else title[:100]
-        )
-
-    if title:
-        title = (
-            title[0].upper()
-            + title[1:]
-        )
-
-    return title
-
-
-def _summarize_text(
-    text,
-    max_chars=700
-):
-    text = clean_text(text)
-
-    if not text:
-        return ""
-
-    if len(text) <= max_chars:
-        return text
-
-    sentences = re.split(
-        r"(?<=[.!?])\s+",
-        text
-    )
-
-    selected = []
-    total = 0
-
-    for sentence in sentences:
-        sentence = sentence.strip()
-
-        if not sentence:
-            continue
-
-        if (
-            total
-            + len(sentence)
-            + 1
-            > max_chars
-        ):
-            break
-
-        selected.append(sentence)
-
-        total += (
-            len(sentence)
-            + 1
-        )
-
-    if selected:
-        return " ".join(selected)
-
-    return text[:max_chars]
-
-
-# ============================================================
-# IA CAPA 1 - ANALISTA SENIOR
-# ============================================================
-
-def analyze_finding_with_ai(
-    source_text,
-    fallback_title="",
-    fallback_area="",
-    fallback_severity="Medio",
-):
-    client = _get_openai_client()
-
-    if not client:
-        return None
-
-    source_text = source_text.strip()
-
-    if not source_text:
-        return None
-
-    instructions = """
-Actuás como Auditor Interno Senior.
-
-Tu función es analizar información proveniente de informes de Auditoría
-Interna de cualquier proceso, área o temática.
-
-No asumas que el informe corresponde a inventarios, stock, sistemas,
-contabilidad, legales, proveedores ni ninguna temática específica.
-
-Debés interpretar exclusivamente el contenido proporcionado.
-
-OBJETIVO
-
-Identificar el verdadero hallazgo de auditoría y estructurarlo de forma
-profesional.
-
-Cuando la información esté disponible, distinguí:
-
-- situación detectada;
-- evidencia concreta;
-- proceso o control afectado;
-- causa;
-- riesgo o consecuencia;
-- impacto cuantitativo;
-- severidad;
-- área responsable;
-- propuesta o propuestas de mejora.
-
-REGLAS
-
-1. NO INVENTAR INFORMACIÓN.
-
-No inventes:
-- importes;
-- porcentajes;
-- cantidades;
-- fechas;
-- códigos;
-- documentos;
-- transacciones;
-- sistemas;
-- áreas;
-- responsables;
-- normativa;
-- causas;
-- hechos.
-
-2. Si una causa no está respaldada por el texto fuente, devolver null.
-
-3. Si no existe impacto cuantitativo, devolver null.
-
-4. Conservá la precisión de:
-- cifras;
-- fechas;
-- códigos;
-- sistemas;
-- documentos;
-- procesos;
-- evidencia.
-
-5. No confundas comentarios de reuniones, respuestas del área o frases
-operativas con el hallazgo principal.
-
-6. Expresiones aisladas como:
-"falta de control",
-"se detectaron diferencias",
-"error de sistema",
-"posible incumplimiento",
-"falta de seguimiento"
-no constituyen por sí mismas un hallazgo completo.
-
-7. El hallazgo debe explicar claramente:
-qué situación fue identificada y por qué resulta relevante desde la
-perspectiva de Auditoría Interna.
-
-8. El riesgo debe explicar la consecuencia razonable de la situación
-identificada, sin exageraciones.
-
-9. No usar riesgos genéricos tipo:
-"riesgo de control interno asociado al hallazgo".
-
-10. La propuesta debe responder directamente al problema detectado.
-
-11. Evitar propuestas genéricas como:
-"mejorar controles",
-"realizar seguimiento",
-"ejecutar y documentar",
-"capacitar al personal",
-salvo que exista sustento concreto para esa medida.
-
-12. Si existe una recomendación original en el documento, preservá su sentido.
-
-13. Puede haber más de una propuesta para un mismo hallazgo.
-
-14. Hallazgo y propuesta no deben ser una paráfrasis uno del otro.
-
-15. Severidad solamente puede ser:
-Alto, Medio o Bajo.
-
-16. Si el documento no permite determinar la severidad claramente,
-usar Medio.
-
-17. La redacción debe ser técnica, profesional, concreta y natural.
-
-18. No agregar un plan de acción. Las propuestas de mejora y los planes
-de acción son conceptos diferentes.
-"""
-
-    try:
-        user_prompt = f"""
-Analizá este bloque de un informe de Auditoría Interna.
-
-TÍTULO PRELIMINAR DETECTADO:
-{fallback_title}
-
-ÁREA PRELIMINAR:
-{fallback_area}
-
-SEVERIDAD PRELIMINAR:
-{fallback_severity}
-
-TEXTO FUENTE:
-
---- INICIO TEXTO FUENTE ---
-
-{source_text[:14000]}
-
---- FIN TEXTO FUENTE ---
-
-Los valores preliminares fueron obtenidos mediante reglas heurísticas.
-Usalos únicamente como referencia.
-
-La fuente original prevalece sobre cualquier dato preliminar.
-"""
-        response = client.beta.chat.completions.parse(
-            model=os.getenv("OPENAI_AUDIT_MODEL", "gpt-4o"),
-            messages=[
-                {"role": "system", "content": instructions},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format=AuditAnalysis,
-        )
-
-        return response.choices[0].message.parsed
-
-    except Exception as exc:
-        print(f"[IA Analista] Error de API u OpenAI sin crédito: {exc}")
-        return None
-
-
-# ============================================================
-# IA CAPA 2 - REVISOR INDEPENDIENTE
-# ============================================================
-
-def review_ai_analysis(
-    source_text,
-    analysis
-):
-    client = _get_openai_client()
-
-    if (
-        not client
-        or analysis is None
-    ):
-        return None
-
-    instructions = """
-Actuás como Revisor Senior Independiente de Auditoría Interna.
-
-Otro auditor IA realizó un análisis.
-
-Tu función NO es volver a analizar libremente el caso desde cero.
-
-Debés comparar su resultado contra la fuente original.
-
-CONTROLAR
-
-1. que el hallazgo esté respaldado por la fuente;
-2. que no existan hechos inventados;
-3. que no existan cifras inventadas;
-4. que no existan fechas inventadas;
-5. que no existan códigos inventados;
-6. que no existan sistemas inventados;
-7. que no existan áreas o responsables inventados;
-8. que no se haya inventado una causa;
-9. que el riesgo sea razonable;
-10. que el riesgo no sea genérico;
-11. que la propuesta responda al hallazgo;
-12. que la propuesta no sea genérica;
-13. que hallazgo y propuesta sean conceptos distintos;
-14. que no se hayan omitido datos relevantes;
-15. que las recomendaciones originales hayan sido preservadas;
-16. que no se haya transformado una opinión o comentario en un hecho;
-17. que el resultado sea claro y profesional.
-
-SI TODO ES CORRECTO
-
-approved = true
-corrected_result = null
-
-SI EXISTEN ERRORES
-
-approved = false
-
-Explicar cada problema en issues.
-
-Generar corrected_result solamente corrigiendo los problemas detectados.
-
-No agregar información nueva durante la corrección.
-"""
-
-    try:
-        user_prompt = f"""
-TEXTO FUENTE ORIGINAL
-
---- INICIO FUENTE ---
-
-{source_text[:14000]}
-
---- FIN FUENTE ---
-
-
-RESULTADO GENERADO POR LA PRIMERA IA
-
---- INICIO RESULTADO ---
-
-{analysis.model_dump_json(indent=2)}
-
---- FIN RESULTADO ---
-
-
-Revisá exclusivamente la trazabilidad, consistencia y calidad del resultado.
-"""
-        response = client.beta.chat.completions.parse(
-            model=os.getenv("OPENAI_AUDIT_REVIEW_MODEL", "gpt-4o"),
-            messages=[
-                {"role": "system", "content": instructions},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format=AuditReview,
-        )
-
-        return response.choices[0].message.parsed
-
-    except Exception as exc:
-        print(f"[IA Revisora] Error de API u OpenAI sin crédito: {exc}")
-        return None
-
-
-# ============================================================
-# COORDINADOR DE DOBLE CONTROL
-# ============================================================
-
-def run_double_ai_review(
-    source_text,
-    fallback_title="",
-    fallback_area="",
-    fallback_severity="Medio",
-):
-    analysis = analyze_finding_with_ai(
-        source_text=source_text,
-        fallback_title=fallback_title,
-        fallback_area=fallback_area,
-        fallback_severity=fallback_severity,
-    )
-
-    if not analysis:
-        return None
-
-    review = review_ai_analysis(
-        source_text,
-        analysis
-    )
-
-    if review is None:
-        print(
-            "[IA] No fue posible ejecutar "
-            "la segunda revisión."
-        )
-
-        return None
-
-    if review.approved:
-        return analysis
-
-    if review.corrected_result:
-        corrected = (
-            review.corrected_result
-        )
-
-        second_review = review_ai_analysis(
-            source_text,
-            corrected
-        )
-
-        if (
-            second_review
-            and second_review.approved
-        ):
-            return corrected
-
-    print(
-        "[IA] El resultado no superó "
-        "la doble revisión. "
-        "Se utilizará fallback heurístico."
-    )
-
-    return None
-
-
-# ============================================================
-# PARSEO DE DOCUMENTO EN BLOQUES
-# ============================================================
-
-def parse_document(
+def extract_report_title(
     raw_text,
     filename
 ):
-    explicit_area = (
-        extract_explicit_area(raw_text)
-    )
-
-    explicit_auditor = (
-        extract_explicit_auditor(raw_text)
-    )
-
-    report_title = (
-        f"Informe de Auditoría - {filename}"
-    )
-
     lines = [
         clean_text(line)
         for line in raw_text.splitlines()
         if clean_text(line)
     ]
 
-    for line in lines[:20]:
+    for line in lines[:30]:
         norm = normalize_text(line)
 
         if (
             "informe" in norm
             and "auditoria" in norm
+            and len(line) < 180
         ):
-            report_title = line
-            break
-
-    findings = []
-    current_finding = None
-    reading_proposal = False
-
-    for line in lines:
-        norm = normalize_text(line)
-
-        if (
-            _is_non_finding_header(norm)
-            and len(line) < 120
-        ):
-            if current_finding:
-                findings.append(
-                    current_finding
-                )
-
-                current_finding = None
-                reading_proposal = False
-
-            continue
-
-        if _looks_like_finding_start(
-            line,
-            norm
-        ):
-            if current_finding:
-                findings.append(
-                    current_finding
-                )
-
-            current_finding = {
-                "raw_title": line,
-                "situation_lines": [],
-                "proposal_lines": [],
-                "severity": (
-                    _detect_severity(line)
-                ),
-                "responsible_area": (
-                    explicit_area
-                ),
-            }
-
-            reading_proposal = False
-            continue
-
-        if (
-            current_finding
-            and _looks_like_proposal_start(
+            line = re.sub(
+                r"^\[(?:HEADING|BOLD|HEADER)\]\s*",
+                "",
                 line,
-                norm
+                flags=re.IGNORECASE
             )
+
+            return clean_text(line)
+
+    return (
+        f"Informe de Auditoría - {filename}"
+    )
+
+
+# ============================================================
+# EXTRACCIÓN DOCX RESPETANDO ESTRUCTURA
+# ============================================================
+
+def _iter_docx_blocks(parent):
+    if not isinstance(
+        parent,
+        _Document
+    ):
+        return
+
+    parent_element = (
+        parent.element.body
+    )
+
+    for child in parent_element.iterchildren():
+
+        if isinstance(
+            child,
+            CT_P
         ):
-            proposal_text = (
-                _extract_after_keyword(
-                    line
-                )
+            yield Paragraph(
+                child,
+                parent
             )
 
-            current_finding[
-                "proposal_lines"
-            ].append(
-                proposal_text
+        elif isinstance(
+            child,
+            CT_Tbl
+        ):
+            yield Table(
+                child,
+                parent
             )
 
-            reading_proposal = True
-            continue
 
-        if current_finding:
-            if reading_proposal:
-                current_finding[
-                    "proposal_lines"
-                ].append(line)
-            else:
-                current_finding[
-                    "situation_lines"
-                ].append(line)
+def _paragraph_is_mostly_bold(
+    paragraph
+):
+    visible_runs = [
+        run
+        for run in paragraph.runs
+        if clean_text(run.text)
+    ]
 
-    if current_finding:
-        findings.append(
-            current_finding
+    if not visible_runs:
+        return False
+
+    total_chars = sum(
+        len(clean_text(run.text))
+        for run in visible_runs
+    )
+
+    if total_chars <= 0:
+        return False
+
+    bold_chars = sum(
+        len(clean_text(run.text))
+        for run in visible_runs
+        if run.bold is True
+    )
+
+    return (
+        bold_chars / total_chars
+    ) >= 0.60
+
+
+def _format_docx_paragraph(
+    paragraph
+):
+    text = clean_text(
+        paragraph.text
+    )
+
+    if not text:
+        return ""
+
+    style_name = normalize_text(
+        paragraph.style.name
+        if paragraph.style
+        else ""
+    )
+
+    looks_heading = (
+        style_name.startswith("heading")
+        or style_name.startswith("titulo")
+        or style_name.startswith("title")
+    )
+
+    if looks_heading:
+        return (
+            f"[HEADING] {text}"
         )
 
     if (
-        not findings
-        and "|" in raw_text
+        len(text) <= 220
+        and _paragraph_is_mostly_bold(
+            paragraph
+        )
     ):
-        findings = _parse_tabular_findings(
-            lines,
-            explicit_area
+        return (
+            f"[BOLD] {text}"
         )
 
-        return {
-            "report_title": report_title,
-            "area": explicit_area,
-            "auditor": explicit_auditor,
-            "findings": findings,
-        }
+    return text
 
-    cleaned_findings = []
+
+def extract_docx_xml_deep(
+    file_path
+):
+    text_parts = []
+
+    try:
+        with zipfile.ZipFile(
+            file_path,
+            "r"
+        ) as archive:
+
+            for name in archive.namelist():
+
+                if not (
+                    name.startswith("word/")
+                    and name.endswith(".xml")
+                ):
+                    continue
+
+                try:
+                    xml_bytes = archive.read(
+                        name
+                    )
+
+                    root = ET.fromstring(
+                        xml_bytes
+                    )
+
+                    current = []
+
+                    for elem in root.iter():
+
+                        if (
+                            elem.tag.endswith("}t")
+                            and elem.text
+                        ):
+                            current.append(
+                                elem.text
+                            )
+
+                        elif (
+                            elem.tag.endswith("}p")
+                            or elem.tag.endswith("}tr")
+                        ):
+
+                            if current:
+                                text_parts.append(
+                                    clean_text(
+                                        " ".join(
+                                            current
+                                        )
+                                    )
+                                )
+
+                                current = []
+
+                    if current:
+                        text_parts.append(
+                            clean_text(
+                                " ".join(
+                                    current
+                                )
+                            )
+                        )
+
+                except Exception:
+                    continue
+
+    except Exception as exc:
+        print(
+            "[Parser] Error en extracción XML profunda:",
+            exc
+        )
+
+    return "\n".join(
+        part
+        for part in text_parts
+        if part
+    )
+
+
+def _extract_docx_text(
+    file_path
+):
+    try:
+        doc = Document(
+            file_path
+        )
+
+        parts = []
+
+        # Encabezados del Word.
+        for section in doc.sections:
+            try:
+                header_lines = [
+                    clean_text(p.text)
+                    for p
+                    in section.header.paragraphs
+                    if clean_text(p.text)
+                ]
+
+                if header_lines:
+                    parts.append(
+                        "[HEADER] "
+                        + " | ".join(
+                            header_lines
+                        )
+                    )
+
+            except Exception:
+                pass
+
+        # Cuerpo en el orden real del documento.
+        for block in _iter_docx_blocks(
+            doc
+        ):
+
+            if isinstance(
+                block,
+                Paragraph
+            ):
+                formatted = (
+                    _format_docx_paragraph(
+                        block
+                    )
+                )
+
+                if formatted:
+                    parts.append(
+                        formatted
+                    )
+
+            elif isinstance(
+                block,
+                Table
+            ):
+
+                for row in block.rows:
+
+                    cells = [
+                        clean_text(
+                            cell.text
+                        )
+                        for cell in row.cells
+                        if clean_text(
+                            cell.text
+                        )
+                    ]
+
+                    if cells:
+                        parts.append(
+                            "[TABLE_ROW] "
+                            + " || ".join(
+                                cells
+                            )
+                        )
+
+        text_content = "\n".join(
+            parts
+        ).strip()
+
+        if text_content:
+            return text_content
+
+    except Exception as exc:
+        print(
+            "[Parser] python-docx no pudo leer el archivo:",
+            exc
+        )
+
+    return extract_docx_xml_deep(
+        file_path
+    )
+
+
+# ============================================================
+# EXTRACCIÓN DE TEXTO POR TIPO DE ARCHIVO
+# ============================================================
+
+def extract_raw_text_from_file(
+    file_path
+):
+    ext = (
+        file_path.rsplit(
+            ".",
+            1
+        )[-1].lower()
+        if "." in file_path
+        else ""
+    )
+
+    text_content = ""
+
+    # --------------------------------------------------------
+    # WORD DOCX
+    # --------------------------------------------------------
+
+    if ext == "docx":
+
+        text_content = (
+            _extract_docx_text(
+                file_path
+            )
+        )
+
+    # --------------------------------------------------------
+    # WORD DOC ANTIGUO
+    # --------------------------------------------------------
+
+    elif ext == "doc":
+
+        try:
+            with open(
+                file_path,
+                "rb"
+            ) as raw_file:
+
+                raw_bytes = (
+                    raw_file.read()
+                )
+
+            decoded = (
+                raw_bytes.decode(
+                    "latin-1",
+                    errors="ignore"
+                )
+            )
+
+            printable = re.findall(
+                r"[A-Za-z0-9ÁÉÍÓÚáéíóúÑñ"
+                r"\s\.,;:!\?\-\(\)\$/%]{4,}",
+                decoded
+            )
+
+            text_content = "\n".join(
+                clean_text(part)
+                for part in printable
+                if len(
+                    clean_text(part)
+                ) > 5
+            )
+
+        except Exception as exc:
+            raise ValueError(
+                "No se pudo procesar "
+                "el archivo DOC: "
+                + str(exc)
+            )
+
+    # --------------------------------------------------------
+    # PDF
+    # --------------------------------------------------------
+
+    elif ext == "pdf":
+
+        try:
+            reader = PdfReader(
+                file_path
+            )
+
+            pages = []
+
+            for index, page in enumerate(
+                reader.pages,
+                start=1
+            ):
+
+                text = (
+                    page.extract_text()
+                    or ""
+                ).strip()
+
+                if text:
+                    pages.append(
+                        f"[PAGE {index}]\n{text}"
+                    )
+
+            text_content = "\n".join(
+                pages
+            )
+
+            if (
+                len(reader.pages) > 0
+                and not text_content.strip()
+            ):
+                raise ValueError(
+                    "El PDF no contiene texto "
+                    "seleccionable o es una imagen "
+                    "escaneada (requiere OCR)."
+                )
+
+        except ValueError:
+            raise
+
+        except Exception as exc:
+            raise ValueError(
+                "No se pudo procesar el PDF: "
+                + str(exc)
+            )
+
+    # --------------------------------------------------------
+    # EXCEL
+    # --------------------------------------------------------
+
+    elif ext == "xlsx":
+
+        try:
+            workbook = load_workbook(
+                file_path,
+                data_only=True
+            )
+
+            lines = []
+
+            for sheet_name in (
+                workbook.sheetnames[:10]
+            ):
+
+                worksheet = workbook[
+                    sheet_name
+                ]
+
+                lines.append(
+                    f"[SHEET] {sheet_name}"
+                )
+
+                for row_index, row in enumerate(
+                    worksheet.iter_rows(
+                        values_only=True
+                    ),
+                    start=1
+                ):
+
+                    if row_index > 2500:
+                        break
+
+                    values = [
+                        clean_text(value)
+                        for value in row
+                        if clean_text(value)
+                    ]
+
+                    if values:
+                        lines.append(
+                            "[TABLE_ROW] "
+                            + " || ".join(
+                                values
+                            )
+                        )
+
+            text_content = "\n".join(
+                lines
+            )
+
+        except Exception as exc:
+            raise ValueError(
+                "No se pudo procesar "
+                "la planilla Excel: "
+                + str(exc)
+            )
+
+    # --------------------------------------------------------
+    # CSV
+    # --------------------------------------------------------
+
+    elif ext == "csv":
+
+        try:
+            with open(
+                file_path,
+                "rb"
+            ) as raw_file:
+
+                raw_bytes = (
+                    raw_file.read()
+                )
+
+            try:
+                content = (
+                    raw_bytes.decode(
+                        "utf-8-sig"
+                    )
+                )
+
+            except UnicodeDecodeError:
+
+                content = (
+                    raw_bytes.decode(
+                        "latin-1",
+                        errors="ignore"
+                    )
+                )
+
+            sample = content[:4096]
+
+            try:
+                dialect = (
+                    csv.Sniffer().sniff(
+                        sample,
+                        delimiters=[
+                            ",",
+                            ";",
+                            "\t",
+                            "|"
+                        ]
+                    )
+                )
+
+                delimiter = (
+                    dialect.delimiter
+                )
+
+            except Exception:
+
+                delimiter = (
+                    ";"
+                    if ";" in sample
+                    else ","
+                )
+
+            reader = csv.reader(
+                io.StringIO(
+                    content
+                ),
+                delimiter=delimiter
+            )
+
+            rows = []
+
+            for row in reader:
+
+                cells = [
+                    clean_text(cell)
+                    for cell in row
+                    if clean_text(cell)
+                ]
+
+                if cells:
+                    rows.append(
+                        "[TABLE_ROW] "
+                        + " || ".join(
+                            cells
+                        )
+                    )
+
+            text_content = "\n".join(
+                rows
+            )
+
+        except Exception as exc:
+            raise ValueError(
+                "No se pudo procesar el CSV: "
+                + str(exc)
+            )
+
+    # --------------------------------------------------------
+    # TXT
+    # --------------------------------------------------------
+
+    elif ext == "txt":
+
+        try:
+            with open(
+                file_path,
+                "rb"
+            ) as raw_file:
+
+                raw_bytes = (
+                    raw_file.read()
+                )
+
+            try:
+                text_content = (
+                    raw_bytes.decode(
+                        "utf-8-sig"
+                    )
+                )
+
+            except UnicodeDecodeError:
+
+                text_content = (
+                    raw_bytes.decode(
+                        "latin-1",
+                        errors="ignore"
+                    )
+                )
+
+        except Exception as exc:
+            raise ValueError(
+                "No se pudo procesar el TXT: "
+                + str(exc)
+            )
+
+    else:
+
+        raise ValueError(
+            f"Formato no soportado: {ext}"
+        )
+
+    text_content = (
+        text_content or ""
+    ).strip()
+
+    if not text_content:
+        raise ValueError(
+            "El archivo no contiene texto "
+            "interpretable o está vacío."
+        )
+
+    # No se parte el documento en supuestos hallazgos.
+    # Se conserva el informe completo para que la IA
+    # comprenda su estructura global.
+    if (
+        len(text_content)
+        > MAX_SOURCE_CHARS
+    ):
+        text_content = (
+            text_content[
+                :MAX_SOURCE_CHARS
+            ]
+        )
+
+    return text_content
+
+
+# ============================================================
+# BARRERA CONTRA TÍTULOS FALSOS
+# ============================================================
+
+SECTION_ONLY_TITLES = {
+    "hallazgo",
+    "hallazgos",
+    "observacion",
+    "observaciones",
+    "resultado",
+    "resultados",
+    "analisis",
+    "análisis",
+    "conclusion",
+    "conclusiones",
+    "resumen",
+    "resumen ejecutivo",
+    "objetivo",
+    "objetivos",
+    "alcance",
+    "metodologia",
+    "metodología",
+    "recomendaciones",
+    "propuestas de mejora",
+}
+
+
+def _is_section_only_title(
+    value
+):
+    norm = normalize_text(
+        value
+    )
+
+    norm = re.sub(
+        r"^\[(?:heading|bold)\]\s*",
+        "",
+        norm
+    )
+
+    # Ejemplo:
+    # "7. Hallazgos" -> "hallazgos"
+    norm = re.sub(
+        r"^\d+(?:\.\d+)*"
+        r"[\.\-\)]?\s*",
+        "",
+        norm
+    )
+
+    norm = norm.strip(
+        " :-."
+    )
+
+    if (
+        norm
+        in SECTION_ONLY_TITLES
+    ):
+        return True
+
+    if re.fullmatch(
+        r"(?:seccion|sección|"
+        r"capitulo|capítulo)\s+\d+",
+        norm
+    ):
+        return True
+
+    return False
+
+
+def _deduplicate_findings(
+    findings
+):
+    result = []
+    seen = set()
 
     for finding in findings:
-        raw_title = finding.get(
-            "raw_title",
-            ""
+
+        key = normalize_text(
+            finding.title
+            or finding.original_title
         )
 
-        situation_full = " ".join(
-            finding.get(
-                "situation_lines",
-                []
+        if not key:
+            continue
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        result.append(
+            finding
+        )
+
+    return result
+
+
+# ============================================================
+# VALIDACIÓN LOCAL DE LA RESPUESTA DE IA
+# ============================================================
+
+def _sanitize_document_extraction(
+    extraction,
+    raw_text
+):
+    if not extraction:
+        return None
+
+    raw_norm = normalize_text(
+        raw_text
+    )
+
+    cleaned = []
+
+    for finding in (
+        extraction.findings
+        or []
+    ):
+
+        title = clean_text(
+            finding.title
+            or finding.original_title
+        )
+
+        original_title = clean_text(
+            finding.original_title
+            or finding.title
+        )
+
+        situation = clean_text(
+            finding.situation
+        )
+
+        source_excerpt = clean_text(
+            finding.source_excerpt
+        )
+
+        confidence = float(
+            finding.confidence
+            or 0
+        )
+
+        # Nunca permitir que "7. Hallazgos"
+        # entre como un hallazgo.
+        if (
+            _is_section_only_title(
+                title
+            )
+            or _is_section_only_title(
+                original_title
+            )
+        ):
+            continue
+
+        if not title:
+            continue
+
+        if not situation:
+            situation = title
+
+        # Verifica si la breve evidencia de trazabilidad
+        # realmente aparece en el documento.
+        excerpt_supported = False
+
+        if source_excerpt:
+
+            excerpt_norm = normalize_text(
+                source_excerpt
+            )
+
+            if (
+                excerpt_norm
+                and excerpt_norm
+                in raw_norm
+            ):
+                excerpt_supported = True
+
+        # Si la IA tiene confianza muy baja Y además
+        # no puede apuntar a un fragmento real del Word,
+        # no cargamos ese registro.
+        if (
+            confidence < 0.45
+            and not excerpt_supported
+        ):
+            continue
+
+        proposals = []
+
+        for proposal in (
+            finding.proposals
+            or []
+        ):
+
+            proposal_text = clean_text(
+                proposal.proposal_text
+            )
+
+            # Solo conservamos propuestas que la IA
+            # identificó como respaldadas por la fuente.
+            if (
+                proposal_text
+                and proposal.source_supported
+            ):
+                proposals.append(
+                    AuditProposal(
+                        proposal_text=(
+                            proposal_text
+                        ),
+                        source_supported=True
+                    )
+                )
+
+        finding.original_title = (
+            original_title
+        )
+
+        finding.title = (
+            _clip_text(
+                title,
+                180
             )
         )
 
-        proposal_full = " ".join(
-            finding.get(
-                "proposal_lines",
-                []
+        finding.situation = (
+            _clip_text(
+                situation,
+                1600
             )
         )
 
-        title = _clean_finding_title(
-            raw_title
+        finding.evidence = (
+            _clip_text(
+                finding.evidence,
+                1000
+            )
         )
 
-        source_parts = [
-            raw_title,
-            situation_full,
-        ]
+        finding.risk = (
+            _clip_text(
+                finding.risk,
+                700
+            )
+        )
 
-        if proposal_full:
-            source_parts.append(
-                "Propuesta / recomendación "
-                "original:\n"
-                + proposal_full
+        finding.affected_process_or_control = (
+            _clip_text(
+                finding.affected_process_or_control,
+                500
+            )
+        )
+
+        finding.cause = (
+            _clip_text(
+                finding.cause,
+                500
+            )
+            if finding.cause
+            else None
+        )
+
+        finding.impact = (
+            _clip_text(
+                finding.impact,
+                500
+            )
+            if finding.impact
+            else None
+        )
+
+        finding.severity = (
+            _safe_severity(
+                finding.severity
+            )
+        )
+
+        finding.responsible_area = (
+            clean_text(
+                finding.responsible_area
+            )
+            or None
+        )
+
+        finding.source_excerpt = (
+            source_excerpt
+        )
+
+        finding.proposals = (
+            proposals
+        )
+
+        cleaned.append(
+            finding
+        )
+
+    cleaned = (
+        _deduplicate_findings(
+            cleaned
+        )
+    )
+
+    extraction.findings = (
+        cleaned
+    )
+
+    extraction.declared_finding_count = (
+        len(cleaned)
+    )
+
+    return extraction
+
+
+# ============================================================
+# PROMPT PRINCIPAL: IA LEE TODO EL INFORME
+# ============================================================
+
+DOCUMENT_EXTRACTION_INSTRUCTIONS = """
+Actuás como Auditor Interno Senior especializado en lectura documental.
+
+El documento que recibís YA contiene hallazgos de Auditoría definidos por
+el equipo auditor y, cuando corresponde, también contiene sus propuestas
+de mejora o recomendaciones.
+
+TU TAREA NO ES DESCUBRIR PROBLEMAS NUEVOS.
+
+Tu tarea es reconstruir correctamente la estructura real del informe,
+identificar cada hallazgo que el auditor efectivamente definió, reunir
+todos los párrafos que pertenecen a ese hallazgo e identificar la o las
+propuestas de mejora que pertenecen a ese mismo hallazgo.
+
+OBJETIVO PRINCIPAL
+
+Devolver exactamente los hallazgos reales del documento, no párrafos,
+no títulos de sección y no ejemplos aislados.
+
+REGLAS DE ESTRUCTURA
+
+1. Un encabezado general como:
+   "Hallazgos",
+   "7. Hallazgos",
+   "Resultados",
+   "Análisis",
+   "Observaciones",
+   "Conclusiones",
+   "Resumen",
+   "Objetivos",
+   "Alcance",
+   "Metodología",
+   "Propuestas de mejora"
+   NO es un hallazgo.
+
+2. No conviertas cada línea, párrafo, viñeta, ejemplo, evidencia,
+comentario de reunión, respuesta del área, sucursal, producto o caso
+analizado en un hallazgo independiente.
+
+3. Si un hallazgo contiene varios ejemplos o casos que sustentan una
+misma observación, mantenelos dentro del MISMO hallazgo.
+
+4. No unas dos observaciones independientes si el documento las presenta
+como hallazgos diferentes.
+
+5. La cantidad final debe corresponder a la cantidad real de hallazgos
+definidos por el auditor en el documento.
+
+6. Prestá especial atención a señales de estructura:
+   [HEADING], [BOLD], [TABLE_ROW], numeración, títulos, subtítulos,
+   etiquetas como Hallazgo, Observación, Situación observada,
+   Análisis, Evidencia, Riesgo, Recomendación y Propuesta de mejora.
+
+HALLAZGO
+
+7. original_title debe preservar el título o identificación que aparece
+en el informe.
+
+8. title debe ser un título profesional y conciso para el mismo hallazgo.
+Podés limpiar numeraciones o frases de formato, pero no cambiar su sentido.
+
+9. situation NO debe ser una copia indiscriminada de todo el bloque.
+Debe interpretar y sintetizar la situación observada de forma profesional:
+qué ocurrió, dónde o sobre qué proceso ocurrió y qué evidencia relevante
+lo sustenta. Conservá cifras, fechas, documentos, sistemas y datos concretos
+cuando existan.
+
+10. No inventes hechos, cifras, porcentajes, cantidades, fechas, códigos,
+documentos, transacciones, sistemas, responsables, normativa o causas.
+
+11. evidence debe contener únicamente evidencia concreta respaldada por
+el documento.
+
+12. cause debe ser null si el documento no permite sostener una causa.
+
+13. impact debe ser null si no existe un impacto concreto o razonablemente
+descripto en el documento.
+
+14. risk debe expresar la consecuencia relevante del hallazgo. No uses
+frases genéricas como "riesgo de control interno asociado al hallazgo".
+
+15. severity solamente puede ser Alto, Medio o Bajo. Clasificala de acuerdo
+con la relevancia del riesgo y la evidencia disponible, sin exagerar.
+
+16. responsible_area debe surgir del informe. Si no puede determinarse con
+suficiente respaldo, devolver null.
+
+PROPUESTAS DE MEJORA
+
+17. Las propuestas ya existen en el informe. Debés DETECTARLAS y vincularlas
+al hallazgo correcto.
+
+18. No inventes una propuesta porque te parezca conveniente.
+
+19. Si el documento tiene una propuesta/recomendación explícita, preservá
+su sentido y contenido. Podés limpiar la redacción para que sea clara, pero
+no reemplazarla por una recomendación diferente.
+
+20. Si un hallazgo tiene dos propuestas explícitas, devolvé las dos.
+
+21. Si el hallazgo no tiene propuesta explícita, proposals debe ser [].
+
+22. Cada propuesta recuperada desde el documento debe tener
+source_supported=true.
+
+TRAZABILIDAD
+
+23. source_excerpt debe ser una cita BREVE y LITERAL del documento que
+permita comprobar que el hallazgo existe. No la parafrasees.
+
+24. confidence debe estar entre 0 y 1 e indicar tu confianza en que el
+registro corresponde a un hallazgo explícitamente definido en el informe.
+
+25. No agregues planes de acción. Plan de acción y propuesta de mejora son
+entidades diferentes.
+
+El resultado debe poder ser revisado por otro auditor y debe conservar
+trazabilidad con la fuente original.
+"""
+
+
+# ============================================================
+# IA 1: EXTRACTOR DOCUMENTAL
+# ============================================================
+
+def extract_document_findings_with_ai(
+    raw_text,
+    filename
+):
+    client = (
+        _get_openai_client()
+    )
+
+    if not client:
+        return None
+
+    fallback_title = (
+        extract_report_title(
+            raw_text,
+            filename
+        )
+    )
+
+    explicit_area = (
+        extract_explicit_area(
+            raw_text
+        )
+    )
+
+    explicit_auditor = (
+        extract_explicit_auditor(
+            raw_text
+        )
+    )
+
+    prompt = f"""
+Analizá el informe completo.
+
+ARCHIVO:
+{filename}
+
+TÍTULO DETECTADO POR REGLA SIMPLE:
+{fallback_title}
+
+ÁREA EXPLÍCITA DETECTADA, SI EXISTE:
+{explicit_area or "No detectada"}
+
+AUDITOR EXPLÍCITO DETECTADO, SI EXISTE:
+{explicit_auditor or "No detectado"}
+
+IMPORTANTE:
+Los datos anteriores son solamente ayudas de navegación.
+La fuente completa prevalece.
+
+--- INICIO DEL INFORME ---
+
+{raw_text}
+
+--- FIN DEL INFORME ---
+
+Reconstruí la estructura real del informe.
+
+No conviertas títulos de sección ni párrafos sueltos en hallazgos.
+
+Identificá solamente los hallazgos que ya están definidos por el auditor.
+
+Identificá también las propuestas/recomendaciones que ya están escritas
+y vinculalas con el hallazgo correspondiente.
+
+Si el documento tiene 10 hallazgos reales, la salida debe contener
+10 hallazgos, no 17 párrafos convertidos en registros.
+"""
+
+    try:
+        response = (
+            client
+            .beta
+            .chat
+            .completions
+            .parse(
+                model=DEFAULT_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            DOCUMENT_EXTRACTION_INSTRUCTIONS
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                response_format=(
+                    AuditDocumentExtraction
+                ),
+            )
+        )
+
+        result = (
+            response
+            .choices[0]
+            .message
+            .parsed
+        )
+
+        return (
+            _sanitize_document_extraction(
+                result,
+                raw_text
+            )
+        )
+
+    except Exception as exc:
+        print(
+            "[IA Documento] Error:",
+            exc
+        )
+
+        return None
+
+
+# ============================================================
+# PROMPT DE SEGUNDO CONTROL
+# ============================================================
+
+DOCUMENT_REVIEW_INSTRUCTIONS = """
+Actuás como Revisor Senior Independiente de Auditoría Interna.
+
+Recibís:
+
+1. el informe original completo;
+2. una extracción estructurada realizada por otro modelo.
+
+Tu función es verificar la ESTRUCTURA DOCUMENTAL, no inventar contenido.
+
+CONTROL OBLIGATORIO
+
+1. Verificá que cada registro sea un hallazgo real definido en el informe.
+
+2. Eliminá falsos hallazgos que sean títulos de sección como
+"7. Hallazgos".
+
+3. Detectá si un solo hallazgo fue partido erróneamente en varios registros.
+
+4. Detectá si dos hallazgos distintos fueron fusionados.
+
+5. Verificá que no se hayan convertido ejemplos, casos, evidencia,
+comentarios del área o párrafos de análisis en hallazgos independientes.
+
+6. Verificá que cada propuesta de mejora corresponda al hallazgo correcto.
+
+7. Verificá que no se hayan inventado propuestas.
+
+8. Verificá que se hayan conservado las propuestas explícitas del documento.
+
+9. Verificá que cifras, fechas, códigos, documentos, sistemas y hechos sean
+fieles a la fuente.
+
+10. Verificá que la síntesis de la situación represente el contenido completo
+del hallazgo y no sea una simple copia de la primera línea.
+
+11. Verificá que la cantidad final de hallazgos corresponda a la estructura
+real del informe.
+
+12. No crees hallazgos nuevos para "mejorar" la cobertura.
+
+13. Si un mismo hallazgo incluye varios productos, sucursales, casos o
+ejemplos como evidencia de una misma problemática, no los separes salvo
+que el informe explícitamente los presente como hallazgos diferentes.
+
+SI TODO ESTÁ CORRECTO:
+
+approved=true
+corrected_result=null
+
+SI HAY ERRORES:
+
+approved=false
+
+Detallá los problemas en issues y devolvé en corrected_result la estructura
+COMPLETA corregida.
+
+Toda corrección debe estar respaldada por el informe original.
+"""
+
+
+# ============================================================
+# IA 2: REVISOR DOCUMENTAL
+# ============================================================
+
+def review_document_extraction(
+    raw_text,
+    extraction
+):
+    client = (
+        _get_openai_client()
+    )
+
+    if (
+        not client
+        or extraction is None
+    ):
+        return None
+
+    prompt = f"""
+--- INFORME ORIGINAL ---
+
+{raw_text}
+
+--- FIN INFORME ORIGINAL ---
+
+
+--- EXTRACCIÓN PROPUESTA ---
+
+{extraction.model_dump_json(indent=2)}
+
+--- FIN EXTRACCIÓN PROPUESTA ---
+
+
+Revisá especialmente:
+
+- cantidad real de hallazgos;
+- títulos de sección mal clasificados;
+- un hallazgo partido en varios;
+- varios hallazgos unidos incorrectamente;
+- propuestas asociadas al hallazgo incorrecto;
+- propuestas inventadas;
+- propuestas del informe que hayan sido omitidas.
+"""
+
+    try:
+        response = (
+            client
+            .beta
+            .chat
+            .completions
+            .parse(
+                model=REVIEW_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            DOCUMENT_REVIEW_INSTRUCTIONS
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                response_format=(
+                    AuditDocumentReview
+                ),
+            )
+        )
+
+        return (
+            response
+            .choices[0]
+            .message
+            .parsed
+        )
+
+    except Exception as exc:
+        print(
+            "[IA Revisión Documento] Error:",
+            exc
+        )
+
+        return None
+
+
+# ============================================================
+# PIPELINE IA COMPLETO
+# ============================================================
+
+def run_document_ai_pipeline(
+    raw_text,
+    filename
+):
+    extraction = (
+        extract_document_findings_with_ai(
+            raw_text,
+            filename
+        )
+    )
+
+    if not extraction:
+        return None
+
+    review = (
+        review_document_extraction(
+            raw_text,
+            extraction
+        )
+    )
+
+    # Si la segunda IA falla por conexión/crédito,
+    # conservamos la primera extracción estructurada.
+    # NO usamos el viejo fallback que partía párrafos.
+    if review is None:
+
+        print(
+            "[IA] La revisión secundaria no estuvo "
+            "disponible. Se conserva la extracción "
+            "documental primaria."
+        )
+
+        return extraction
+
+    if review.approved:
+
+        return extraction
+
+    if review.corrected_result:
+
+        corrected = (
+            _sanitize_document_extraction(
+                review.corrected_result,
+                raw_text
+            )
+        )
+
+        if corrected:
+            return corrected
+
+    print(
+        "[IA] El revisor detectó problemas "
+        "y no devolvió una estructura "
+        "corregida utilizable."
+    )
+
+    return None
+
+
+# ============================================================
+# FALLBACK ESTRICTO
+#
+# IMPORTANTE:
+# YA NO EXISTE EL FALLBACK QUE GENERABA UN HALLAZGO
+# CADA 300 / 4000 CARACTERES.
+# ============================================================
+
+EXPLICIT_FINDING_RE = re.compile(
+    r"^(?:hallazgo|"
+    r"observaci[oó]n|"
+    r"desviaci[oó]n)"
+    r"\s*(?:n[°º]?\s*)?"
+    r"(\d+)"
+    r"\s*[:\-\.\)]?\s*"
+    r"(.*)$",
+    re.IGNORECASE
+)
+
+
+EXPLICIT_PROPOSAL_RE = re.compile(
+    r"^(?:propuesta"
+    r"(?:\s+de\s+mejora)?|"
+    r"recomendaci[oó]n|"
+    r"acci[oó]n\s+recomendada)"
+    r"\s*[:\-]\s*"
+    r"(.*)$",
+    re.IGNORECASE
+)
+
+
+def strict_explicit_fallback(
+    raw_text,
+    default_area=""
+):
+    """
+    Fallback deliberadamente conservador.
+
+    Solo reconoce hallazgos etiquetados explícitamente
+    como "Hallazgo N", "Observación N" o "Desviación N".
+
+    Nunca convierte párrafos arbitrarios en hallazgos.
+    """
+
+    lines = [
+        clean_text(
+            re.sub(
+                r"^\[(?:HEADING|"
+                r"BOLD|HEADER)\]\s*",
+                "",
+                line,
+                flags=re.IGNORECASE
+            )
+        )
+        for line in raw_text.splitlines()
+        if clean_text(line)
+    ]
+
+    findings = []
+
+    current = None
+
+    proposal_mode = False
+
+    for line in lines:
+
+        finding_match = (
+            EXPLICIT_FINDING_RE.match(
+                line
+            )
+        )
+
+        if finding_match:
+
+            if current:
+                findings.append(
+                    current
+                )
+
+            number = (
+                finding_match.group(1)
             )
 
-        source_block = "\n".join(
-            part
-            for part in source_parts
-            if part
+            title = clean_text(
+                finding_match.group(2)
+            )
+
+            if not title:
+
+                title = (
+                    f"Hallazgo {number}"
+                )
+
+            current = {
+                "title": title,
+                "situation_lines": [],
+                "proposal_lines": [],
+                "responsible_area": (
+                    default_area
+                ),
+            }
+
+            proposal_mode = False
+
+            continue
+
+        if not current:
+            continue
+
+        proposal_match = (
+            EXPLICIT_PROPOSAL_RE.match(
+                line
+            )
         )
 
-        ai_result = run_double_ai_review(
-            source_text=source_block,
-            fallback_title=title,
-            fallback_area=finding.get(
-                "responsible_area",
-                explicit_area
+        if proposal_match:
+
+            proposal_mode = True
+
+            initial_text = (
+                clean_text(
+                    proposal_match.group(1)
+                )
+            )
+
+            if initial_text:
+
+                current[
+                    "proposal_lines"
+                ].append(
+                    initial_text
+                )
+
+            continue
+
+        if proposal_mode:
+
+            current[
+                "proposal_lines"
+            ].append(
+                line
+            )
+
+        else:
+
+            current[
+                "situation_lines"
+            ].append(
+                line
+            )
+
+    if current:
+
+        findings.append(
+            current
+        )
+
+    result = []
+
+    for index, item in enumerate(
+        findings,
+        start=1
+    ):
+
+        title = clean_text(
+            item["title"]
+        )
+
+        if _is_section_only_title(
+            title
+        ):
+            continue
+
+        situation = (
+            _clip_text(
+                " ".join(
+                    item[
+                        "situation_lines"
+                    ]
+                ),
+                1600
+            )
+        )
+
+        if not situation:
+            situation = title
+
+        proposal = (
+            _clip_text(
+                " ".join(
+                    item[
+                        "proposal_lines"
+                    ]
+                ),
+                1200
+            )
+        )
+
+        result.append({
+            "title": title,
+
+            "situation": situation,
+
+            "risk": "",
+
+            "severity": "Medio",
+
+            "responsible_area": (
+                item[
+                    "responsible_area"
+                ]
+                or ""
             ),
-            fallback_severity=finding.get(
-                "severity",
-                "Medio"
+
+            "evidence": "",
+
+            "cause": "",
+
+            "affected_process_or_control": "",
+
+            "impact": "",
+
+            "proposals_ai": (
+                [proposal]
+                if proposal
+                else []
             ),
+
+            "ai_confidence": 0.50,
+
+            "ai_validated": False,
+
+            "ai_status": (
+                "Fallback estructural explícito"
+            ),
+
+            "source_text": (
+                situation
+            ),
+
+            "source_location": (
+                f"Hallazgo explícito {index}"
+            ),
+        })
+
+    return result
+
+
+# ============================================================
+# CONVERSIÓN DE IA A ESTRUCTURA DE AUDITTRACK
+# ============================================================
+
+def _document_to_relational_findings(
+    document,
+    filename,
+    fallback_area=""
+):
+    relational_findings = []
+
+    proposal_counter = 1
+
+    for index, finding in enumerate(
+        document.findings,
+        start=1
+    ):
+
+        finding_id = str(
+            uuid.uuid4()
         )
 
-        if ai_result:
-            proposals = [
+        title = clean_text(
+            finding.title
+            or finding.original_title
+            or f"Hallazgo {index}"
+        )
+
+        situation = clean_text(
+            finding.situation
+            or title
+        )
+
+        source_key = (
+            hashlib.md5(
+                (
+                    f"{filename}_"
+                    f"{index}_"
+                    f"{finding.original_title}_"
+                    f"{finding.source_excerpt}"
+                ).encode(
+                    "utf-8"
+                )
+            )
+            .hexdigest()[:12]
+        )
+
+        source_item_id = (
+            f"src_{source_key}"
+        )
+
+        severity = (
+            _safe_severity(
+                finding.severity
+            )
+        )
+
+        area = clean_text(
+            finding.responsible_area
+        )
+
+        if not area:
+
+            area = (
+                fallback_area
+                or "Pendiente de definir"
+            )
+
+        proposals = []
+
+        for proposal in (
+            finding.proposals
+            or []
+        ):
+
+            proposal_text = (
                 clean_text(
                     proposal.proposal_text
                 )
-                for proposal
-                in ai_result.proposals
-                if clean_text(
-                    proposal.proposal_text
-                )
-            ]
+            )
 
-            cleaned_findings.append({
+            if not proposal_text:
+                continue
+
+            pm_code = (
+                f"PM-2026-"
+                f"{proposal_counter:03d}"
+            )
+
+            proposal_counter += 1
+
+            proposals.append({
+
+                "id": str(
+                    uuid.uuid4()
+                ),
+
+                "finding_id": (
+                    finding_id
+                ),
+
+                "code": pm_code,
+
                 "title": (
-                    clean_text(
-                        ai_result.title
-                    )
-                    or title
+                    proposal_text
                 ),
 
-                "situation": (
-                    clean_text(
-                        ai_result.situation
-                    )
-                    or title
-                ),
-
-                "proposal": (
-                    proposals[0]
-                    if proposals
-                    else ""
-                ),
-
-                "proposals_ai": proposals,
-
-                "risk": clean_text(
-                    ai_result.risk
+                "proposal_text": (
+                    proposal_text
                 ),
 
                 "severity": (
-                    ai_result.severity
-                    if ai_result.severity
-                    in (
-                        "Alto",
-                        "Medio",
-                        "Bajo"
-                    )
-                    else "Medio"
+                    severity
                 ),
 
                 "responsible_area": (
-                    clean_text(
-                        ai_result
-                        .responsible_area
-                    )
-                    or finding.get(
-                        "responsible_area",
-                        explicit_area
-                    )
+                    area
                 ),
 
-                "evidence": clean_text(
-                    ai_result.evidence
+                "action_owner": (
+                    "Pendiente de definir"
                 ),
 
-                "cause": clean_text(
-                    ai_result.cause
+                "target_date": "",
+
+                "status": (
+                    "Pendiente"
                 ),
 
-                "affected_process_or_control":
-                    clean_text(
-                        ai_result
-                        .affected_process_or_control
-                    ),
-
-                "impact": clean_text(
-                    ai_result.impact
-                ),
-
-                "ai_confidence": (
-                    ai_result.confidence
-                ),
-
-                "ai_validated": True,
-
-                "source_text": source_block,
+                "action_plans": [],
             })
 
-        else:
-            fallback_situation = (
-                _summarize_text(
-                    situation_full,
-                    max_chars=700
+        relational_findings.append({
+
+            "id": finding_id,
+
+            "sourceItemId": (
+                source_item_id
+            ),
+
+            "sourceItemIds": [
+                source_item_id
+            ],
+
+            "sourceKey": (
+                source_key
+            ),
+
+            "sourceFile": (
+                filename
+            ),
+
+            "sourceLocation": (
+                finding.source_excerpt
+                or f"Hallazgo {index}"
+            ),
+
+            "source_text": (
+                finding.source_excerpt
+                or situation
+            ),
+
+            "evidence": (
+                clean_text(
+                    finding.evidence
                 )
-            )
+            ),
 
-            if not fallback_situation:
-                fallback_situation = title
+            "included": True,
 
-            fallback_proposal = (
-                _summarize_text(
-                    proposal_full,
-                    max_chars=500
+            "selectedAsFinding": True,
+
+            "converted": False,
+
+            "code": (
+                f"H-2026-{index:03d}"
+            ),
+
+            "title": (
+                title
+            ),
+
+            "situation": (
+                situation
+            ),
+
+            "risk": (
+                clean_text(
+                    finding.risk
                 )
-            )
+            ),
 
-            cleaned_findings.append({
-                "title": title,
-                "situation": (
-                    fallback_situation
-                ),
-                "proposal": (
-                    fallback_proposal
-                ),
-                "proposals_ai": (
-                    [fallback_proposal]
-                    if fallback_proposal
-                    else []
-                ),
-                "risk": "",
-                "severity": finding.get(
-                    "severity",
-                    "Medio"
-                ),
-                "responsible_area": (
-                    finding.get(
-                        "responsible_area",
-                        explicit_area
-                    )
-                ),
-                "evidence": "",
-                "cause": "",
-                "affected_process_or_control": "",
-                "impact": "",
-                "ai_confidence": 0,
-                "ai_validated": False,
-                "source_text": source_block,
-            })
+            "severity": (
+                severity
+            ),
 
-    print(
-        f"[Parser] Documento '{filename}': "
-        f"{len(cleaned_findings)} hallazgos."
-    )
+            "responsible_area": (
+                area
+            ),
 
-    return {
-        "report_title": report_title,
-        "area": explicit_area,
-        "auditor": explicit_auditor,
-        "findings": cleaned_findings,
-    }
+            "action_owner": (
+                "Pendiente de definir"
+            ),
 
+            "status": (
+                "Pendiente"
+            ),
 
-# ============================================================
-# PARSER TABULAR
-# ============================================================
+            "observations": "",
 
-def _parse_tabular_findings(
-    lines,
-    default_area
-):
-    findings = []
+            "proposals": (
+                proposals
+            ),
 
-    header_idx = None
-    col_hallazgo = None
-    col_propuesta = None
-    col_area = None
-    col_riesgo = None
-
-    for index, line in enumerate(lines):
-        if "|" not in line:
-            continue
-
-        cols = [
-            cell.strip()
-            for cell
-            in line.split("|")
-        ]
-
-        norm_cols = [
-            normalize_text(cell)
-            for cell in cols
-        ]
-
-        if header_idx is None:
-            for col_idx, norm_col in enumerate(
-                norm_cols
-            ):
-                if any(
-                    kw in norm_col
-                    for kw in [
-                        "hallazgo",
-                        "observacion",
-                        "desviacion",
-                        "descripcion",
-                        "situacion",
-                    ]
-                ):
-                    col_hallazgo = col_idx
-
-                if any(
-                    kw in norm_col
-                    for kw in [
-                        "propuesta",
-                        "recomendacion",
-                        "mejora",
-                    ]
-                ):
-                    col_propuesta = col_idx
-
-                if any(
-                    kw in norm_col
-                    for kw in [
-                        "area",
-                        "proceso",
-                        "sector",
-                        "gerencia",
-                    ]
-                ):
-                    col_area = col_idx
-
-                if any(
-                    kw in norm_col
-                    for kw in [
-                        "riesgo",
-                        "severidad",
-                        "criticidad",
-                    ]
-                ):
-                    col_riesgo = col_idx
-
-            if col_hallazgo is not None:
-                header_idx = index
-                continue
-
-        if (
-            header_idx is not None
-            and col_hallazgo is not None
-            and len(cols) > col_hallazgo
-        ):
-            hallazgo_text = (
-                cols[col_hallazgo]
-            )
-
-            if len(
-                hallazgo_text
-            ) < 5:
-                continue
-
-            proposal_text = ""
-
-            if (
-                col_propuesta
-                is not None
-                and len(cols)
-                > col_propuesta
-            ):
-                proposal_text = (
-                    cols[col_propuesta]
+            "cause": (
+                clean_text(
+                    finding.cause
                 )
+            ),
 
-            area = default_area
-
-            if (
-                col_area
-                is not None
-                and len(cols)
-                > col_area
-            ):
-                area = (
-                    cols[col_area]
-                    or default_area
+            "affected_process_or_control": (
+                clean_text(
+                    finding
+                    .affected_process_or_control
                 )
+            ),
 
-            severity = "Medio"
-
-            if (
-                col_riesgo
-                is not None
-                and len(cols)
-                > col_riesgo
-            ):
-                severity = (
-                    _detect_severity(
-                        cols[col_riesgo]
-                    )
+            "impact": (
+                clean_text(
+                    finding.impact
                 )
+            ),
 
-            source_block = (
-                hallazgo_text
-            )
-
-            if proposal_text:
-                source_block += (
-                    "\nPropuesta / recomendación "
-                    "original:\n"
-                    + proposal_text
+            "ai_confidence": (
+                float(
+                    finding.confidence
+                    or 0
                 )
+            ),
 
-            ai_result = run_double_ai_review(
-                source_text=source_block,
-                fallback_title=hallazgo_text[:100],
-                fallback_area=area,
-                fallback_severity=severity,
-            )
+            "ai_validated": True,
 
-            if ai_result:
-                proposals = [
-                    clean_text(
-                        proposal.proposal_text
-                    )
-                    for proposal
-                    in ai_result.proposals
-                    if clean_text(
-                        proposal.proposal_text
-                    )
-                ]
-
-                findings.append({
-                    "title": (
-                        clean_text(
-                            ai_result.title
-                        )
-                        or hallazgo_text[:100]
-                    ),
-
-                    "situation": (
-                        clean_text(
-                            ai_result.situation
-                        )
-                        or hallazgo_text
-                    ),
-
-                    "proposal": (
-                        proposals[0]
-                        if proposals
-                        else proposal_text
-                    ),
-
-                    "proposals_ai": (
-                        proposals
-                    ),
-
-                    "risk": (
-                        clean_text(
-                            ai_result.risk
-                        )
-                    ),
-
-                    "severity": (
-                        ai_result.severity
-                        if ai_result.severity
-                        in (
-                            "Alto",
-                            "Medio",
-                            "Bajo"
-                        )
-                        else severity
-                    ),
-
-                    "responsible_area": (
-                        clean_text(
-                            ai_result
-                            .responsible_area
-                        )
-                        or area
-                    ),
-
-                    "evidence": (
-                        clean_text(
-                            ai_result.evidence
-                        )
-                    ),
-
-                    "cause": (
-                        clean_text(
-                            ai_result.cause
-                        )
-                    ),
-
-                    "affected_process_or_control":
-                        clean_text(
-                            ai_result
-                            .affected_process_or_control
-                        ),
-
-                    "impact": (
-                        clean_text(
-                            ai_result.impact
-                        )
-                    ),
-
-                    "ai_confidence": (
-                        ai_result.confidence
-                    ),
-
-                    "ai_validated": True,
-                    "source_text": source_block,
-                })
-
-            else:
-                findings.append({
-                    "title": (
-                        hallazgo_text[:100]
-                    ),
-                    "situation": hallazgo_text,
-                    "proposal": proposal_text,
-                    "proposals_ai": (
-                        [proposal_text]
-                        if proposal_text
-                        else []
-                    ),
-                    "risk": "",
-                    "severity": severity,
-                    "responsible_area": area,
-                    "evidence": "",
-                    "cause": "",
-                    "affected_process_or_control": "",
-                    "impact": "",
-                    "ai_confidence": 0,
-                    "ai_validated": False,
-                    "source_text": source_block,
-                })
-
-    return findings
-
-
-def _extract_heuristic_paragraph_findings(raw_text, explicit_area="Operaciones"):
-    lines = [clean_text(l) for l in raw_text.splitlines() if clean_text(l)]
-    valid_lines = [l for l in lines if len(l) > 15 and not _is_non_finding_header(normalize_text(l))]
-
-    if not valid_lines:
-        return []
-
-    findings = []
-    chunk = []
-    chunk_len = 0
-    chunk_idx = 1
-
-    for line in valid_lines:
-        chunk.append(line)
-        chunk_len += len(line)
-        if chunk_len >= 300:
-            full_block = " ".join(chunk)
-            title = chunk[0][:90]
-            findings.append({
-                "title": title,
-                "situation": full_block,
-                "proposal": "",
-                "proposals_ai": [],
-                "risk": "",
-                "severity": "Medio",
-                "responsible_area": explicit_area,
-                "evidence": "",
-                "cause": "",
-                "affected_process_or_control": "",
-                "impact": "",
-                "ai_confidence": 0,
-                "ai_validated": False,
-                "ai_status": "Fallback heurístico (Párrafos)",
-                "source_text": full_block,
-                "source_location": f"Párrafo / Bloque {chunk_idx}"
-            })
-            chunk_idx += 1
-            chunk = []
-            chunk_len = 0
-
-    if chunk:
-        full_block = " ".join(chunk)
-        title = chunk[0][:90]
-        findings.append({
-            "title": title,
-            "situation": full_block,
-            "proposal": "",
-            "proposals_ai": [],
-            "risk": "",
-            "severity": "Medio",
-            "responsible_area": explicit_area,
-            "evidence": "",
-            "cause": "",
-            "affected_process_or_control": "",
-            "impact": "",
-            "ai_confidence": 0,
-            "ai_validated": False,
-            "ai_status": "Fallback heurístico (Párrafos)",
-            "source_text": full_block,
-            "source_location": f"Párrafo / Bloque {chunk_idx}"
+            "ai_status": (
+                "IA documental + revisión"
+            ),
         })
 
-    return findings[:10]
+    return relational_findings
 
 
-def _extract_findings_directly_via_ai(raw_text, filename):
-    client = _get_openai_client()
-    if not client:
-        return []
+# ============================================================
+# CONVERSIÓN DEL FALLBACK A AUDITTRACK
+# ============================================================
 
-    chunks = [raw_text[i:i+4000] for i in range(0, len(raw_text), 4000)]
-    extracted = []
+def _fallback_to_relational_findings(
+    findings,
+    filename,
+    fallback_area=""
+):
+    relational_findings = []
 
-    for idx, chunk in enumerate(chunks[:5], start=1):
-        ai_res = run_double_ai_review(
-            source_text=chunk,
-            fallback_title=f"Hallazgo Detectado por IA #{idx}",
-            fallback_area="Operaciones",
-            fallback_severity="Medio"
+    proposal_counter = 1
+
+    for index, finding in enumerate(
+        findings,
+        start=1
+    ):
+
+        finding_id = str(
+            uuid.uuid4()
         )
 
-        if ai_res and ai_res.situation:
-            proposals = [clean_text(p.proposal_text) for p in ai_res.proposals if clean_text(p.proposal_text)]
-            extracted.append({
-                "title": clean_text(ai_res.title) or f"Hallazgo {idx}",
-                "situation": clean_text(ai_res.situation),
-                "risk": clean_text(ai_res.risk),
-                "severity": ai_res.severity if ai_res.severity in ("Alto", "Medio", "Bajo") else "Medio",
-                "responsible_area": clean_text(ai_res.responsible_area) or "Operaciones",
-                "evidence": clean_text(ai_res.evidence),
-                "cause": clean_text(ai_res.cause),
-                "affected_process_or_control": clean_text(ai_res.affected_process_or_control),
-                "impact": clean_text(ai_res.impact),
-                "proposals_ai": proposals,
-                "ai_confidence": ai_res.confidence,
-                "ai_validated": True,
-                "ai_status": "IA completa",
-                "source_text": chunk,
-                "source_location": f"Bloque de texto {idx}"
+        title = clean_text(
+            finding.get(
+                "title",
+                f"Hallazgo {index}"
+            )
+        )
+
+        source_key = (
+            hashlib.md5(
+                (
+                    f"{filename}_"
+                    f"{index}_"
+                    f"{title}"
+                ).encode(
+                    "utf-8"
+                )
+            )
+            .hexdigest()[:12]
+        )
+
+        source_item_id = (
+            f"src_{source_key}"
+        )
+
+        proposals = []
+
+        for proposal_text in (
+            finding.get(
+                "proposals_ai",
+                []
+            )
+            or []
+        ):
+
+            proposal_text = (
+                clean_text(
+                    proposal_text
+                )
+            )
+
+            if not proposal_text:
+                continue
+
+            code = (
+                f"PM-2026-"
+                f"{proposal_counter:03d}"
+            )
+
+            proposal_counter += 1
+
+            proposals.append({
+
+                "id": str(
+                    uuid.uuid4()
+                ),
+
+                "finding_id": (
+                    finding_id
+                ),
+
+                "code": (
+                    code
+                ),
+
+                "title": (
+                    proposal_text
+                ),
+
+                "proposal_text": (
+                    proposal_text
+                ),
+
+                "severity": (
+                    _safe_severity(
+                        finding.get(
+                            "severity"
+                        )
+                    )
+                ),
+
+                "responsible_area": (
+                    clean_text(
+                        finding.get(
+                            "responsible_area"
+                        )
+                    )
+                    or fallback_area
+                    or "Pendiente de definir"
+                ),
+
+                "action_owner": (
+                    "Pendiente de definir"
+                ),
+
+                "target_date": "",
+
+                "status": (
+                    "Pendiente"
+                ),
+
+                "action_plans": [],
             })
 
-    return extracted
+        relational_findings.append({
+
+            "id": (
+                finding_id
+            ),
+
+            "sourceItemId": (
+                source_item_id
+            ),
+
+            "sourceItemIds": [
+                source_item_id
+            ],
+
+            "sourceKey": (
+                source_key
+            ),
+
+            "sourceFile": (
+                filename
+            ),
+
+            "sourceLocation": (
+                finding.get(
+                    "source_location"
+                )
+                or
+                f"Hallazgo explícito {index}"
+            ),
+
+            "source_text": (
+                finding.get(
+                    "source_text"
+                )
+                or finding.get(
+                    "situation"
+                )
+                or title
+            ),
+
+            "evidence": (
+                clean_text(
+                    finding.get(
+                        "evidence"
+                    )
+                )
+            ),
+
+            "included": True,
+
+            "selectedAsFinding": True,
+
+            "converted": False,
+
+            "code": (
+                f"H-2026-{index:03d}"
+            ),
+
+            "title": (
+                title
+            ),
+
+            "situation": (
+                clean_text(
+                    finding.get(
+                        "situation"
+                    )
+                    or title
+                )
+            ),
+
+            "risk": (
+                clean_text(
+                    finding.get(
+                        "risk"
+                    )
+                )
+            ),
+
+            "severity": (
+                _safe_severity(
+                    finding.get(
+                        "severity"
+                    )
+                )
+            ),
+
+            "responsible_area": (
+                clean_text(
+                    finding.get(
+                        "responsible_area"
+                    )
+                )
+                or fallback_area
+                or "Pendiente de definir"
+            ),
+
+            "action_owner": (
+                "Pendiente de definir"
+            ),
+
+            "status": (
+                "Pendiente"
+            ),
+
+            "observations": "",
+
+            "proposals": (
+                proposals
+            ),
+
+            "cause": (
+                clean_text(
+                    finding.get(
+                        "cause"
+                    )
+                )
+            ),
+
+            "affected_process_or_control": (
+                clean_text(
+                    finding.get(
+                        "affected_process_or_control"
+                    )
+                )
+            ),
+
+            "impact": (
+                clean_text(
+                    finding.get(
+                        "impact"
+                    )
+                )
+            ),
+
+            "ai_confidence": (
+                float(
+                    finding.get(
+                        "ai_confidence",
+                        0
+                    )
+                )
+            ),
+
+            "ai_validated": False,
+
+            "ai_status": (
+                finding.get(
+                    "ai_status",
+                    "Fallback estructural explícito"
+                )
+            ),
+        })
+
+    return relational_findings
 
 
 # ============================================================
@@ -1700,121 +2457,230 @@ def parse_audit_report(
     file_path,
     filename
 ):
-    raw_text = extract_raw_text_from_file(file_path)
+    """
+    NUEVA LÓGICA
 
-    if not raw_text or not raw_text.strip():
-        raise ValueError("No se pudo extraer texto del archivo o el contenido está vacío.")
+    1. Extrae el documento preservando títulos,
+       negritas y tablas.
 
-    parsed = parse_document(
-        raw_text,
-        filename
+    2. La IA lee el informe COMPLETO.
+
+    3. Identifica solamente los hallazgos
+       que el auditor ya definió.
+
+    4. Une todos los párrafos correspondientes
+       al mismo hallazgo.
+
+    5. Detecta las propuestas de mejora ya
+       existentes en el informe.
+
+    6. Vincula cada propuesta con su hallazgo.
+
+    7. Una segunda IA revisa cantidad, estructura,
+       falsos positivos y relaciones.
+
+    8. Se elimina expresamente un título como
+       "7. Hallazgos" si intentara entrar como
+       hallazgo.
+
+    9. Si la IA falla, NO se divide el informe
+       por cantidad de caracteres.
+
+    10. El fallback únicamente acepta títulos
+        explícitos como "Hallazgo 1".
+    """
+
+    raw_text = (
+        extract_raw_text_from_file(
+            file_path
+        )
     )
 
-    extracted_findings = parsed.get("findings", [])
-
-    if not extracted_findings and raw_text.strip():
-        ai_direct_findings = _extract_findings_directly_via_ai(raw_text, filename)
-        if ai_direct_findings:
-            extracted_findings = ai_direct_findings
-        else:
-            extracted_findings = _extract_heuristic_paragraph_findings(raw_text, parsed.get("area", "Operaciones"))
-
-    report_title = parsed.get(
-        "report_title",
-        f"Informe de Auditoría - {filename}"
+    fallback_title = (
+        extract_report_title(
+            raw_text,
+            filename
+        )
     )
 
-    explicit_area = parsed.get("area", "Operaciones")
-    explicit_auditor = parsed.get("auditor", "Auditoría Interna")
+    fallback_area = (
+        extract_explicit_area(
+            raw_text
+        )
+    )
 
-    relational_findings = []
-    proposal_counter = 1
+    fallback_auditor = (
+        extract_explicit_auditor(
+            raw_text
+        )
+    )
 
-    for index, finding in enumerate(extracted_findings, start=1):
-        finding_id = str(uuid.uuid4())
-        source_key = finding.get("source_key") or hashlib.md5(f"{filename}_{index}_{finding.get('title','')}".encode('utf-8')).hexdigest()[:12]
-        source_item_id = finding.get("source_item_id") or f"src_{source_key}"
-        source_item_ids = finding.get("source_item_ids") or [source_item_id]
+    # --------------------------------------------------------
+    # PRIMERA OPCIÓN: IA SOBRE EL DOCUMENTO COMPLETO
+    # --------------------------------------------------------
 
-        h_code = finding.get("code") or f"H-2026-{index:03d}"
+    document = (
+        run_document_ai_pipeline(
+            raw_text,
+            filename
+        )
+    )
 
-        title = clean_text(finding.get("title", f"Hallazgo {index}"))
-        situation = clean_text(finding.get("situation", title))
-        risk = clean_text(finding.get("risk", ""))
-        severity = finding.get("severity", "Medio")
-        if severity not in ("Alto", "Medio", "Bajo"):
-            severity = "Medio"
+    if (
+        document
+        and document.findings
+    ):
 
-        area = clean_text(finding.get("responsible_area")) or explicit_area
-        action_owner = clean_text(finding.get("action_owner")) or "Pendiente de definir"
+        report_title = (
+            clean_text(
+                document.report_title
+            )
+            or fallback_title
+        )
 
-        proposal_texts = finding.get("proposals_ai") or []
-        if not proposal_texts:
-            legacy_proposal = clean_text(finding.get("proposal", ""))
-            if legacy_proposal:
-                proposal_texts = [legacy_proposal]
+        report_area = (
+            clean_text(
+                document.area
+                or document.process
+            )
+            or fallback_area
+            or "Pendiente de definir"
+        )
 
-        proposals = []
-        for proposal_text in proposal_texts:
-            proposal_text = clean_text(proposal_text)
-            if not proposal_text:
-                continue
+        auditor = (
+            clean_text(
+                document.auditor
+            )
+            or fallback_auditor
+            or "Auditoría Interna"
+        )
 
-            pm_code = f"PM-2026-{proposal_counter:03d}"
-            proposal_counter += 1
+        relational_findings = (
+            _document_to_relational_findings(
+                document,
+                filename,
+                report_area
+            )
+        )
 
-            proposals.append({
-                "id": str(uuid.uuid4()),
-                "finding_id": finding_id,
-                "code": pm_code,
-                "title": proposal_text,
-                "proposal_text": proposal_text,
-                "severity": severity,
-                "responsible_area": area,
-                "action_owner": action_owner,
-                "target_date": "",
-                "status": "Pendiente",
-                "action_plans": [],
-            })
+    # --------------------------------------------------------
+    # FALLBACK:
+    # SOLO SI EL INFORME TIENE "HALLAZGO 1", ETC.
+    # --------------------------------------------------------
 
-        relational_findings.append({
-            "id": finding_id,
-            "sourceItemId": source_item_id,
-            "sourceItemIds": source_item_ids,
-            "sourceKey": source_key,
-            "sourceFile": filename,
-            "sourceLocation": finding.get("source_location") or f"Sección / Fila {index}",
-            "evidence": clean_text(finding.get("evidence", "")),
-            "included": True,
-            "selectedAsFinding": True,
-            "converted": False,
-            "code": h_code,
-            "title": title,
-            "situation": situation,
-            "risk": risk,
-            "severity": severity,
-            "responsible_area": area,
-            "action_owner": action_owner,
-            "status": "Pendiente",
-            "observations": finding.get("observations", ""),
-            "proposals": proposals,
-            "cause": clean_text(finding.get("cause", "")),
-            "affected_process_or_control": clean_text(finding.get("affected_process_or_control", "")),
-            "impact": clean_text(finding.get("impact", "")),
-            "ai_confidence": finding.get("ai_confidence", 0),
-            "ai_validated": finding.get("ai_validated", False),
-            "ai_status": finding.get("ai_status") or ("IA completa" if finding.get("ai_validated") else "Fallback heurístico")
-        })
+    else:
+
+        strict_findings = (
+            strict_explicit_fallback(
+                raw_text,
+                fallback_area
+            )
+        )
+
+        if not strict_findings:
+
+            raise ValueError(
+                "No fue posible identificar los "
+                "hallazgos del informe con suficiente "
+                "confianza. AuditTrack no generó "
+                "hallazgos por párrafos o bloques "
+                "arbitrarios para evitar falsos "
+                "positivos. Verificá que "
+                "OPENAI_API_KEY esté configurada y "
+                "que el servicio de IA esté disponible."
+            )
+
+        report_title = (
+            fallback_title
+        )
+
+        report_area = (
+            fallback_area
+            or "Pendiente de definir"
+        )
+
+        auditor = (
+            fallback_auditor
+            or "Auditoría Interna"
+        )
+
+        relational_findings = (
+            _fallback_to_relational_findings(
+                strict_findings,
+                filename,
+                report_area
+            )
+        )
+
+    # --------------------------------------------------------
+    # ÚLTIMA BARRERA DE SEGURIDAD
+    # --------------------------------------------------------
+
+    relational_findings = [
+        finding
+        for finding
+        in relational_findings
+        if not _is_section_only_title(
+            finding.get(
+                "title",
+                ""
+            )
+        )
+    ]
+
+    # Reenumerar después de eliminar
+    # cualquier falso encabezado.
+    for index, finding in enumerate(
+        relational_findings,
+        start=1
+    ):
+
+        finding["code"] = (
+            f"H-2026-{index:03d}"
+        )
+
+    print(
+        f"[Parser] '{filename}' procesado: "
+        f"{len(relational_findings)} "
+        "hallazgos reales."
+    )
 
     return {
+
         "report": {
-            "title": report_title,
-            "process": explicit_area or "Control Interno",
-            "area": explicit_area,
-            "period": "2026",
-            "auditor": explicit_auditor,
-            "summary": f"Informe {filename} procesado con {len(relational_findings)} hallazgos.",
-            "source_filename": filename
+
+            "title": (
+                report_title
+            ),
+
+            "process": (
+                report_area
+            ),
+
+            "area": (
+                report_area
+            ),
+
+            "period": (
+                "2026"
+            ),
+
+            "auditor": (
+                auditor
+            ),
+
+            "summary": (
+                f"Informe {filename} procesado "
+                f"con {len(relational_findings)} "
+                "hallazgos estructurados."
+            ),
+
+            "source_filename": (
+                filename
+            ),
         },
-        "findings": relational_findings
+
+        "findings": (
+            relational_findings
+        ),
     }
