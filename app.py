@@ -22,7 +22,6 @@ from database import (
     update_proposal,
     delete_finding,
     delete_report,
-    create_proposal_for_finding,
     get_dashboard_stats,
     get_kpi_indicators,
     get_history_logs,
@@ -257,20 +256,6 @@ def update_finding_route(finding_id):
     if updated:
         return jsonify({"message": "Hallazgo actualizado correctamente."})
     return jsonify({"error": "Hallazgo no encontrado o sin cambios."}), 404
-
-
-@app.route("/findings/<finding_id>/add-proposal", methods=["POST"])
-def add_proposal_to_finding_route(finding_id):
-    data = request.get_json(silent=True) or {}
-    proposal_text = data.get("proposal_text")
-    if not proposal_text:
-        return jsonify({"error": "La propuesta de mejora no puede estar vacía."}), 400
-
-    user_name = data.get("user_name", "Auditoría Interna")
-    prop_id, p_code = create_proposal_for_finding(finding_id, proposal_text, user_name)
-    if prop_id:
-        return jsonify({"message": f"Propuesta {p_code} creada exitosamente.", "id": prop_id, "code": p_code})
-    return jsonify({"error": "Hallazgo no encontrado."}), 404
 
 
 @app.route("/proposals/<proposal_id>/update", methods=["POST"])
