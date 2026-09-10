@@ -526,7 +526,39 @@ def _looks_like_finding_start(
         if norm_line.startswith(header) or norm_line.strip().rstrip(":. ") == header:
             return False
 
-    return False
+def _is_proposals_section_header(line, norm_line):
+    clean_l = re.sub(r"\[[A-Z0-9_]+\]", "", line).strip()
+    header_text = re.sub(r"^(?:\d+[\.\)]|\d+\.\d+[\.\)]?|[-•])\s*", "", clean_l).strip()
+    norm_h = normalize_text(header_text)
+
+    return norm_h in (
+        "propuestas de mejora",
+        "propuesta de mejora",
+        "propuestas",
+        "propuesta de mejoras",
+        "recomendaciones de mejora",
+        "recomendaciones",
+        "acciones correctivas"
+    )
+
+
+def _parse_finding_references(text):
+    if not text:
+        return []
+
+    found_numbers = set()
+    pattern = re.compile(
+        r"\b(?:hallazgos?|observaci[oó]n(?:es)?|desviaci[oó]n(?:es)?)\s*(?:n[°º]?\s*)?(\d+(?:\s*(?:,|y|e)\s*\d+)*)",
+        re.IGNORECASE
+    )
+
+    for match in pattern.finditer(text):
+        nums_str = match.group(1)
+        nums = re.findall(r"\d+", nums_str)
+        for n in nums:
+            found_numbers.add(int(n))
+
+    return sorted(list(found_numbers))
 
 
 def _looks_like_proposal_start(
@@ -1066,11 +1098,56 @@ def parse_document(
             break
 
     findings = []
+    global_proposals = []
     current_finding = None
+    current_global_proposal = None
     reading_proposal = False
+    in_global_proposals = False
 
     for line in lines:
         norm = normalize_text(line)
+
+        if _is_proposals_section_header(line, norm):
+            print(f"[Propuestas] Sección global encontrada: {line}")
+            if current_finding:
+                findings.append(current_finding)
+                current_finding = None
+
+            in_global_proposals = True
+            reading_proposal = False
+            reading_summary = False
+            reading_conclusion = False
+            continue
+
+        if in_global_proposals:
+            clean_l = re.sub(r"\[[A-Z0-9_]+\]", "", line).strip()
+            header_text = re.sub(r"^(?:\d+[\.\)]|\d+\.\d+[\.\)]?|[-•])\s*", "", clean_l).strip()
+            norm_h = normalize_text(header_text)
+
+            if _is_non_finding_header(norm_h) or norm_h in ("conclusion", "conclusiones", "anexo", "anexos", "glosario", "referencias", "firmas"):
+                print(f"[Propuestas] Fin de sección global por encabezado: {line}")
+                if current_global_proposal:
+                    global_proposals.append(current_global_proposal)
+                    current_global_proposal = None
+                in_global_proposals = False
+                continue
+
+            num_match = re.match(r"^(?:\[[A-Z0-9_]+\]\s*)?(\d+)[\.\)]\s*(.*)", line.strip())
+            if num_match:
+                p_num = int(num_match.group(1))
+                p_text_init = num_match.group(2).strip()
+                if current_global_proposal:
+                    global_proposals.append(current_global_proposal)
+
+                current_global_proposal = {
+                    "number": p_num,
+                    "proposal_text_lines": [p_text_init] if p_text_init else []
+                }
+                continue
+
+            if current_global_proposal:
+                current_global_proposal["proposal_text_lines"].append(line)
+                continue
 
         if (
             _is_non_finding_header(norm)
@@ -1164,6 +1241,9 @@ def parse_document(
         findings.append(
             current_finding
         )
+
+    if current_global_proposal:
+        global_proposals.append(current_global_proposal)
 
     if (
         not findings
@@ -1441,6 +1521,7 @@ def parse_document(
         "area": explicit_area,
         "auditor": explicit_auditor,
         "findings": cleaned_findings,
+        "global_proposals": global_proposals,
     }
 
 
@@ -1895,6 +1976,33 @@ def parse_audit_report(
     explicit_area = parsed.get("area", "Operaciones")
     explicit_auditor = parsed.get("auditor", "Auditoría Interna")
 
+    global_proposals_raw = parsed.get("global_proposals", [])
+    parsed_proposals_list = []
+
+    for gp in global_proposals_raw:
+        p_num = gp["number"]
+        p_text = clean_text(" ".join(gp.get("proposal_text_lines", [])))
+        if not p_text:
+            continue
+
+        finding_numbers = _parse_finding_references(p_text)
+        link_status = "linked" if finding_numbers else "unlinked"
+
+        if finding_numbers:
+            print(f"[Propuestas] Propuesta {p_num} detectada | refs: {finding_numbers}")
+        else:
+            print(f"[Propuestas] Propuesta {p_num} detectada | refs: []")
+
+        parsed_proposals_list.append({
+            "number": p_num,
+            "proposal_text": p_text,
+            "finding_numbers": finding_numbers,
+            "link_status": link_status
+        })
+
+    if parsed_proposals_list:
+        print(f"[Propuestas] Total detectadas: {len(parsed_proposals_list)}")
+
     relational_findings = []
     proposal_counter = 1
 
@@ -1918,34 +2026,56 @@ def parse_audit_report(
         area = clean_text(finding.get("responsible_area")) or explicit_area
         action_owner = clean_text(finding.get("action_owner")) or "Pendiente de definir"
 
-        proposal_texts = finding.get("proposals_ai") or []
-        if not proposal_texts:
-            legacy_proposal = clean_text(finding.get("proposal", ""))
-            if legacy_proposal:
-                proposal_texts = [legacy_proposal]
+        matching_global_proposals = [p for p in parsed_proposals_list if index in p["finding_numbers"]]
+        proposal_numbers = [p["number"] for p in matching_global_proposals]
 
         proposals = []
-        for proposal_text in proposal_texts:
-            proposal_text = clean_text(proposal_text)
-            if not proposal_text:
-                continue
+        if matching_global_proposals:
+            for mp in matching_global_proposals:
+                pm_code = f"PM-2026-{proposal_counter:03d}"
+                proposal_counter += 1
+                proposals.append({
+                    "id": str(uuid.uuid4()),
+                    "finding_id": finding_id,
+                    "code": pm_code,
+                    "number": mp["number"],
+                    "title": mp["proposal_text"],
+                    "proposal_text": mp["proposal_text"],
+                    "severity": severity,
+                    "responsible_area": area,
+                    "action_owner": action_owner,
+                    "target_date": "",
+                    "status": "Pendiente",
+                    "action_plans": [],
+                })
+        else:
+            proposal_texts = finding.get("proposals_ai") or []
+            if not proposal_texts:
+                legacy_proposal = clean_text(finding.get("proposal", ""))
+                if legacy_proposal:
+                    proposal_texts = [legacy_proposal]
 
-            pm_code = f"PM-2026-{proposal_counter:03d}"
-            proposal_counter += 1
+            for proposal_text in proposal_texts:
+                proposal_text = clean_text(proposal_text)
+                if not proposal_text:
+                    continue
 
-            proposals.append({
-                "id": str(uuid.uuid4()),
-                "finding_id": finding_id,
-                "code": pm_code,
-                "title": proposal_text,
-                "proposal_text": proposal_text,
-                "severity": severity,
-                "responsible_area": area,
-                "action_owner": action_owner,
-                "target_date": "",
-                "status": "Pendiente",
-                "action_plans": [],
-            })
+                pm_code = f"PM-2026-{proposal_counter:03d}"
+                proposal_counter += 1
+
+                proposals.append({
+                    "id": str(uuid.uuid4()),
+                    "finding_id": finding_id,
+                    "code": pm_code,
+                    "title": proposal_text,
+                    "proposal_text": proposal_text,
+                    "severity": severity,
+                    "responsible_area": area,
+                    "action_owner": action_owner,
+                    "target_date": "",
+                    "status": "Pendiente",
+                    "action_plans": [],
+                })
 
         relational_findings.append({
             "id": finding_id,
@@ -1959,6 +2089,7 @@ def parse_audit_report(
             "selectedAsFinding": True,
             "converted": False,
             "code": h_code,
+            "number": index,
             "title": title,
             "situation": situation,
             "risk": risk,
@@ -1967,6 +2098,7 @@ def parse_audit_report(
             "action_owner": action_owner,
             "status": "Pendiente",
             "observations": finding.get("observations", ""),
+            "proposal_numbers": proposal_numbers,
             "proposals": proposals,
             "cause": clean_text(finding.get("cause", "")),
             "affected_process_or_control": clean_text(finding.get("affected_process_or_control", "")),
@@ -1976,6 +2108,9 @@ def parse_audit_report(
             "ai_status": finding.get("ai_status") or ("IA completa" if finding.get("ai_validated") else "Fallback heurístico")
         })
 
+    unlinked_count = sum(1 for p in parsed_proposals_list if p["link_status"] == "unlinked")
+    print(f"[Parser] Hallazgos: {len(relational_findings)} | Propuestas: {len(parsed_proposals_list)} | Propuestas sin vincular: {unlinked_count}")
+
     return {
         "report": {
             "title": report_title,
@@ -1983,8 +2118,9 @@ def parse_audit_report(
             "area": explicit_area,
             "period": "2026",
             "auditor": explicit_auditor,
-            "summary": f"Informe {filename} procesado con {len(relational_findings)} hallazgos.",
+            "summary": f"Informe {filename} procesado con {len(relational_findings)} hallazgos y {len(parsed_proposals_list)} propuestas.",
             "source_filename": filename
         },
-        "findings": relational_findings
+        "findings": relational_findings,
+        "proposals": parsed_proposals_list
     }
