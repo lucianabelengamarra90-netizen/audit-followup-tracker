@@ -1576,8 +1576,8 @@ async function openFindingDrawer(findingId) {
         if (el("drawerReportName")) el("drawerReportName").textContent = `${f.report_title || ''} (${f.report_code || ''})`;
         if (el("drawerFileName")) el("drawerFileName").textContent = f.source_filename || "Informe.xlsx";
 
-        // Propuestas vinculadas
        
+// Propuestas vinculadas
 const propBox = el("drawerProposalsList");
 
 if (propBox) {
@@ -1599,8 +1599,7 @@ if (propBox) {
 
                 <div
                     class="drawer-proposal-text"
-                    id="proposal-text-${p.id}"
-                >
+                    id="proposal-text-${p.id}">
                     ${escapeHtml(p.proposal_text || p.title)}
                 </div>
 
@@ -1621,12 +1620,11 @@ if (propBox) {
 
                     <button
                         type="button"
-                        class="btn btn-outlined"
+                        class="audit-edit-button"
                         id="proposal-pencil-${p.id}"
                         onclick="editDrawerProposal('${p.id}')"
-                        style="padding:5px 9px; font-size:11px;"
-                    >
-                        ✏️ Editar
+                        title="Editar propuesta">
+                        ✏️
                     </button>
 
                     <button
@@ -1634,8 +1632,7 @@ if (propBox) {
                         class="drawer-save-btn"
                         id="proposal-save-${p.id}"
                         onclick="saveDrawerProposal('${p.id}')"
-                        style="display:none;"
-                    >
+                        style="display:none;">
                         Guardar
                     </button>
 
@@ -1644,8 +1641,7 @@ if (propBox) {
                         class="drawer-cancel-btn"
                         id="proposal-cancel-${p.id}"
                         onclick="cancelDrawerProposal('${p.id}')"
-                        style="display:none;"
-                    >
+                        style="display:none;">
                         Cancelar
                     </button>
 
