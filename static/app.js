@@ -1425,21 +1425,83 @@ async function openFindingDrawer(findingId) {
         if (el("drawerFileName")) el("drawerFileName").textContent = f.source_filename || "Informe.xlsx";
 
         // Propuestas vinculadas
-        const propBox = el("drawerProposalsList");
-        if (propBox) {
-            const props = f.proposals || [];
-            if (!props.length) {
-                propBox.innerHTML = `<div style="font-size:12px; color:#94A3B8;">Sin propuestas registradas.</div>`;
-            } else {
-                propBox.innerHTML = props.map(p => `
-                    <div style="background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px; padding:10px; margin-bottom:8px; font-size:12px;">
-                        <strong style="color:#0055D4;">💡 ${p.code}:</strong> ${escapeHtml(p.proposal_text || p.title)}
-                        <div style="font-size:11px; color:#64748B; margin-top:2px;">Estado: <strong>${p.status}</strong> · Fecha: <strong>${p.target_date}</strong></div>
-                    </div>
-                `).join("");
-            }
-        }
+       
+const propBox = el("drawerProposalsList");
 
+if (propBox) {
+    const props = f.proposals || [];
+
+    if (!props.length) {
+        propBox.innerHTML = `
+            <div style="font-size:12px; color:#94A3B8;">
+                Sin propuestas registradas.
+            </div>
+        `;
+    } else {
+        propBox.innerHTML = props.map(p => `
+            <div class="drawer-proposal-card" id="proposal-card-${p.id}">
+
+                <div class="drawer-proposal-code">
+                    💡 ${escapeHtml(p.code)}
+                </div>
+
+                <div
+                    class="drawer-proposal-text"
+                    id="proposal-text-${p.id}"
+                >
+                    ${escapeHtml(p.proposal_text || p.title)}
+                </div>
+
+                <textarea
+                    id="proposal-edit-${p.id}"
+                    class="drawer-edit-field"
+                    rows="5"
+                    style="display:none; margin-top:6px;"
+                >${escapeHtml(p.proposal_text || p.title)}</textarea>
+
+                <div style="font-size:11px; color:#64748B; margin-top:6px;">
+                    Estado:
+                    <strong>${escapeHtml(p.status || "Pendiente")}</strong>
+                    ${p.target_date ? ` · Fecha: <strong>${escapeHtml(p.target_date)}</strong>` : ""}
+                </div>
+
+                <div class="drawer-edit-actions">
+
+                    <button
+                        type="button"
+                        class="btn btn-outlined"
+                        id="proposal-pencil-${p.id}"
+                        onclick="editDrawerProposal('${p.id}')"
+                        style="padding:5px 9px; font-size:11px;"
+                    >
+                        ✏️ Editar
+                    </button>
+
+                    <button
+                        type="button"
+                        class="drawer-save-btn"
+                        id="proposal-save-${p.id}"
+                        onclick="saveDrawerProposal('${p.id}')"
+                        style="display:none;"
+                    >
+                        Guardar
+                    </button>
+
+                    <button
+                        type="button"
+                        class="drawer-cancel-btn"
+                        id="proposal-cancel-${p.id}"
+                        onclick="cancelDrawerProposal('${p.id}')"
+                        style="display:none;"
+                    >
+                        Cancelar
+                    </button>
+
+                </div>
+            </div>
+        `).join("");
+    }
+}
         // Planes de acción vinculados
         const plansBox = el("drawerActionPlansList");
         if (plansBox) {
