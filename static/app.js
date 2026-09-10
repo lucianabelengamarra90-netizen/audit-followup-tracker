@@ -1688,3 +1688,79 @@ function initAuditStickyScroll() {
 
     window.addEventListener("resize", refreshStickyWidth);
 }
+// ============================================================
+// EDICIÓN DE PROPUESTA DESDE DRAWER
+// ============================================================
+
+function editDrawerProposal(proposalId) {
+    const text = document.getElementById(`proposal-text-${proposalId}`);
+    const input = document.getElementById(`proposal-edit-${proposalId}`);
+    const pencil = document.getElementById(`proposal-pencil-${proposalId}`);
+    const save = document.getElementById(`proposal-save-${proposalId}`);
+    const cancel = document.getElementById(`proposal-cancel-${proposalId}`);
+
+    if (text) text.style.display = "none";
+    if (input) input.style.display = "block";
+
+    if (pencil) pencil.style.display = "none";
+    if (save) save.style.display = "inline-flex";
+    if (cancel) cancel.style.display = "inline-flex";
+
+    if (input) input.focus();
+}
+
+function cancelDrawerProposal(proposalId) {
+    const text = document.getElementById(`proposal-text-${proposalId}`);
+    const input = document.getElementById(`proposal-edit-${proposalId}`);
+    const pencil = document.getElementById(`proposal-pencil-${proposalId}`);
+    const save = document.getElementById(`proposal-save-${proposalId}`);
+    const cancel = document.getElementById(`proposal-cancel-${proposalId}`);
+
+    if (text) {
+        text.style.display = "block";
+        if (input) input.value = text.textContent.trim();
+    }
+
+    if (input) input.style.display = "none";
+    if (pencil) pencil.style.display = "inline-flex";
+    if (save) save.style.display = "none";
+    if (cancel) cancel.style.display = "none";
+}
+
+async function saveDrawerProposal(proposalId) {
+    const input = document.getElementById(`proposal-edit-${proposalId}`);
+    const newText = input?.value?.trim();
+
+    if (!newText) {
+        showToast("La propuesta no puede quedar vacía.", "warning");
+        return;
+    }
+
+    try {
+        const res = await fetch(`/proposals/${proposalId}/update`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                proposal_text: newText
+            })
+        });
+
+        if (!res.ok) {
+            throw new Error("No se pudo guardar la propuesta.");
+        }
+
+        showToast("Propuesta de mejora actualizada.", "success");
+
+        await loadAllData();
+
+        if (currentDrawerFindingId) {
+            await openFindingDrawer(currentDrawerFindingId);
+        }
+
+    } catch (error) {
+        console.error(error);
+        showToast("Error al guardar la propuesta.", "error");
+    }
+}
