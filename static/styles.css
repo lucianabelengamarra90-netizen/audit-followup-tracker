@@ -1179,4 +1179,248 @@ body {
     max-width: 100%;
 }
 
+/* ============================================================
+   AUDITTRACK - TABLA PRINCIPAL MÁS LIMPIA Y FUNCIONAL
+   ============================================================ */
 
+.table-card {
+    position: relative;
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: visible;
+    border-radius: 12px;
+    background: #ffffff;
+}
+
+/* La tabla conserva siempre las mismas proporciones */
+.audittrack-table {
+    width: 1850px;
+    min-width: 1850px;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+
+/* Encabezados */
+.audittrack-table th {
+    background: #F8FAFC;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 11px 10px;
+    border-bottom: 1px solid #E2E8F0;
+    white-space: normal;
+    line-height: 1.25;
+    vertical-align: middle;
+}
+
+/* Celdas */
+.audittrack-table td {
+    padding: 12px 10px;
+    border-bottom: 1px solid #EEF2F7;
+    vertical-align: top;
+    color: #334155;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+
+/* Hover más suave */
+.audittrack-table tbody tr:hover {
+    background: #FAFCFF;
+}
+
+/* ============================================================
+   ANCHO EXACTO DE LAS 13 COLUMNAS
+   ============================================================ */
+
+.audittrack-table th:nth-child(1),
+.audittrack-table td:nth-child(1) {
+    width: 130px;
+}
+
+.audittrack-table th:nth-child(2),
+.audittrack-table td:nth-child(2) {
+    width: 110px;
+}
+
+.audittrack-table th:nth-child(3),
+.audittrack-table td:nth-child(3) {
+    width: 330px;
+}
+
+.audittrack-table th:nth-child(4),
+.audittrack-table td:nth-child(4) {
+    width: 110px;
+}
+
+.audittrack-table th:nth-child(5),
+.audittrack-table td:nth-child(5) {
+    width: 330px;
+}
+
+.audittrack-table th:nth-child(6),
+.audittrack-table td:nth-child(6) {
+    width: 210px;
+}
+
+.audittrack-table th:nth-child(7),
+.audittrack-table td:nth-child(7) {
+    width: 100px;
+}
+
+.audittrack-table th:nth-child(8),
+.audittrack-table td:nth-child(8) {
+    width: 145px;
+}
+
+.audittrack-table th:nth-child(9),
+.audittrack-table td:nth-child(9) {
+    width: 125px;
+}
+
+.audittrack-table th:nth-child(10),
+.audittrack-table td:nth-child(10) {
+    width: 125px;
+}
+
+.audittrack-table th:nth-child(11),
+.audittrack-table td:nth-child(11) {
+    width: 95px;
+}
+
+.audittrack-table th:nth-child(12),
+.audittrack-table td:nth-child(12) {
+    width: 105px;
+}
+
+.audittrack-table th:nth-child(13),
+.audittrack-table td:nth-child(13) {
+    width: 180px;
+}
+
+/* Hallazgo y Propuesta más legibles */
+.audittrack-table td:nth-child(3),
+.audittrack-table td:nth-child(5) {
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+/* Archivo: que no quede una letra debajo de otra */
+.audittrack-table td:nth-child(6),
+.file-cell {
+    overflow-wrap: normal !important;
+    word-break: break-word !important;
+}
+
+/* Selects más prolijos */
+.inline-select {
+    width: 100%;
+    min-height: 30px;
+    padding: 4px 8px;
+    border-radius: 7px;
+    border: 1px solid #CBD5E1;
+    font-size: 11px;
+    background: #fff;
+}
+
+/* IDs */
+.id-cell {
+    font-weight: 700;
+    font-size: 11px;
+    white-space: normal;
+}
+
+/* ============================================================
+   SCROLL HORIZONTAL FIJO ABAJO
+   ============================================================ */
+
+#auditStickyScroll {
+    position: fixed;
+    left: 36px;
+    right: 36px;
+    bottom: 8px;
+    height: 16px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid #CBD5E1;
+    border-radius: 8px;
+    z-index: 80;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+}
+
+#auditStickyScrollInner {
+    height: 1px;
+}
+
+/* Cuando se abre el drawer no molesta tanto */
+body:has(#drawerFindingDetail[style*="flex"]) #auditStickyScroll {
+    right: 540px;
+}
+
+/* ============================================================
+   DRAWER MÁS LIMPIO
+   ============================================================ */
+
+.drawer-edit-field {
+    width: 100%;
+    border: 1px solid #CBD5E1;
+    border-radius: 8px;
+    padding: 9px 10px;
+    font-size: 12px;
+    color: #0F172A;
+    background: #FFFFFF;
+}
+
+.drawer-edit-field:focus {
+    border-color: #0055D4;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(0, 85, 212, 0.10);
+}
+
+.drawer-proposal-card {
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 10px;
+}
+
+.drawer-proposal-code {
+    font-size: 11px;
+    font-weight: 700;
+    color: #16A34A;
+    margin-bottom: 6px;
+}
+
+.drawer-proposal-text {
+    font-size: 12px;
+    line-height: 1.55;
+    color: #334155;
+}
+
+.drawer-edit-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.drawer-save-btn {
+    background: #0055D4;
+    color: #fff;
+    border: 0;
+    border-radius: 7px;
+    padding: 7px 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.drawer-cancel-btn {
+    background: #fff;
+    color: #475569;
+    border: 1px solid #CBD5E1;
+    border-radius: 7px;
+    padding: 7px 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
