@@ -1060,6 +1060,123 @@ body {
     min-width: 1500px;
     border-collapse: collapse;
 }
+/* ============================================================
+   FIX TABLA AUDITTRACK - COLUMNAS ESTABLES
+   Mantiene los anchos aunque se carguen textos largos
+   ============================================================ */
 
+.table-card {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.audittrack-table {
+    width: 100%;
+    min-width: 1500px;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+
+/* 1 - Área / Proceso */
+.audittrack-table th:nth-child(1),
+.audittrack-table td:nth-child(1) {
+    width: 130px;
+}
+
+/* 2 - ID Hallazgo */
+.audittrack-table th:nth-child(2),
+.audittrack-table td:nth-child(2) {
+    width: 110px;
+}
+
+/* 3 - Hallazgo */
+.audittrack-table th:nth-child(3),
+.audittrack-table td:nth-child(3) {
+    width: 280px;
+}
+
+/* 4 - ID Propuesta */
+.audittrack-table th:nth-child(4),
+.audittrack-table td:nth-child(4) {
+    width: 110px;
+}
+
+/* 5 - Propuesta de Mejora */
+.audittrack-table th:nth-child(5),
+.audittrack-table td:nth-child(5) {
+    width: 280px;
+}
+
+/* 6 - Archivo */
+.audittrack-table th:nth-child(6),
+.audittrack-table td:nth-child(6) {
+    width: 180px;
+}
+
+/* 7 - Riesgo */
+.audittrack-table th:nth-child(7),
+.audittrack-table td:nth-child(7) {
+    width: 100px;
+}
+
+/* 8 - Responsable */
+.audittrack-table th:nth-child(8),
+.audittrack-table td:nth-child(8) {
+    width: 140px;
+}
+
+/* 9 - Fecha compromiso */
+.audittrack-table th:nth-child(9),
+.audittrack-table td:nth-child(9) {
+    width: 125px;
+}
+
+/* 10 - Estado */
+.audittrack-table th:nth-child(10),
+.audittrack-table td:nth-child(10) {
+    width: 120px;
+}
+
+/* 11 - Avance */
+.audittrack-table th:nth-child(11),
+.audittrack-table td:nth-child(11) {
+    width: 90px;
+}
+
+/* 12 - Acciones */
+.audittrack-table th:nth-child(12),
+.audittrack-table td:nth-child(12) {
+    width: 105px;
+}
+
+/* 13 - Observaciones */
+.audittrack-table th:nth-child(13),
+.audittrack-table td:nth-child(13) {
+    width: 180px;
+}
+
+/* Evita que el contenido ensanche las columnas */
+.audittrack-table th,
+.audittrack-table td {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: normal;
+    vertical-align: top;
+}
+
+/* Archivo: que no empuje la tabla */
+.file-cell {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* Inputs y selects no deben superar la celda */
+.audittrack-table input,
+.audittrack-table select,
+.audittrack-table textarea,
+.audittrack-table button {
+    max-width: 100%;
+}
 
 
