@@ -1916,3 +1916,14 @@ async function saveDrawerProposal(proposalId) {
         showToast("Error al guardar la propuesta.", "error");
     }
 }
+function formatAuditDate(value) {
+    if (!value) return "";
+
+    const parts = value.split("-");
+
+    if (parts.length !== 3) {
+        return escapeHtml(value);
+    }
+
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+}
