@@ -464,24 +464,67 @@ def _is_non_finding_header(norm_line):
     return False
 
 
+PROPOSAL_VERBS = (
+    "reforzar",
+    "formalizar",
+    "definir",
+    "actualizar",
+    "incorporar",
+    "implementar",
+    "establecer",
+    "asegurar",
+    "revisar",
+)
+
+EXCLUDED_HEADERS = [
+    "categoría de control",
+    "categoria de control",
+    "riesgo detectado",
+    "descripción del problema",
+    "descripcion del problema",
+    "impacto y consecuencias",
+    "propuesta de mejora",
+    "propuesta",
+    "recomendación",
+    "recomendacion",
+    "medida correctiva",
+    "acción correctiva",
+    "accion correctiva",
+]
+
+
 def _looks_like_finding_start(
     line,
     norm_line
 ):
+    if "|" in line or "[table_row]" in norm_line or "[table" in norm_line:
+        return False
+
     explicit_re = re.compile(
-        r"^(?:hallazgo|observaci[oó]n|"
+        r"^(?:\d+[\.\)]\s*)?(?:hallazgo|observaci[oó]n|"
         r"desviaci[oó]n|punto|ítem|item)"
         r"\s*(?:n[°º]?\s*)?\d+",
         re.IGNORECASE
     )
 
-    if explicit_re.match(line):
+    if explicit_re.match(line.strip()):
         return True
 
-    if len(line) < 140:
-        for kw in FINDING_KEYWORDS:
-            if kw in norm_line:
-                return True
+    hallazgo_header_re = re.compile(
+        r"^(?:\d+[\.\)]\s*)?hallazgo\b",
+        re.IGNORECASE
+    )
+
+    if len(line.strip()) < 120 and hallazgo_header_re.match(line.strip()):
+        return True
+
+    for verb in PROPOSAL_VERBS:
+        if norm_line.startswith(verb) or re.match(r"^(?:\d+[\.\)]\s*)?" + verb + r"\b", norm_line):
+            return False
+
+    for header in EXCLUDED_HEADERS:
+        if norm_line.startswith(header) or norm_line.strip().rstrip(":. ") == header:
+            return False
 
     return False
 
@@ -1801,6 +1844,14 @@ def _extract_findings_directly_via_ai(raw_text, filename):
     return extracted
 
 
+def _has_explicit_finding_headers(raw_text):
+    pattern = re.compile(
+        r"(?:^|\n)\s*(?:\d+[\.\)]\s*)?(?:hallazgo|observaci[oó]n|desviaci[oó]n)\s*(?:n[°º]?\s*)?\d+",
+        re.IGNORECASE
+    )
+    return bool(pattern.search(raw_text))
+
+
 # ============================================================
 # FUNCIÓN PRINCIPAL
 # ============================================================
@@ -1821,12 +1872,20 @@ def parse_audit_report(
 
     extracted_findings = parsed.get("findings", [])
 
-    if not extracted_findings and raw_text.strip():
-        ai_direct_findings = _extract_findings_directly_via_ai(raw_text, filename)
-        if ai_direct_findings:
-            extracted_findings = ai_direct_findings
-        else:
-            extracted_findings = _extract_heuristic_paragraph_findings(raw_text, parsed.get("area", "Operaciones"))
+    if extracted_findings:
+        print("[Parser] Modo hallazgos: explícito")
+    elif _has_explicit_finding_headers(raw_text):
+        print("[Parser] ERROR: se detectaron encabezados explícitos de hallazgos pero no pudieron extraerse.")
+        extracted_findings = []
+    else:
+        if raw_text.strip():
+            ai_direct_findings = _extract_findings_directly_via_ai(raw_text, filename)
+            if ai_direct_findings:
+                print("[Parser] Modo hallazgos: IA directa")
+                extracted_findings = ai_direct_findings
+            else:
+                print("[Parser] Modo hallazgos: heurístico")
+                extracted_findings = _extract_heuristic_paragraph_findings(raw_text, parsed.get("area", "Operaciones"))
 
     report_title = parsed.get(
         "report_title",
