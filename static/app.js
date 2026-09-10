@@ -2000,3 +2000,52 @@ async function saveDrawerProposal(proposalId) {
         showToast("Error al guardar la propuesta.", "error");
     }
 }
+// ============================================================
+// SCROLL HORIZONTAL FIJO Y SINCRONIZADO
+// ============================================================
+
+function initAuditStickyScroll() {
+    const tableCard = document.querySelector(".table-card");
+    const table = document.querySelector(".audittrack-table");
+
+    if (!tableCard || !table) return;
+
+    let stickyScroll = document.getElementById("auditStickyScroll");
+
+    if (!stickyScroll) {
+        stickyScroll = document.createElement("div");
+        stickyScroll.id = "auditStickyScroll";
+
+        const inner = document.createElement("div");
+        inner.id = "auditStickyScrollInner";
+
+        stickyScroll.appendChild(inner);
+        document.body.appendChild(stickyScroll);
+    }
+
+    const inner = document.getElementById("auditStickyScrollInner");
+
+    function refreshWidth() {
+        inner.style.width = `${table.scrollWidth}px`;
+
+        if (table.scrollWidth <= tableCard.clientWidth) {
+            stickyScroll.style.display = "none";
+        } else {
+            stickyScroll.style.display = "block";
+        }
+    }
+
+    refreshWidth();
+
+    tableCard.onscroll = () => {
+        stickyScroll.scrollLeft = tableCard.scrollLeft;
+    };
+
+    stickyScroll.onscroll = () => {
+        tableCard.scrollLeft = stickyScroll.scrollLeft;
+    };
+
+    window.addEventListener("resize", refreshWidth);
+
+    window.refreshAuditStickyScroll = refreshWidth;
+}
