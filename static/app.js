@@ -1566,9 +1566,13 @@ function updateSidebarMetrics() {
 }
 
 // Initialize on page load
-document.addEventListener("DOMContentLoaded", () => {
-    switchTab("informes");
-    loadAllData();
+document.addEventListener("DOMContentLoaded", async () => {
+    switchTab("hallazgos");
+    await loadAllData();
+
+    setTimeout(() => {
+        initAuditStickyScroll();
+    }, 300);
 });
 // ============================================================
 // SCROLL HORIZONTAL STICKY PARA TABLA AUDITTRACK
