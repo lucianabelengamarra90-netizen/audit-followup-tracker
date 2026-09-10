@@ -2049,3 +2049,12 @@ function initAuditStickyScroll() {
 
     window.refreshAuditStickyScroll = refreshWidth;
 }
+// Initialize on page load
+document.addEventListener("DOMContentLoaded", async () => {
+    switchTab("hallazgos");
+    await loadAllData();
+
+    setTimeout(() => {
+        initAuditStickyScroll();
+    }, 300);
+});
