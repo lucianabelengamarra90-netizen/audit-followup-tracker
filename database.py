@@ -570,6 +570,38 @@ def update_proposal(proposal_id, data, user_name="Auditoría Interna"):
     return updated
 
 
+def create_proposal_for_finding(finding_id, proposal_text, action_owner="", target_date="", status="En proceso", user_name="Auditoría Interna"):
+    init_db()
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM findings WHERE id = ? OR code = ?", (finding_id, finding_id))
+    f_row = cursor.fetchone()
+    if not f_row:
+        conn.close()
+        return None, None
+    finding = dict(f_row)
+    actual_finding_id = finding["id"]
+
+    proposal_id = str(uuid.uuid4())
+    idx_cursor = conn.cursor()
+    idx_cursor.execute("SELECT COUNT(*) FROM proposals")
+    pm_num = idx_cursor.fetchone()[0] + 1
+    pm_code = f"PM-2026-{pm_num:03d}"
+
+    p_title = f"Propuesta {pm_code}"
+    cursor.execute("""
+        INSERT INTO proposals (id, finding_id, code, title, proposal_text, severity, responsible_area, action_owner, target_date, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (proposal_id, actual_finding_id, pm_code, p_title, proposal_text, finding.get("severity", ""), finding.get("responsible_area", ""), action_owner or finding.get("action_owner", ""), target_date, status))
+
+    add_history_log("proposal", proposal_id, user_name, f"Nueva propuesta agregada {pm_code}: {proposal_text}", cursor=cursor)
+    conn.commit()
+    conn.close()
+    return proposal_id, pm_code
+
+
+
 def get_all_proposals(filters=None):
     init_db()
     conn = get_db()
@@ -638,10 +670,29 @@ def get_all_action_plans(filters=None):
     return plans
 
 
+def get_proposal_by_id_or_code(prop_identifier):
+    if not prop_identifier:
+        return None
+    init_db()
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM proposals WHERE id = ? OR code = ?", (prop_identifier, prop_identifier))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def create_action_plan(proposal_id, action_text, action_owner, target_date, status="En proceso", progress_pct=0, notes="", evidence_file=""):
     init_db()
     conn = get_db()
     cursor = conn.cursor()
+
+    # Resolve proposal_id if code was passed instead of UUID
+    p_chk = conn.cursor()
+    p_chk.execute("SELECT id FROM proposals WHERE id = ? OR code = ?", (proposal_id, proposal_id))
+    p_row = p_chk.fetchone()
+    if p_row:
+        proposal_id = p_row[0]
 
     plan_id = str(uuid.uuid4())
     idx_cursor = conn.cursor()
@@ -655,7 +706,7 @@ def create_action_plan(proposal_id, action_text, action_owner, target_date, stat
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (plan_id, proposal_id, pa_code, title, action_text, action_owner, target_date, status, progress_pct, notes, evidence_file))
 
-    add_history_log("action_plan", plan_id, action_owner, f"Nuevo plan de acción creado {pa_code}: {action_text}")
+    add_history_log("action_plan", plan_id, action_owner, f"Nuevo plan de acción creado {pa_code}: {action_text}", cursor=cursor)
     conn.commit()
     conn.close()
     return plan_id, pa_code
@@ -698,7 +749,7 @@ def update_action_plan(plan_id, status=None, progress_pct=None, notes=None, targ
     updated = cursor.rowcount > 0
 
     if updated:
-        add_history_log("action_plan", plan_id, user_name, f"Actualización de plan de acción: Estado={status}, Avance={progress_pct}%")
+        add_history_log("action_plan", plan_id, user_name, f"Actualización de plan de acción: Estado={status}, Avance={progress_pct}%", cursor=cursor)
 
     conn.commit()
     conn.close()
@@ -1240,3 +1291,4 @@ def get_active_alerts():
         "due_soon": due_soon_alerts,
         "attention": attention_alerts
     }
+

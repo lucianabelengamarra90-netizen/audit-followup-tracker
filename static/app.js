@@ -851,13 +851,20 @@ function onModalFindingChange(findingId) {
     }
 
     proposalSelect.innerHTML = `<option value="">-- Seleccionar Propuesta (Opcional) --</option>` +
-        proposals.map(p => `<option value="${p.id}">${escapeHtml(p.code)} - ${escapeHtml(p.proposal_text || p.title)}</option>`).join("");
+        proposals.map(p => {
+            const pVal = p.id || p.code || (p.number ? `P-${p.number}` : "");
+            const pCode = p.code || (p.number ? `PM-2026-${String(p.number).padStart(3, '0')}` : "Propuesta");
+            return `<option value="${pVal}">${escapeHtml(pCode)} - ${escapeHtml(p.proposal_text || p.title || '')}</option>`;
+        }).join("");
     proposalSelect.disabled = false;
 }
 
 async function saveActionPlanFromModal() {
-    const finding_id = el("modalPlanFinding")?.value;
-    const proposal_id = el("modalPlanProposal")?.value;
+    let finding_id = el("modalPlanFinding")?.value || null;
+    let proposal_id = el("modalPlanProposal")?.value || null;
+    if (proposal_id === "undefined" || proposal_id === "null") proposal_id = null;
+    if (finding_id === "undefined" || finding_id === "null") finding_id = null;
+
     const action_text = el("modalPlanActionText")?.value;
     const action_owner = el("modalPlanOwner")?.value;
     const target_date = el("modalPlanTargetDate")?.value;

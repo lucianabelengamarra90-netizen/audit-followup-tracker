@@ -22,11 +22,13 @@ from database import (
     update_proposal,
     delete_finding,
     delete_report,
+    create_proposal_for_finding,
     get_dashboard_stats,
     get_kpi_indicators,
     get_history_logs,
     add_history_log,
-    get_active_alerts
+    get_active_alerts,
+    get_proposal_by_id_or_code
 )
 from report_parser import parse_audit_report, clean_text
 
@@ -258,6 +260,20 @@ def update_finding_route(finding_id):
     return jsonify({"error": "Hallazgo no encontrado o sin cambios."}), 404
 
 
+@app.route("/findings/<finding_id>/add-proposal", methods=["POST"])
+def add_proposal_to_finding_route(finding_id):
+    data = request.get_json(silent=True) or {}
+    proposal_text = data.get("proposal_text")
+    if not proposal_text:
+        return jsonify({"error": "La propuesta de mejora no puede estar vacía."}), 400
+
+    user_name = data.get("user_name", "Auditoría Interna")
+    prop_id, p_code = create_proposal_for_finding(finding_id, proposal_text, user_name)
+    if prop_id:
+        return jsonify({"message": f"Propuesta {p_code} creada exitosamente.", "id": prop_id, "code": p_code})
+    return jsonify({"error": "Hallazgo no encontrado."}), 404
+
+
 @app.route("/proposals/<proposal_id>/update", methods=["POST"])
 def update_proposal_route(proposal_id):
     data = request.get_json(silent=True) or {}
@@ -282,16 +298,51 @@ def list_proposals():
 def action_plans_route():
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
+        finding_id = data.get("finding_id")
         proposal_id = data.get("proposal_id")
+
+        if proposal_id in ("undefined", "null", ""):
+            proposal_id = None
+
+        if finding_id in ("undefined", "null", ""):
+            finding_id = None
+
         action_text = data.get("action_text") or data.get("title")
-        action_owner = data.get("action_owner") or "Auditoría"
+        action_owner = data.get("action_owner") or "Auditoría Interna"
         target_date = data.get("target_date") or "2026-10-31"
         status = data.get("status") or "En proceso"
         progress_pct = int(data.get("progress_pct") or 0)
         notes = data.get("notes") or ""
 
-        if not proposal_id or not action_text:
-            return jsonify({"error": "Debe seleccionar una Propuesta de Mejora y definir la Acción."}), 400
+        if not action_text:
+            return jsonify({"error": "Debe definir la Acción Comprometida."}), 400
+
+        if proposal_id:
+            resolved_p = get_proposal_by_id_or_code(proposal_id)
+            if resolved_p:
+                proposal_id = resolved_p["id"]
+            else:
+                proposal_id = None
+
+        if not proposal_id and finding_id:
+            finding = get_finding_detail(finding_id)
+            if finding:
+                proposals = finding.get("proposals") or []
+                if proposals:
+                    proposal_id = proposals[0]["id"]
+                else:
+                    prop_text = f"Propuesta recomendada para {finding.get('code', 'Hallazgo')}: {action_text}"
+                    new_prop_id, _ = create_proposal_for_finding(
+                        finding_id=finding["id"],
+                        proposal_text=prop_text,
+                        action_owner=action_owner,
+                        target_date=target_date,
+                        status="En proceso"
+                    )
+                    proposal_id = new_prop_id
+
+        if not proposal_id:
+            return jsonify({"error": "Debe seleccionar una Propuesta de Mejora o un Hallazgo válido."}), 400
 
         plan_id, pa_code = create_action_plan(proposal_id, action_text, action_owner, target_date, status, progress_pct, notes)
         return jsonify({"message": f"Plan de Acción {pa_code} creado exitosamente.", "id": plan_id, "code": pa_code})
