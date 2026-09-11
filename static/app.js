@@ -352,12 +352,6 @@ function renderAuditTrackTable(items) {
                     </td>
                     <td>${propCodeCell}</td>
                     <td>${propTextCell}</td>
-                    <td>
-                        <div class="file-cell">
-                            <span>📄</span>
-                            <span style="font-size:11px;">${escapeHtml(filename)}</span>
-                        </div>
-                    </td>
                     <td>${riskSelectHtml}</td>
                     <td>
                         <input type="text" class="inline-input" value="${escapeHtml(owner)}"
@@ -708,11 +702,10 @@ function renderProposalsTab() {
         return `
             <tr>
                 <td class="id-cell">${escapeHtml(p.code)}</td>
-                <td><strong style="color:#16A34A;">💡 ${escapeHtml(p.proposal_text || p.title)}</strong></td>
+                <td style="min-width: 480px; max-width: 650px; white-space: normal; word-break: break-word;"><strong style="color:#16A34A; line-height: 1.5; display: inline-block;">💡 ${escapeHtml(p.proposal_text || p.title)}</strong></td>
                 <td>
                     <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${p.finding_id}'); return false;">${escapeHtml(p.finding_code)}</a>
                 </td>
-                <td>${escapeHtml(p.report_title)}</td>
                 <td><strong>${escapeHtml(p.responsible_area || 'Operaciones')}</strong></td>
                 <td><span class="pill pill-${statusClass}">${escapeHtml(p.status || 'En proceso')}</span></td>
                 <td>${escapeHtml(p.action_owner || 'Auditoría')}</td>
@@ -723,6 +716,7 @@ function renderProposalsTab() {
                 </td>
                 <td>${escapeHtml(p.target_date || '31/10/2026')}</td>
                 <td>${archiveActionCell}</td>
+                <td style="font-size: 11px; color: #64748B;">${escapeHtml(p.report_title)}</td>
             </tr>
         `;
     }).join("");
