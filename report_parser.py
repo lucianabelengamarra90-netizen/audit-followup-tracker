@@ -528,10 +528,11 @@ def _looks_like_finding_start(
 
 def _is_proposals_section_header(line, norm_line):
     clean_l = re.sub(r"\[[A-Z0-9_]+\]", "", line).strip()
-    header_text = re.sub(r"^(?:\d+[\.\)]|\d+\.\d+[\.\)]?|[-•])\s*", "", clean_l).strip()
+    header_text = re.sub(r"^(?:secci[oó]n|cap[ií]tulo)?\s*(?:\d+[\.\:\)\-]*|\d+\.\d+[\.\:\)\-]*|[-•])\s*", "", clean_l, flags=re.IGNORECASE).strip()
+    header_text = header_text.rstrip(":. -")
     norm_h = normalize_text(header_text)
 
-    return norm_h in (
+    if norm_h in (
         "propuestas de mejora",
         "propuesta de mejora",
         "propuestas",
@@ -539,7 +540,14 @@ def _is_proposals_section_header(line, norm_line):
         "recomendaciones de mejora",
         "recomendaciones",
         "acciones correctivas"
-    )
+    ):
+        return True
+
+    if any(kw in norm_h for kw in ["propuesta", "recomendacion", "recomendación", "accion correctiva", "acción correctiva"]):
+        if any(w in norm_h for w in ["mejora", "propuestas", "recomendaciones", "acciones"]):
+            return True
+
+    return False
 
 
 def _parse_finding_references(text):
@@ -548,7 +556,7 @@ def _parse_finding_references(text):
 
     found_numbers = set()
     pattern = re.compile(
-        r"\b(?:hallazgos?|observaci[oó]n(?:es)?|desviaci[oó]n(?:es)?)\s*(?:n[°º]?\s*)?(\d+(?:\s*(?:,|y|e)\s*\d+)*)",
+        r"\b(?:hallazgos?|observaci[oó]n(?:es)?|desviaci[oó]n(?:es)?|h)\s*(?:n[°ºº]?\s*|-)?(\d+(?:\s*(?:,|y|e)\s*\d+)*)",
         re.IGNORECASE
     )
 
@@ -1132,7 +1140,9 @@ def parse_document(
                 in_global_proposals = False
                 continue
 
-            num_match = re.match(r"^(?:\[[A-Z0-9_]+\]\s*)?(\d+)[\.\)]\s*(.*)", line.strip())
+            num_match = re.match(r"^(?:\[[A-Z0-9_]+\]\s*)?(?:propuesta|recomendaci[oó]n)?\s*(?:n[°º]?\s*)?(\d+)[\.\:\)\-]*\s*(.*)", line.strip(), re.IGNORECASE)
+            bullet_match = re.match(r"^(?:\[[A-Z0-9_]+\]\s*)?[-•\*]\s*(.*)", line.strip())
+
             if num_match:
                 p_num = int(num_match.group(1))
                 p_text_init = num_match.group(2).strip()
@@ -1141,6 +1151,18 @@ def parse_document(
 
                 current_global_proposal = {
                     "number": p_num,
+                    "proposal_text_lines": [p_text_init] if p_text_init else []
+                }
+                continue
+
+            if bullet_match:
+                p_text_init = bullet_match.group(1).strip()
+                if current_global_proposal:
+                    global_proposals.append(current_global_proposal)
+
+                auto_num = (global_proposals[-1]["number"] + 1) if global_proposals else 1
+                current_global_proposal = {
+                    "number": auto_num,
                     "proposal_text_lines": [p_text_init] if p_text_init else []
                 }
                 continue
@@ -1986,6 +2008,9 @@ def parse_audit_report(
             continue
 
         finding_numbers = _parse_finding_references(p_text)
+        if not finding_numbers and p_num <= len(extracted_findings):
+            finding_numbers = [p_num]
+
         link_status = "linked" if finding_numbers else "unlinked"
 
         if finding_numbers:
