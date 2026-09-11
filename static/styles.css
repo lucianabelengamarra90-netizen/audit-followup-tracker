@@ -526,93 +526,117 @@ body {
 /* Table Card & Full Width Responsive Container */
 .table-card {
     background: var(--white);
-    border: 1px solid var(--border-color);
-    border-radius: 10px;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
     overflow-x: auto;
-    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
     width: 100%;
+    margin-bottom: 24px;
 }
 
-.audittrack-table {
+.audittrack-table,
+.data-table {
     width: 100%;
     min-width: 1250px;
     border-collapse: separate;
     border-spacing: 0;
     font-size: 12px;
-    text-align: left;
+    text-align: center;
 }
 
-.audittrack-table th {
+.audittrack-table th,
+.data-table th {
     position: sticky;
     top: 0;
     z-index: 10;
-    background: #F8FAFC;
-    color: #475569;
+    background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
+    color: #FFFFFF;
     font-weight: 600;
     font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
-    padding: 10px 14px;
-    border-bottom: 2px solid #E2E8F0;
+    letter-spacing: 0.5px;
+    padding: 12px 16px;
+    border-bottom: 2px solid #0F172A;
+    text-align: center;
+    vertical-align: middle;
     white-space: nowrap;
 }
 
-.audittrack-table th span {
+.audittrack-table th span,
+.data-table th span {
     font-size: 9px;
-    margin-left: 2px;
-    opacity: 0.6;
+    margin-left: 3px;
+    opacity: 0.8;
+    color: #94A3B8;
 }
 
-.audittrack-table td {
-    padding: 10px 14px;
+.audittrack-table td,
+.data-table td {
+    padding: 12px 16px;
     border-bottom: 1px solid #F1F5F9;
     vertical-align: middle;
+    text-align: center;
     color: #334155;
-    line-height: 1.45;
+    line-height: 1.5;
 }
 
 /* Text cells: natural height, no truncation */
 .truncate-2-lines,
 .truncate-3-lines {
-    line-height: 1.45;
+    line-height: 1.5;
     word-break: break-word;
 }
 
-.audittrack-table tbody tr {
+.audittrack-table tbody tr,
+.data-table tbody tr {
     transition: background-color 0.15s ease;
 }
 
-.audittrack-table tbody tr:hover {
+.audittrack-table tbody tr:nth-child(even),
+.data-table tbody tr:nth-child(even) {
     background-color: #F8FAFC;
 }
 
-.id-cell {
+.audittrack-table tbody tr:hover,
+.data-table tbody tr:hover {
+    background-color: #EFF6FF;
+}
+
+.id-cell,
+.id-badge {
     font-weight: 600;
-    color: #475569;
+    color: #0055D4;
+    background-color: #EFF6FF;
+    border: 1px solid #BFDBFE;
+    border-radius: 6px;
+    padding: 3px 8px;
     font-size: 11px;
+    display: inline-block;
+    text-align: center;
+    white-space: nowrap;
 }
 
 /* Pill Badges */
 .pill {
     display: inline-block;
-    padding: 3px 10px;
+    padding: 4px 10px;
     border-radius: 12px;
     font-size: 11px;
     font-weight: 600;
     text-align: center;
 }
 
-.pill-hallazgo { background: var(--hallazgo-bg); color: var(--hallazgo-color); }
-.pill-propuesta { background: var(--propuesta-bg); color: var(--propuesta-color); }
+.pill-hallazgo { background: #E0F2FE; color: #0284C7; border: 1px solid #BAE6FD; }
+.pill-propuesta { background: #DCFCE7; color: #16A34A; border: 1px solid #BBF7D0; }
 
-.pill-alto { background: var(--alto-bg); color: var(--alto-color); }
-.pill-medio { background: var(--medio-bg); color: var(--medio-color); }
-.pill-bajo { background: var(--bajo-bg); color: var(--bajo-color); }
+.pill-alto { background: #FEE2E2; color: #991B1B; border: 1px solid #FCA5A5; }
+.pill-medio { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
+.pill-bajo { background: #DCFCE7; color: #166534; border: 1px solid #BBF7D0; }
 
-.pill-pendiente { background: var(--status-pendiente-bg); color: var(--status-pendiente-color); }
-.pill-en-proceso { background: var(--status-proceso-bg); color: var(--status-proceso-color); }
-.pill-planificada { background: var(--status-planificada-bg); color: var(--status-planificada-color); }
-.pill-completada { background: var(--status-completada-bg); color: var(--status-completada-color); }
+.pill-pendiente { background: #FFEDD5; color: #C2410C; border: 1px solid #FED7AA; }
+.pill-en-proceso, .pill-en_proceso { background: #DBEAFE; color: #1E40AF; border: 1px solid #BFDBFE; }
+.pill-planificada { background: #DBEAFE; color: #2563EB; border: 1px solid #BFDBFE; }
+.pill-completada, .pill-finalizado, .pill-implementada { background: #DCFCE7; color: #166534; border: 1px solid #BBF7D0; }
 
 /* File Cell */
 .file-cell {
@@ -1032,6 +1056,7 @@ body {
 }
 
 /* Inline Editing Controls */
+/* Inline Editing Controls */
 .inline-select {
     padding: 4px 8px;
     border: 1px solid #CBD5E1;
@@ -1041,6 +1066,8 @@ body {
     background-color: #FFFFFF;
     color: #1E293B;
     cursor: pointer;
+    text-align: center;
+    text-align-last: center;
     transition: all 0.2s ease;
 }
 
@@ -1051,11 +1078,11 @@ body {
 }
 
 .inline-select-risk {
-    min-width: 75px;
+    min-width: 80px;
 }
 
 .inline-select-status {
-    min-width: 110px;
+    min-width: 115px;
 }
 
 .inline-input {
@@ -1066,6 +1093,7 @@ body {
     width: 100%;
     background-color: #FFFFFF;
     color: #1E293B;
+    text-align: center;
     transition: all 0.2s ease;
 }
 
@@ -1077,25 +1105,26 @@ body {
 
 .inline-input-obs {
     min-width: 150px;
+    text-align: left;
 }
 
 /* Status Badges with Technical Terms */
 .pill-en-proceso, .pill-en_proceso {
-    background-color: #DBEAFE;
-    color: #1E40AF;
-    border: 1px solid #BFDBFE;
+    background-color: #DBEAFE !important;
+    color: #1E40AF !important;
+    border: 1px solid #BFDBFE !important;
 }
 
 .pill-en-suspension, .pill-en_suspension, .pill-stand-by {
-    background-color: #FEF3C7;
-    color: #92400E;
-    border: 1px solid #FDE68A;
+    background-color: #FEF3C7 !important;
+    color: #92400E !important;
+    border: 1px solid #FDE68A !important;
 }
 
 .pill-finalizado, .pill-completada, .pill-implementada {
-    background-color: #DCFCE7;
-    color: #166534;
-    border: 1px solid #BBF7D0;
+    background-color: #DCFCE7 !important;
+    color: #166534 !important;
+    border: 1px solid #BBF7D0 !important;
 }
 
 /* Subtabs for Proposals Repository */
@@ -1122,8 +1151,8 @@ body {
     color: #991B1B !important;
     font-weight: 700 !important;
     border: 1px solid #FCA5A5 !important;
-    border-radius: 6px;
-    padding: 2px 6px;
+    border-radius: 12px;
+    padding: 4px 10px;
 }
 
 .risk-badge-medio, select.risk-badge-medio {
@@ -1131,28 +1160,17 @@ body {
     color: #92400E !important;
     font-weight: 700 !important;
     border: 1px solid #FDE68A !important;
-    border-radius: 6px;
-    padding: 2px 6px;
+    border-radius: 12px;
+    padding: 4px 10px;
 }
 
 .risk-badge-bajo, select.risk-badge-bajo {
-    background-color: #D1FAE5 !important;
-    color: #065F46 !important;
+    background-color: #DCFCE7 !important;
+    color: #166534 !important;
     font-weight: 700 !important;
-    border: 1px solid #A7F3D0 !important;
-    border-radius: 6px;
-    padding: 2px 6px;
-}
-
-.table-card {
-    overflow-x: auto;
-    width: 100%;
-}
-
-.audittrack-table {
-    width: 100%;
-    min-width: 1500px;
-    border-collapse: collapse;
+    border: 1px solid #BBF7D0 !important;
+    border-radius: 12px;
+    padding: 4px 10px;
 }
 
 
