@@ -1194,8 +1194,14 @@ def parse_document(
                     current_finding
                 )
 
+            num_match = re.search(r"\b(?:hallazgo|observaci[oó]n|desviaci[oó]n|punto|ítem|item)\s*(?:n[°º]?\s*)?(\d+)", line, re.IGNORECASE)
+            if not num_match:
+                num_match = re.search(r"^\s*(\d+)[\.\)]", line)
+            source_num = int(num_match.group(1)) if num_match else (len(findings) + 1)
+
             current_finding = {
                 "raw_title": line,
+                "source_number": source_num,
                 "situation_lines": [],
                 "summary_lines": [],
                 "conclusion_lines": [],
@@ -1281,6 +1287,7 @@ def parse_document(
             "area": explicit_area,
             "auditor": explicit_auditor,
             "findings": findings,
+            "global_proposals": global_proposals,
         }
 
     cleaned_findings = []
@@ -1403,6 +1410,11 @@ def parse_document(
                     or title
                 ),
 
+                "source_number": finding.get(
+                    "source_number",
+                    idx
+                ),
+
                 "situation": situation,
 
                 "situation_source": situation_source,
@@ -1500,6 +1512,10 @@ def parse_document(
 
             cleaned_findings.append({
                 "title": title,
+                "source_number": finding.get(
+                    "source_number",
+                    idx
+                ),
                 "situation": (
                     fallback_situation
                 ),
@@ -1741,27 +1757,22 @@ def _parse_tabular_findings(
                         )
                         or hallazgo_text[:100]
                     ),
-
+                    "source_number": finding_num,
                     "situation": situation,
-
                     "situation_source": situation_source,
-
                     "proposal": (
                         proposals[0]
                         if proposals
                         else proposal_text
                     ),
-
                     "proposals_ai": (
                         proposals
                     ),
-
                     "risk": (
                         clean_text(
                             ai_result.risk
                         )
                     ),
-
                     "severity": (
                         ai_result.severity
                         if ai_result.severity
@@ -1772,7 +1783,6 @@ def _parse_tabular_findings(
                         )
                         else severity
                     ),
-
                     "responsible_area": (
                         clean_text(
                             ai_result
@@ -1780,35 +1790,29 @@ def _parse_tabular_findings(
                         )
                         or area
                     ),
-
                     "evidence": (
                         clean_text(
                             ai_result.evidence
                         )
                     ),
-
                     "cause": (
                         clean_text(
                             ai_result.cause
                         )
                     ),
-
                     "affected_process_or_control":
                         clean_text(
                             ai_result
                             .affected_process_or_control
                         ),
-
                     "impact": (
                         clean_text(
                             ai_result.impact
                         )
                     ),
-
                     "ai_confidence": (
                         ai_result.confidence
                     ),
-
                     "ai_validated": True,
                     "ai_status": ai_status,
                     "source_text": source_block,
@@ -1819,6 +1823,7 @@ def _parse_tabular_findings(
                     "title": (
                         hallazgo_text[:100]
                     ),
+                    "source_number": finding_num,
                     "situation": situation,
                     "situation_source": situation_source,
                     "proposal": proposal_text,
@@ -2008,9 +2013,6 @@ def parse_audit_report(
             continue
 
         finding_numbers = _parse_finding_references(p_text)
-        if not finding_numbers and p_num <= len(extracted_findings):
-            finding_numbers = [p_num]
-
         link_status = "linked" if finding_numbers else "unlinked"
 
         if finding_numbers:
@@ -2029,7 +2031,6 @@ def parse_audit_report(
         print(f"[Propuestas] Total detectadas: {len(parsed_proposals_list)}")
 
     relational_findings = []
-    proposal_counter = 1
 
     for index, finding in enumerate(extracted_findings, start=1):
         finding_id = str(uuid.uuid4())
@@ -2037,9 +2038,10 @@ def parse_audit_report(
         source_item_id = finding.get("source_item_id") or f"src_{source_key}"
         source_item_ids = finding.get("source_item_ids") or [source_item_id]
 
-        h_code = finding.get("code") or f"H-2026-{index:03d}"
+        finding_number = finding.get("source_number", index)
+        h_code = finding.get("code") or f"H-2026-{finding_number:03d}"
 
-        title = clean_text(finding.get("title", f"Hallazgo {index}"))
+        title = clean_text(finding.get("title", f"Hallazgo {finding_number}"))
         situation = clean_text(finding.get("situation", title))
         if len(situation) > 500:
             situation = _summarize_text(situation, max_chars=500)
@@ -2051,18 +2053,13 @@ def parse_audit_report(
         area = clean_text(finding.get("responsible_area")) or explicit_area
         action_owner = clean_text(finding.get("action_owner")) or "Pendiente de definir"
 
-        matching_global_proposals = [p for p in parsed_proposals_list if index in p["finding_numbers"]]
+        matching_global_proposals = [p for p in parsed_proposals_list if finding_number in p["finding_numbers"]]
         proposal_numbers = [p["number"] for p in matching_global_proposals]
 
         proposals = []
         if matching_global_proposals:
             for mp in matching_global_proposals:
-                pm_code = f"PM-2026-{proposal_counter:03d}"
-                proposal_counter += 1
                 proposals.append({
-                    "id": str(uuid.uuid4()),
-                    "finding_id": finding_id,
-                    "code": pm_code,
                     "number": mp["number"],
                     "title": mp["proposal_text"],
                     "proposal_text": mp["proposal_text"],
@@ -2085,13 +2082,7 @@ def parse_audit_report(
                 if not proposal_text:
                     continue
 
-                pm_code = f"PM-2026-{proposal_counter:03d}"
-                proposal_counter += 1
-
                 proposals.append({
-                    "id": str(uuid.uuid4()),
-                    "finding_id": finding_id,
-                    "code": pm_code,
                     "title": proposal_text,
                     "proposal_text": proposal_text,
                     "severity": severity,
@@ -2115,6 +2106,7 @@ def parse_audit_report(
             "converted": False,
             "code": h_code,
             "number": index,
+            "source_number": finding_number,
             "title": title,
             "situation": situation,
             "risk": risk,
