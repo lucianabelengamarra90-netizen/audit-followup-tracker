@@ -293,252 +293,99 @@ function filterAndRenderAll() {
 function renderAuditTrackTable(items) {
     const tbody = el("auditTrackTableBody");
     const countSpan = el("showingRecordsCount");
-
     if (!tbody) return;
 
     if (countSpan) {
-        countSpan.textContent =
-            `Mostrando ${items.length} de ${currentFindings.length} hallazgos`;
+        countSpan.textContent = `Mostrando ${items.length} de ${currentFindings.length} hallazgos`;
     }
 
     if (!items.length) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="13" class="audit-empty-state">
-                    No hay hallazgos con los filtros aplicados.
-                </td>
-            </tr>
-        `;
+        tbody.innerHTML = `<tr><td colspan="13" style="text-align: center; color: #64748b; padding: 36px;">No hay hallazgos con los filtros aplicados. Cargar informe arriba.</td></tr>`;
         return;
     }
 
     let html = "";
+    items.forEach((item) => {
+        const filename = item.source_filename || "Informe.xlsx";
+        const proposalsToRender = (item.proposals && item.proposals.length > 0) ? item.proposals : [null];
 
-    items.forEach(item => {
+        proposalsToRender.forEach((prop) => {
+            const propCodeCell = prop
+                ? `<a href="#" class="id-cell" style="color: #16A34A; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(prop.code)}</a>`
+                : `<span style="color:#94A3B8; font-size:11px;">Sin propuesta</span>`;
 
-        const filename =
-            item.source_filename || "Informe.xlsx";
+            const propText = prop ? (prop.proposal_text || prop.title) : "";
+            let firstAction = (prop && prop.action_plans && prop.action_plans.length > 0) ? prop.action_plans[0] : null;
+            let owner = (prop && prop.action_owner) ? prop.action_owner : (firstAction ? firstAction.action_owner : (item.action_owner || "Sin asignar"));
+            let targetDate = (prop && prop.target_date) ? prop.target_date : (firstAction ? firstAction.target_date : "");
+            let status = (prop && prop.status) ? prop.status : (item.status || "Pendiente");
+            let pct = firstAction ? (firstAction.progress_pct || 0) : 0;
+            let observations = item.observations || "";
 
-        const proposals =
-            item.proposals && item.proposals.length
-                ? item.proposals
-                : [null];
+            const currentRisk = item.severity || "Medio";
+            const badgeClass = currentRisk === "Alto" ? "risk-badge-alto" : (currentRisk === "Bajo" ? "risk-badge-bajo" : "risk-badge-medio");
 
-        proposals.forEach(prop => {
+            const riskSelectHtml = `<select class="inline-select inline-select-risk ${badgeClass}" data-finding-id="${item.id}" data-field="severity" onchange="inlineUpdateFindingRisk(this)">
+                <option value="Alto" ${currentRisk === 'Alto' ? 'selected' : ''}>Alto</option>
+                <option value="Medio" ${currentRisk === 'Medio' ? 'selected' : ''}>Medio</option>
+                <option value="Bajo" ${currentRisk === 'Bajo' ? 'selected' : ''}>Bajo</option>
+            </select>`;
 
-            const firstAction =
-                prop &&
-                prop.action_plans &&
-                prop.action_plans.length
-                    ? prop.action_plans[0]
-                    : null;
+            const statusOptions = ["En proceso", "En suspensión", "Finalizado"];
+            const statusSelectHtml = `<select class="inline-select inline-select-status" data-finding-id="${item.id}" data-proposal-id="${prop ? prop.id : ''}" data-field="status" onchange="inlineUpdateStatus(this)">
+                ${statusOptions.map(s => `<option value="${s}" ${s === status ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>`;
 
-            const proposalText =
-                prop
-                    ? (prop.proposal_text || prop.title || "")
-                    : "";
-
-            const owner =
-                (prop && prop.action_owner) ||
-                (firstAction && firstAction.action_owner) ||
-                item.action_owner ||
-                "";
-
-            const targetDate =
-                (prop && prop.target_date) ||
-                (firstAction && firstAction.target_date) ||
-                "";
-
-            const status =
-                (prop && prop.status) ||
-                item.status ||
-                "Pendiente";
-
-            const progress =
-                firstAction
-                    ? (firstAction.progress_pct || 0)
-                    : 0;
-
-            const observations =
-                item.observations || "";
-
-            const risk =
-                item.severity || "Medio";
-
-            const riskClass =
-                risk.toLowerCase() === "alto"
-                    ? "audit-risk-high"
-                    : risk.toLowerCase() === "bajo"
-                    ? "audit-risk-low"
-                    : "audit-risk-medium";
-
-            const statusClass =
-                status.toLowerCase().includes("final")
-                    ? "audit-status-done"
-                    : status.toLowerCase().includes("susp")
-                    ? "audit-status-suspended"
-                    : "audit-status-progress";
-
-            const proposalCode = prop
-                ? `
-                    <span class="audit-proposal-id">
-                        ${escapeHtml(prop.code)}
-                    </span>
-                  `
-                : `
-                    <span class="audit-muted">
-                        —
-                    </span>
-                  `;
-
-            const proposalCell = prop
-                ? `
-                    <div class="audit-proposal-text">
-                        ${escapeHtml(proposalText)}
-                    </div>
-                  `
-                : `
-                    <span class="audit-no-data">
-                        Sin propuesta
-                    </span>
-                  `;
-
-            const ownerCell = owner
-                ? escapeHtml(owner)
-                : `<span class="audit-no-data">Sin asignar</span>`;
-
-            const dateCell = targetDate
-                ? formatAuditDate(targetDate)
-                : `<span class="audit-no-data">Sin fecha</span>`;
-
-            const observationsCell = observations
-                ? `
-                    <div class="audit-observation">
-                        ${escapeHtml(observations)}
-                    </div>
-                  `
-                : `
-                    <span class="audit-no-data">—</span>
-                  `;
+            const propTextCell = prop
+                ? `<div class="truncate-2-lines" style="color:#16A34A; font-weight:500;" title="${escapeHtml(propText)}">💡 ${escapeHtml(propText)}</div>`
+                : `<span style="color:#94A3B8; font-size:11px;">Sin propuesta</span>`;
 
             html += `
-                <tr class="audit-main-row"
-                    data-row-id="${item.id}">
-
+                <tr data-row-id="${item.id}">
+                    <td style="font-weight: 700; color: #1E293B;">${escapeHtml(item.responsible_area || 'Pendiente de definir')}</td>
                     <td>
-                        <div class="audit-area">
-                            ${escapeHtml(
-                                item.responsible_area ||
-                                "Pendiente de definir"
-                            )}
+                        <a href="#" class="id-cell" style="color: #0055D4; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(item.code)}</a>
+                    </td>
+                    <td>
+                        <strong style="color: #0F172A; cursor:pointer;" onclick="openFindingDrawer('${item.id}')">${escapeHtml(item.title)}</strong>
+                        <div class="truncate-2-lines" style="font-size: 11px; color: #64748B; margin-top: 3px;" title="${escapeHtml(item.situation)}">${escapeHtml(item.situation)}</div>
+                    </td>
+                    <td>${propCodeCell}</td>
+                    <td>${propTextCell}</td>
+                    <td>
+                        <div class="file-cell">
+                            <span>📄</span>
+                            <span style="font-size:11px;">${escapeHtml(filename)}</span>
                         </div>
                     </td>
-
+                    <td>${riskSelectHtml}</td>
                     <td>
-                        <button
-                            class="audit-id-link"
-                            onclick="openFindingDrawer('${item.id}')">
-                            ${escapeHtml(item.code)}
-                        </button>
+                        <input type="text" class="inline-input" value="${escapeHtml(owner)}"
+                            data-finding-id="${item.id}" data-proposal-id="${prop ? prop.id : ''}" data-field="action_owner"
+                            onchange="inlineUpdateOwner(this)" placeholder="Responsable" />
                     </td>
-
                     <td>
-                        <div class="audit-finding-title">
-                            ${escapeHtml(item.title || "")}
-                        </div>
-
-                        ${
-                            item.situation &&
-                            item.situation !== item.title
-                                ? `
-                                <div class="audit-finding-description">
-                                    ${escapeHtml(item.situation)}
-                                </div>
-                                `
-                                : ""
-                        }
+                        <input type="date" class="inline-input" value="${escapeHtml(targetDate)}"
+                            data-finding-id="${item.id}" data-proposal-id="${prop ? prop.id : ''}" data-field="target_date"
+                            onchange="inlineUpdateDate(this)" />
                     </td>
-
+                    <td>${statusSelectHtml}</td>
                     <td>
-                        ${proposalCode}
-                    </td>
-
-                    <td>
-                        ${proposalCell}
-                    </td>
-
-                    <td>
-                        <div
-                            class="audit-file"
-                            title="${escapeHtml(filename)}">
-                            <span class="audit-file-icon">📄</span>
-
-                            <span class="audit-file-name">
-                                ${escapeHtml(filename)}
-                            </span>
-                        </div>
-                    </td>
-
-                    <td>
-                        <span class="audit-risk ${riskClass}">
-                            ${escapeHtml(risk)}
-                        </span>
-                    </td>
-
-                    <td>
-                        <div class="audit-owner">
-                            ${ownerCell}
-                        </div>
-                    </td>
-
-                    <td>
-                        <div class="audit-date">
-                            ${dateCell}
-                        </div>
-                    </td>
-
-                    <td>
-                        <span class="audit-status ${statusClass}">
-                            ${escapeHtml(status)}
-                        </span>
-                    </td>
-
-                    <td>
-                        <div class="audit-progress">
-
-                            <div class="audit-progress-track">
-                                <div
-                                    class="audit-progress-value"
-                                    style="width:${Math.min(
-                                        100,
-                                        Math.max(0, progress)
-                                    )}%">
-                                </div>
+                        <div style="display:flex; align-items:center; gap:4px;">
+                            <div style="background:#CBD5E1; border-radius:4px; height:6px; flex:1; overflow:hidden;">
+                                <div style="background:#16A34A; width:${pct}%; height:100%;"></div>
                             </div>
-
-                            <span class="audit-progress-number">
-                                ${progress}%
-                            </span>
-
+                            <span style="font-size:10px;">${pct}%</span>
                         </div>
                     </td>
-
-                    <td class="audit-action-cell">
-
-                        <button
-                            type="button"
-                            class="audit-edit-button"
-                            onclick="openFindingDrawer('${item.id}')"
-                            title="Editar hallazgo">
-                            ✏️
-                        </button>
-
-                    </td>
-
                     <td>
-                        ${observationsCell}
+                        <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openFindingDrawer('${item.id}')" title="Ver / Editar detalle">✏️ Editar</button>
                     </td>
-
+                    <td>
+                        <input type="text" class="inline-input inline-input-obs" value="${escapeHtml(observations)}"
+                            data-finding-id="${item.id}" data-field="observations"
+                            onchange="inlineUpdateFinding(this)" placeholder="Agregar observación..." />
+                    </td>
                 </tr>
             `;
         });
@@ -546,6 +393,7 @@ function renderAuditTrackTable(items) {
 
     tbody.innerHTML = html;
 }
+
 
 // ============================================================
 // INLINE EDITING FUNCTIONS
@@ -993,21 +841,22 @@ function onModalFindingChange(findingId) {
         return;
     }
 
-    const finding = currentFindings.find(f => f.id === findingId);
+    const finding = currentFindings.find(f => f.id === findingId || f.code === findingId);
     const proposals = finding ? (finding.proposals || []) : [];
 
     if (!proposals.length) {
-        proposalSelect.innerHTML = `<option value="">Este hallazgo no tiene propuestas. Creando propuesta automática...</option>`;
+        proposalSelect.innerHTML = `<option value="">✨ (Se creará una propuesta automáticamente al guardar)</option>`;
         proposalSelect.disabled = false;
         return;
     }
 
-    proposalSelect.innerHTML = `<option value="">-- Seleccionar Propuesta --</option>` +
+    proposalSelect.innerHTML = `<option value="">-- Seleccionar Propuesta (Opcional) --</option>` +
         proposals.map(p => `<option value="${p.id}">${escapeHtml(p.code)} - ${escapeHtml(p.proposal_text || p.title)}</option>`).join("");
     proposalSelect.disabled = false;
 }
 
 async function saveActionPlanFromModal() {
+    const finding_id = el("modalPlanFinding")?.value;
     const proposal_id = el("modalPlanProposal")?.value;
     const action_text = el("modalPlanActionText")?.value;
     const action_owner = el("modalPlanOwner")?.value;
@@ -1016,8 +865,13 @@ async function saveActionPlanFromModal() {
     const progress_pct = el("modalPlanProgress")?.value;
     const notes = el("modalPlanNotes")?.value;
 
-    if (!proposal_id || !action_text) {
-        showToast("Por favor seleccioná una propuesta y completá la acción comprometida.", "warning");
+    if (!action_text) {
+        showToast("Por favor completá la descripción de la Acción Comprometida.", "warning");
+        return;
+    }
+
+    if (!finding_id && !proposal_id) {
+        showToast("Por favor seleccioná un informe y hallazgo origen.", "warning");
         return;
     }
 
@@ -1025,20 +879,29 @@ async function saveActionPlanFromModal() {
         const response = await fetch("/action-plans", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ proposal_id, action_text, action_owner, target_date, status, progress_pct, notes })
+            body: JSON.stringify({ finding_id, proposal_id, action_text, action_owner, target_date, status, progress_pct, notes })
         });
 
         if (response.ok) {
-            showToast("Plan de Acción creado correctamente.", "success");
+            showToast("Plan de Acción creado e integrado correctamente.", "success");
             closeActionPlanModal();
-            loadAllData();
+            await loadAllData();
+            switchTab("planes");
         } else {
-            showToast("Error al crear el Plan de Acción.", "error");
+            const data = await response.json().catch(() => ({}));
+            showToast(data.error || "Error al crear el Plan de Acción.", "error");
         }
     } catch (err) {
         console.error(err);
         showToast("Error de conexión.", "error");
     }
+}
+
+function openNewPlanFromCurrentDrawer() {
+    if (!currentDrawerFindingId) return;
+    const fId = currentDrawerFindingId;
+    closeFindingDrawer();
+    openNewActionPlanModal(fId);
 }
 
 function openUpdatePlanModal(planId) {
@@ -1430,7 +1293,7 @@ function openPreviewValidationModal(data) {
                         <option value="Bajo"${f.severity === 'Bajo' ? ' selected' : ''}>Bajo</option>
                     </select>
                 </td>
-                <td><small style="color:#64748B;">Padre</small></td>
+                <td><small style="color:#64748B;">Hallazgo Principal</small></td>
                 <td>
                     <button type="button" class="btn btn-outlined" style="padding:2px 6px; font-size:11px; color:#DC2626;" onclick="deletePreviewFinding(${fIdx})">Eliminar</button>
                 </td>
@@ -1576,80 +1439,30 @@ async function openFindingDrawer(findingId) {
         if (el("drawerReportName")) el("drawerReportName").textContent = `${f.report_title || ''} (${f.report_code || ''})`;
         if (el("drawerFileName")) el("drawerFileName").textContent = f.source_filename || "Informe.xlsx";
 
-       
-// Propuestas vinculadas
-const propBox = el("drawerProposalsList");
-
-if (propBox) {
-    const props = f.proposals || [];
-
-    if (!props.length) {
-        propBox.innerHTML = `
-            <div style="font-size:12px; color:#94A3B8;">
-                Sin propuestas registradas.
-            </div>
-        `;
-    } else {
-        propBox.innerHTML = props.map(p => `
-            <div class="drawer-proposal-card" id="proposal-card-${p.id}">
-
-                <div class="drawer-proposal-code">
-                    💡 ${escapeHtml(p.code)}
+        // Propuestas vinculadas (Editables desde el panel de edición)
+        const propBox = el("drawerProposalsList");
+        if (propBox) {
+            const props = f.proposals || [];
+            let propHtml = "";
+            if (props.length > 0) {
+                props.forEach((p) => {
+                    propHtml += `
+                        <div style="background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px; padding:10px; margin-bottom:8px;">
+                            <label style="font-size:11px; font-weight:600; color:#0055D4; display:block; margin-bottom:4px;">💡 ${escapeHtml(p.code)} - Propuesta de Mejora ✏️</label>
+                            <textarea class="drawer-prop-input" data-prop-id="${p.id}" rows="2" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1; font-size:12px;">${escapeHtml(p.proposal_text || p.title)}</textarea>
+                        </div>
+                    `;
+                });
+            }
+            propHtml += `
+                <div style="background:#F8FAFC; border:1px dashed #CBD5E1; border-radius:8px; padding:10px; margin-top:8px;">
+                    <label style="font-size:11px; font-weight:600; color:#475569; display:block; margin-bottom:4px;">➕ Agregar Nueva Propuesta de Mejora ✏️</label>
+                    <textarea id="drawerNewProposalText" rows="2" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1; font-size:12px;" placeholder="Escribir nueva recomendación o propuesta de mejora..."></textarea>
                 </div>
+            `;
+            propBox.innerHTML = propHtml;
+        }
 
-                <div
-                    class="drawer-proposal-text"
-                    id="proposal-text-${p.id}">
-                    ${escapeHtml(p.proposal_text || p.title)}
-                </div>
-
-                <textarea
-                    id="proposal-edit-${p.id}"
-                    class="drawer-edit-field"
-                    rows="5"
-                    style="display:none; margin-top:6px;"
-                >${escapeHtml(p.proposal_text || p.title)}</textarea>
-
-                <div style="font-size:11px; color:#64748B; margin-top:6px;">
-                    Estado:
-                    <strong>${escapeHtml(p.status || "Pendiente")}</strong>
-                    ${p.target_date ? ` · Fecha: <strong>${escapeHtml(p.target_date)}</strong>` : ""}
-                </div>
-
-                <div class="drawer-edit-actions">
-
-                    <button
-                        type="button"
-                        class="audit-edit-button"
-                        id="proposal-pencil-${p.id}"
-                        onclick="editDrawerProposal('${p.id}')"
-                        title="Editar propuesta">
-                        ✏️
-                    </button>
-
-                    <button
-                        type="button"
-                        class="drawer-save-btn"
-                        id="proposal-save-${p.id}"
-                        onclick="saveDrawerProposal('${p.id}')"
-                        style="display:none;">
-                        Guardar
-                    </button>
-
-                    <button
-                        type="button"
-                        class="drawer-cancel-btn"
-                        id="proposal-cancel-${p.id}"
-                        onclick="cancelDrawerProposal('${p.id}')"
-                        style="display:none;">
-                        Cancelar
-                    </button>
-
-                </div>
-            </div>
-        `).join("");
-    }
-}
         // Planes de acción vinculados
         const plansBox = el("drawerActionPlansList");
         if (plansBox) {
@@ -1738,6 +1551,30 @@ async function saveFindingFromDrawer() {
             })
         });
 
+        // Guardar cambios en las propuestas existentes
+        const propInputs = document.querySelectorAll(".drawer-prop-input");
+        for (const input of propInputs) {
+            const propId = input.dataset.propId;
+            const newText = input.value.trim();
+            if (propId && newText) {
+                await fetch(`/proposals/${propId}/update`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ proposal_text: newText, title: newText })
+                });
+            }
+        }
+
+        // Agregar nueva propuesta si fue ingresada
+        const newPropInput = el("drawerNewProposalText");
+        if (newPropInput && newPropInput.value.trim()) {
+            await fetch(`/findings/${currentDrawerFindingId}/add-proposal`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ proposal_text: newPropInput.value.trim() })
+            });
+        }
+
         if (res.ok) {
             showToast("Cambios guardados correctamente en AuditTrack.", "success");
             closeFindingDrawer();
@@ -1776,285 +1613,7 @@ function updateSidebarMetrics() {
 }
 
 // Initialize on page load
-document.addEventListener("DOMContentLoaded", async () => {
-    switchTab("hallazgos");
-    await loadAllData();
-
-    setTimeout(() => {
-        initAuditStickyScroll();
-    }, 300);
-});
-// ============================================================
-// SCROLL HORIZONTAL STICKY PARA TABLA AUDITTRACK
-// ============================================================
-
-function initAuditStickyScroll() {
-    const tableCard = document.querySelector(".table-card");
-    const table = document.querySelector(".audittrack-table");
-
-    if (!tableCard || !table) return;
-
-    let stickyScroll = document.getElementById("auditStickyScroll");
-
-    if (!stickyScroll) {
-        stickyScroll = document.createElement("div");
-        stickyScroll.id = "auditStickyScroll";
-
-        const inner = document.createElement("div");
-        inner.id = "auditStickyScrollInner";
-
-        stickyScroll.appendChild(inner);
-        document.body.appendChild(stickyScroll);
-    }
-
-    const inner = document.getElementById("auditStickyScrollInner");
-
-    function refreshStickyWidth() {
-        inner.style.width = `${table.scrollWidth}px`;
-    }
-
-    refreshStickyWidth();
-
-    let syncingFromTable = false;
-    let syncingFromSticky = false;
-
-    tableCard.addEventListener("scroll", () => {
-        if (syncingFromSticky) return;
-
-        syncingFromTable = true;
-        stickyScroll.scrollLeft = tableCard.scrollLeft;
-        syncingFromTable = false;
-    });
-
-    stickyScroll.addEventListener("scroll", () => {
-        if (syncingFromTable) return;
-
-        syncingFromSticky = true;
-        tableCard.scrollLeft = stickyScroll.scrollLeft;
-        syncingFromSticky = false;
-    });
-
-    window.addEventListener("resize", refreshStickyWidth);
-}
-// ============================================================
-// EDICIÓN DE PROPUESTA DESDE DRAWER
-// ============================================================
-
-function editDrawerProposal(proposalId) {
-    const text = document.getElementById(`proposal-text-${proposalId}`);
-    const input = document.getElementById(`proposal-edit-${proposalId}`);
-    const pencil = document.getElementById(`proposal-pencil-${proposalId}`);
-    const save = document.getElementById(`proposal-save-${proposalId}`);
-    const cancel = document.getElementById(`proposal-cancel-${proposalId}`);
-
-    if (text) text.style.display = "none";
-    if (input) input.style.display = "block";
-
-    if (pencil) pencil.style.display = "none";
-    if (save) save.style.display = "inline-flex";
-    if (cancel) cancel.style.display = "inline-flex";
-
-    if (input) input.focus();
-}
-
-function cancelDrawerProposal(proposalId) {
-    const text = document.getElementById(`proposal-text-${proposalId}`);
-    const input = document.getElementById(`proposal-edit-${proposalId}`);
-    const pencil = document.getElementById(`proposal-pencil-${proposalId}`);
-    const save = document.getElementById(`proposal-save-${proposalId}`);
-    const cancel = document.getElementById(`proposal-cancel-${proposalId}`);
-
-    if (text) {
-        text.style.display = "block";
-        if (input) input.value = text.textContent.trim();
-    }
-
-    if (input) input.style.display = "none";
-    if (pencil) pencil.style.display = "inline-flex";
-    if (save) save.style.display = "none";
-    if (cancel) cancel.style.display = "none";
-}
-
-async function saveDrawerProposal(proposalId) {
-    const input = document.getElementById(`proposal-edit-${proposalId}`);
-    const newText = input?.value?.trim();
-
-    if (!newText) {
-        showToast("La propuesta no puede quedar vacía.", "warning");
-        return;
-    }
-
-    try {
-        const res = await fetch(`/proposals/${proposalId}/update`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                proposal_text: newText
-            })
-        });
-
-        if (!res.ok) {
-            throw new Error("No se pudo guardar la propuesta.");
-        }
-
-        showToast("Propuesta de mejora actualizada.", "success");
-
-        await loadAllData();
-
-        if (currentDrawerFindingId) {
-            await openFindingDrawer(currentDrawerFindingId);
-        }
-
-    } catch (error) {
-        console.error(error);
-        showToast("Error al guardar la propuesta.", "error");
-    }
-}
-function formatAuditDate(value) {
-    if (!value) return "";
-
-    const parts = value.split("-");
-
-    if (parts.length !== 3) {
-        return escapeHtml(value);
-    }
-
-    return `${parts[2]}/${parts[1]}/${parts[0]}`;
-}
-// ============================================================
-// EDICIÓN DE PROPUESTAS DESDE EL DRAWER
-// ============================================================
-
-function editDrawerProposal(proposalId) {
-    const text = document.getElementById(`proposal-text-${proposalId}`);
-    const input = document.getElementById(`proposal-edit-${proposalId}`);
-    const pencil = document.getElementById(`proposal-pencil-${proposalId}`);
-    const save = document.getElementById(`proposal-save-${proposalId}`);
-    const cancel = document.getElementById(`proposal-cancel-${proposalId}`);
-
-    if (text) text.style.display = "none";
-    if (input) input.style.display = "block";
-
-    if (pencil) pencil.style.display = "none";
-    if (save) save.style.display = "inline-flex";
-    if (cancel) cancel.style.display = "inline-flex";
-
-    if (input) input.focus();
-}
-
-function cancelDrawerProposal(proposalId) {
-    const text = document.getElementById(`proposal-text-${proposalId}`);
-    const input = document.getElementById(`proposal-edit-${proposalId}`);
-    const pencil = document.getElementById(`proposal-pencil-${proposalId}`);
-    const save = document.getElementById(`proposal-save-${proposalId}`);
-    const cancel = document.getElementById(`proposal-cancel-${proposalId}`);
-
-    if (text && input) {
-        input.value = text.textContent.trim();
-        text.style.display = "block";
-    }
-
-    if (input) input.style.display = "none";
-    if (pencil) pencil.style.display = "inline-flex";
-    if (save) save.style.display = "none";
-    if (cancel) cancel.style.display = "none";
-}
-
-async function saveDrawerProposal(proposalId) {
-    const input = document.getElementById(`proposal-edit-${proposalId}`);
-    const newText = input?.value?.trim();
-
-    if (!newText) {
-        showToast("La propuesta no puede quedar vacía.", "warning");
-        return;
-    }
-
-    try {
-        const res = await fetch(`/proposals/${proposalId}/update`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                proposal_text: newText,
-                title: newText
-            })
-        });
-
-        if (!res.ok) {
-            throw new Error("No se pudo guardar la propuesta.");
-        }
-
-        showToast("Propuesta de mejora actualizada.", "success");
-
-        await loadAllData();
-
-        if (currentDrawerFindingId) {
-            await openFindingDrawer(currentDrawerFindingId);
-        }
-
-    } catch (error) {
-        console.error(error);
-        showToast("Error al guardar la propuesta.", "error");
-    }
-}
-// ============================================================
-// SCROLL HORIZONTAL FIJO Y SINCRONIZADO
-// ============================================================
-
-function initAuditStickyScroll() {
-    const tableCard = document.querySelector(".table-card");
-    const table = document.querySelector(".audittrack-table");
-
-    if (!tableCard || !table) return;
-
-    let stickyScroll = document.getElementById("auditStickyScroll");
-
-    if (!stickyScroll) {
-        stickyScroll = document.createElement("div");
-        stickyScroll.id = "auditStickyScroll";
-
-        const inner = document.createElement("div");
-        inner.id = "auditStickyScrollInner";
-
-        stickyScroll.appendChild(inner);
-        document.body.appendChild(stickyScroll);
-    }
-
-    const inner = document.getElementById("auditStickyScrollInner");
-
-    function refreshWidth() {
-        inner.style.width = `${table.scrollWidth}px`;
-
-        if (table.scrollWidth <= tableCard.clientWidth) {
-            stickyScroll.style.display = "none";
-        } else {
-            stickyScroll.style.display = "block";
-        }
-    }
-
-    refreshWidth();
-
-    tableCard.onscroll = () => {
-        stickyScroll.scrollLeft = tableCard.scrollLeft;
-    };
-
-    stickyScroll.onscroll = () => {
-        tableCard.scrollLeft = stickyScroll.scrollLeft;
-    };
-
-    window.addEventListener("resize", refreshWidth);
-
-    window.refreshAuditStickyScroll = refreshWidth;
-}
-// Initialize on page load
-document.addEventListener("DOMContentLoaded", async () => {
-    switchTab("hallazgos");
-    await loadAllData();
-
-    setTimeout(() => {
-        initAuditStickyScroll();
-    }, 300);
+document.addEventListener("DOMContentLoaded", () => {
+    switchTab("informes");
+    loadAllData();
 });

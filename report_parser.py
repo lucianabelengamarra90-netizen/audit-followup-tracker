@@ -612,8 +612,35 @@ def _extract_after_keyword(
 
 
 def _detect_severity(text):
+    if not text:
+        return "Medio"
+
     norm = normalize_text(text)
 
+    # 1. Explicit risk headers and phrases
+    if any(phrase in norm for phrase in [
+        "riesgo alto", "riesgo: alto", "riesgo alta", "riesgo: alta",
+        "criticidad alta", "criticidad: alta", "severidad alta", "severidad: alta",
+        "riesgo critico", "riesgo crítico", "criticidad critica", "criticidad crítica",
+        "riesgo  alto", "riesgo   alto"
+    ]):
+        return "Alto"
+
+    if any(phrase in norm for phrase in [
+        "riesgo bajo", "riesgo: bajo", "riesgo baja", "riesgo: baja",
+        "criticidad baja", "criticidad: baja", "severidad baja", "severidad: baja",
+        "riesgo leve", "riesgo menor"
+    ]):
+        return "Bajo"
+
+    if any(phrase in norm for phrase in [
+        "riesgo medio", "riesgo: medio", "riesgo media", "riesgo: media",
+        "criticidad media", "criticidad: media", "severidad media", "severidad: media",
+        "riesgo moderado", "riesgo moderada"
+    ]):
+        return "Medio"
+
+    # 2. General word matching
     if any(
         word in norm
         for word in [
@@ -1111,6 +1138,15 @@ def parse_document(
     current_global_proposal = None
     reading_proposal = False
     in_global_proposals = False
+    prev_line = ""
+
+    proposal_start_verbs = {
+        "incorporar", "reforzar", "asegurar", "formalizar", "definir", "actualizar",
+        "evaluar", "establecer", "implementar", "revisar", "diseñar", "desarrollar",
+        "modificar", "crear", "realizar", "capacitar", "monitorear", "optimizar",
+        "garantizar", "promover", "solicitar", "unificar", "ajustar", "notificar",
+        "supervisar", "analizar", "efectuar", "adecuar", "difundir", "gestionar"
+    }
 
     for line in lines:
         norm = normalize_text(line)
@@ -1125,6 +1161,7 @@ def parse_document(
             reading_proposal = False
             reading_summary = False
             reading_conclusion = False
+            prev_line = line
             continue
 
         if in_global_proposals:
@@ -1138,10 +1175,15 @@ def parse_document(
                     global_proposals.append(current_global_proposal)
                     current_global_proposal = None
                 in_global_proposals = False
+                prev_line = line
                 continue
 
             num_match = re.match(r"^(?:\[[A-Z0-9_]+\]\s*)?(?:propuesta|recomendaci[oó]n)?\s*(?:n[°º]?\s*)?(\d+)[\.\:\)\-]*\s*(.*)", line.strip(), re.IGNORECASE)
             bullet_match = re.match(r"^(?:\[[A-Z0-9_]+\]\s*)?[-•\*]\s*(.*)", line.strip())
+
+            words_h = norm_h.split()
+            first_word = words_h[0] if words_h else ""
+            is_verb_start = first_word in proposal_start_verbs or norm_h.startswith("propuesta") or norm_h.startswith("recomendacion")
 
             if num_match:
                 p_num = int(num_match.group(1))
@@ -1153,6 +1195,7 @@ def parse_document(
                     "number": p_num,
                     "proposal_text_lines": [p_text_init] if p_text_init else []
                 }
+                prev_line = line
                 continue
 
             if bullet_match:
@@ -1165,10 +1208,24 @@ def parse_document(
                     "number": auto_num,
                     "proposal_text_lines": [p_text_init] if p_text_init else []
                 }
+                prev_line = line
+                continue
+
+            if is_verb_start or current_global_proposal is None:
+                if current_global_proposal:
+                    global_proposals.append(current_global_proposal)
+
+                auto_num = (global_proposals[-1]["number"] + 1) if global_proposals else 1
+                current_global_proposal = {
+                    "number": auto_num,
+                    "proposal_text_lines": [line]
+                }
+                prev_line = line
                 continue
 
             if current_global_proposal:
                 current_global_proposal["proposal_text_lines"].append(line)
+                prev_line = line
                 continue
 
         if (
@@ -1183,6 +1240,7 @@ def parse_document(
                 current_finding = None
                 reading_proposal = False
 
+            prev_line = line
             continue
 
         if _looks_like_finding_start(
@@ -1201,13 +1259,14 @@ def parse_document(
 
             current_finding = {
                 "raw_title": line,
+                "prev_line": prev_line,
                 "source_number": source_num,
                 "situation_lines": [],
                 "summary_lines": [],
                 "conclusion_lines": [],
                 "proposal_lines": [],
                 "severity": (
-                    _detect_severity(line)
+                    _detect_severity(f"{prev_line} {line}")
                 ),
                 "responsible_area": (
                     explicit_area
@@ -1217,6 +1276,7 @@ def parse_document(
             reading_proposal = False
             reading_summary = False
             reading_conclusion = False
+            prev_line = line
             continue
 
         if (
@@ -1241,6 +1301,7 @@ def parse_document(
             reading_proposal = True
             reading_summary = False
             reading_conclusion = False
+            prev_line = line
             continue
 
         if current_finding:
@@ -1264,6 +1325,8 @@ def parse_document(
                 current_finding[
                     "situation_lines"
                 ].append(line)
+
+        prev_line = line
 
     if current_finding:
         findings.append(
@@ -1348,6 +1411,11 @@ def parse_document(
             if part
         )
 
+        full_finding_text = f"{finding.get('prev_line', '')}\n{raw_title}\n{situation_full}\n{summary_full}\n{conclusion_full}"
+        detected_sev = _detect_severity(full_finding_text)
+        if detected_sev == "Medio" and finding.get("severity") in ("Alto", "Bajo"):
+            detected_sev = finding.get("severity")
+
         ai_result = run_double_ai_review(
             source_text=source_block,
             fallback_title=title,
@@ -1355,10 +1423,7 @@ def parse_document(
                 "responsible_area",
                 explicit_area
             ),
-            fallback_severity=finding.get(
-                "severity",
-                "Medio"
-            ),
+            fallback_severity=detected_sev,
         )
 
         if ai_result:
@@ -1439,7 +1504,7 @@ def parse_document(
                         "Medio",
                         "Bajo"
                     )
-                    else "Medio"
+                    else detected_sev
                 ),
 
                 "responsible_area": (
@@ -1529,10 +1594,7 @@ def parse_document(
                     else []
                 ),
                 "risk": "",
-                "severity": finding.get(
-                    "severity",
-                    "Medio"
-                ),
+                "severity": detected_sev,
                 "responsible_area": (
                     finding.get(
                         "responsible_area",
