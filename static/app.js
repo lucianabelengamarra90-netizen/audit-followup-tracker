@@ -1532,6 +1532,12 @@ function closeFindingDrawer() {
     currentDrawerFindingId = null;
 }
 
+function closeDrawerAndGoToProposals() {
+    closeFindingDrawer();
+    closeActionPlanModal();
+    switchTab('propuestas');
+}
+
 async function saveFindingFromDrawer() {
     if (!currentDrawerFindingId) return;
 

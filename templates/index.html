@@ -66,6 +66,10 @@
                     <span class="topnav-icon">💡</span>
                     <span>Propuestas de mejora</span>
                 </button>
+                <button class="topnav-tab" data-tab="planes" onclick="switchTab('planes')">
+                    <span class="topnav-icon">📋</span>
+                    <span>Planes de Acción</span>
+                </button>
                 <button class="topnav-tab" data-tab="tableros" onclick="switchTab('tableros')">
                     <span class="topnav-icon">📊</span>
                     <span>Tableros</span>
@@ -299,7 +303,10 @@
                         <h2>Planes de Acción</h2>
                         <p>Seguimiento operativo de tareas comprometidas por las áreas auditadas.</p>
                     </div>
-                    <button class="btn btn-primary" onclick="openNewActionPlanModal()">+ Crear Plan de Acción</button>
+                    <div style="display:flex; gap:10px;">
+                        <button class="btn btn-outlined" onclick="switchTab('propuestas')">← Volver a Propuestas de Mejora</button>
+                        <button class="btn btn-primary" onclick="openNewActionPlanModal()">+ Crear Plan de Acción</button>
+                    </div>
                 </div>
 
                 <div class="table-card">
@@ -501,8 +508,15 @@
 <!-- SLIDE-OVER DRAWER: DETALLE COMPLETO DEL HALLAZGO Y TRAZABILIDAD (EDITABLE CON LÁPIZ ✏️) -->
 <div id="drawerFindingDetail" class="drawer-overlay" style="display:none;" onclick="if(event.target===this) closeFindingDrawer()">
     <div class="drawer-panel">
-        <div class="drawer-header">
-            <div>
+        <div class="drawer-header" style="flex-direction:column; gap:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; width:100%; padding-bottom:8px; border-bottom:1px solid #E2E8F0;">
+                <button type="button" class="btn-back-to-proposals" onclick="closeDrawerAndGoToProposals()">
+                    <span>←</span>
+                    <span>💡 Volver a Propuestas de Mejora</span>
+                </button>
+                <button class="drawer-close-btn" onclick="closeFindingDrawer()" title="Cerrar panel">×</button>
+            </div>
+            <div style="width:100%;">
                 <span class="pill pill-alto" id="drawerRiskPill">Alto</span>
                 <span class="pill pill-en-proceso" id="drawerStatusPill">En proceso</span>
                 <h2 id="drawerCodeTitle" style="font-size: 18px; margin-top: 6px;">H-2026-001</h2>
@@ -511,7 +525,6 @@
                     <input type="text" id="drawerInputTitle" class="drawer-edit-input" style="font-size: 14px; font-weight: 600; width:100%; border:1px solid #CBD5E1; border-radius:4px; padding:3px 8px;" placeholder="Título del Hallazgo" />
                 </div>
             </div>
-            <button class="drawer-close-btn" onclick="closeFindingDrawer()">×</button>
         </div>
 
         <div class="drawer-body">
@@ -578,7 +591,10 @@
 
             <!-- Planes de Acción vinculados -->
             <div class="drawer-section">
-                <h4>📋 Planes de Acción y Avance</h4>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <h4 style="margin:0;">📋 Planes de Acción y Avance</h4>
+                    <button type="button" class="btn btn-outlined" style="padding:2px 8px; font-size:11px;" id="btnDrawerAddPlan" onclick="openNewPlanFromCurrentDrawer()">+ Agregar Plan</button>
+                </div>
                 <div id="drawerActionPlansList"></div>
             </div>
 
