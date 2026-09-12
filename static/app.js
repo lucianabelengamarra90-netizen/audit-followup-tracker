@@ -261,7 +261,16 @@ function filterAndRenderAll() {
         filteredF = filteredF.filter(i => (i.responsible_area || "").toLowerCase() === activeFilters.area.toLowerCase());
     }
     if (activeFilters.status) {
-        filteredF = filteredF.filter(i => (i.status || "").toLowerCase() === activeFilters.status.toLowerCase());
+        filteredF = filteredF.filter(i => {
+            const prop = currentProposals.find(p => p.finding_id === i.id || (i.proposal_ids && i.proposal_ids.includes(p.id)));
+            const st = (prop && prop.status) ? prop.status : (i.status || "En proceso");
+            const filterVal = activeFilters.status.toLowerCase();
+            const itemVal = st.toLowerCase();
+            if (filterVal === "finalizado" || filterVal === "completada") {
+                return ["finalizado", "completada", "completado", "implementada", "archivada"].includes(itemVal);
+            }
+            return itemVal === filterVal;
+        });
     }
     if (activeFilters.risk) {
         filteredF = filteredF.filter(i => (i.severity || "").toLowerCase() === activeFilters.risk.toLowerCase());
@@ -318,7 +327,7 @@ function renderAuditTrackTable(items) {
             let firstAction = (prop && prop.action_plans && prop.action_plans.length > 0) ? prop.action_plans[0] : null;
             let owner = (prop && prop.action_owner) ? prop.action_owner : (firstAction ? firstAction.action_owner : (item.action_owner || "Sin asignar"));
             let targetDate = (prop && prop.target_date) ? prop.target_date : (firstAction ? firstAction.target_date : "");
-            let status = (prop && prop.status) ? prop.status : (item.status || "Pendiente");
+            let status = (prop && prop.status) ? prop.status : (item.status || "En proceso");
             let pct = firstAction ? (firstAction.progress_pct || 0) : 0;
             let observations = item.observations || "";
 
