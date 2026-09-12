@@ -78,10 +78,7 @@
                     <span class="topnav-icon">📈</span>
                     <span>Indicadores</span>
                 </button>
-                <button class="topnav-tab" data-tab="configuracion" onclick="switchTab('configuracion')">
-                    <span class="topnav-icon">⚙️</span>
-                    <span>Configuración</span>
-                </button>
+                <!-- Pestaña Configuración desactivada -->
                 <button class="topnav-tab" data-tab="informes" onclick="switchTab('informes')">
                     <span class="topnav-icon">📜</span>
                     <span>Historial de informes</span>
@@ -155,8 +152,23 @@
                     <div class="view-actions">
                         <button class="btn btn-primary" onclick="document.getElementById('reportInputMainTab').click()">📤 Subir Informe de Auditoría</button>
                         <input type="file" id="reportInputMainTab" hidden accept=".pdf,.docx,.doc,.xlsx,.csv,.txt" onchange="uploadAuditReport(this.files[0])">
-                        <button class="btn btn-outlined" onclick="exportExcelReport()">↓ Exportar Excel</button>
-                        <button class="btn btn-outlined" onclick="toggleFilterBar()">⚙️ Filtros</button>
+
+                        <!-- Menú Unificado Gestión Excel -->
+                        <div style="position: relative; display: inline-block;">
+                            <button class="btn btn-outlined" onclick="toggleExcelMenu(event)">📊 Gestión Excel ▼</button>
+                            <div id="excelMenuDropdown" style="display: none; position: absolute; right: 0; top: 42px; background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 8px; box-shadow: 0 4px 12px rgba(15,23,42,0.12); width: 230px; z-index: 1000; padding: 6px 0;">
+                                <button class="btn-link" style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 14px; color: #1E293B; text-align: left; font-size: 12px; border-radius: 0;" onclick="document.getElementById('importExcelInput').click()">
+                                    <span>📥</span> <span>Importar desde Excel</span>
+                                </button>
+                                <button class="btn-link" style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 14px; color: #1E293B; text-align: left; font-size: 12px; border-radius: 0; border-top: 1px solid #F1F5F9;" onclick="downloadExcelTemplate()">
+                                    <span>📄</span> <span>Descargar Plantilla Modelo</span>
+                                </button>
+                                <button class="btn-link" style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 14px; color: #1E293B; text-align: left; font-size: 12px; border-radius: 0; border-top: 1px solid #F1F5F9;" onclick="exportExcelReport()">
+                                    <span>📤</span> <span>Exportar a Excel (3 solapas)</span>
+                                </button>
+                            </div>
+                        </div>
+                        <input type="file" id="importExcelInput" hidden accept=".xlsx" onchange="importExcelFile(this.files[0])">
                     </div>
                 </div>
 

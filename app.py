@@ -3,7 +3,7 @@ import os
 import re
 from datetime import datetime
 from io import BytesIO
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
@@ -557,6 +557,199 @@ def export_excel():
         download_name=filename,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+@app.route("/download-template")
+def download_template():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Hallazgos y Propuestas"
+
+    NAVY = "0F172A"
+    TEXT_COLOR = "1F2937"
+    BORDER_COLOR = "E2E8F0"
+    THIN_BORDER = Border(
+        left=Side(style="thin", color=BORDER_COLOR),
+        right=Side(style="thin", color=BORDER_COLOR),
+        top=Side(style="thin", color=BORDER_COLOR),
+        bottom=Side(style="thin", color=BORDER_COLOR)
+    )
+
+    headers = [
+        "Área / Proceso", "ID Hallazgo", "Hallazgo (Situación Observada)",
+        "ID Propuesta", "Propuesta de Mejora (Recomendación)", "Riesgo",
+        "Responsable", "Fecha compromiso", "Estado", "Avance", "Acciones", "Observaciones"
+    ]
+
+    ws.freeze_panes = "A2"
+    for col_idx, h in enumerate(headers, start=1):
+        c = ws.cell(row=1, column=col_idx, value=h)
+        c.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor=NAVY)
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = THIN_BORDER
+    ws.row_dimensions[1].height = 28
+
+    sample_row = [
+        "Tesorería",
+        "H-2026-001",
+        "Faltante de caja no justificado en arqueo diario",
+        "PM-2026-001",
+        "Implementar arqueos sorpresivos y conciliación diaria",
+        "Alto",
+        "Guadalupe Méndez",
+        "31/10/2026",
+        "En proceso",
+        "50%",
+        "Revisión de normativa enviada",
+        "Pendiente de informe final"
+    ]
+
+    for col_idx, v in enumerate(sample_row, start=1):
+        c = ws.cell(row=2, column=col_idx, value=v)
+        c.font = Font(name="Calibri", size=9, color=TEXT_COLOR)
+        c.border = THIN_BORDER
+        c.alignment = Alignment(vertical="center", horizontal="center" if col_idx in [2, 4, 6, 8, 9, 10] else "left", wrap_text=True)
+    ws.row_dimensions[2].height = 30
+
+    ws.auto_filter.ref = ws.dimensions
+
+    widths = [20, 14, 38, 14, 42, 12, 22, 16, 14, 12, 28, 28]
+    for idx, w in enumerate(widths, start=1):
+        col_letter = get_column_letter(idx)
+        ws.column_dimensions[col_letter].width = w
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name="Plantilla_Importacion_AuditTrack.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
+@app.route("/import-excel", methods=["POST"])
+def import_excel():
+    if "file" not in request.files:
+        return jsonify({"error": "No se envió ningún archivo"}), 400
+
+    file = request.files["file"]
+    if not file or not file.filename.lower().endswith(".xlsx"):
+        return jsonify({"error": "Formato inválido. Debe ser un archivo Excel (.xlsx)"}), 400
+
+    try:
+        wb = load_workbook(filename=BytesIO(file.read()), data_only=True)
+        ws = wb.active
+
+        rows = list(ws.iter_rows(values_only=True))
+        if len(rows) < 2:
+            return jsonify({"error": "El archivo Excel está vacío o no contiene filas de datos"}), 400
+
+        report_filename = file.filename
+        report_title = f"Importación Excel - {os.path.splitext(report_filename)[0]}"
+
+        findings_to_insert = []
+        for idx, row in enumerate(rows[1:], start=1):
+            if not row or not any(row):
+                continue
+
+            area = str(row[0] or "").strip()
+            h_code = str(row[1] or "").strip()
+            situation = str(row[2] or "").strip()
+            p_code = str(row[3] or "").strip()
+            prop_text = str(row[4] or "").strip()
+            risk = str(row[5] or "Medio").strip()
+            owner = str(row[6] or "").strip()
+            target_date = str(row[7] or "").strip()
+            status = str(row[8] or "En proceso").strip()
+            pct_raw = str(row[9] or "0").replace("%", "").strip()
+            try:
+                pct = int(float(pct_raw))
+            except Exception:
+                pct = 0
+            actions = str(row[10] or "").strip()
+            obs = str(row[11] or "").strip()
+
+            if not h_code and not situation and not prop_text:
+                continue
+
+            if not h_code:
+                h_code = f"H-IMP-{idx:03d}"
+            if not p_code:
+                p_code = f"PM-IMP-{idx:03d}"
+
+            clean_status = "En proceso"
+            if "suspensión" in status.lower() or "suspension" in status.lower():
+                clean_status = "En suspensión"
+            elif any(w in status.lower() for w in ["finalizado", "finalizada", "completada", "completado", "cerrado"]):
+                clean_status = "Finalizado"
+
+            clean_risk = "Medio"
+            if "alto" in risk.lower():
+                clean_risk = "Alto"
+            elif "bajo" in risk.lower():
+                clean_risk = "Bajo"
+
+            finding_item = {
+                "code": h_code,
+                "title": situation[:100] if situation else f"Hallazgo {h_code}",
+                "situation": situation or "Sin detalle",
+                "risk": clean_risk,
+                "severity": clean_risk,
+                "responsible_area": area or "Operaciones",
+                "action_owner": owner or "Auditoría",
+                "status": clean_status,
+                "observations": obs,
+                "proposals": [
+                    {
+                        "code": p_code,
+                        "title": prop_text[:100] if prop_text else f"Propuesta {p_code}",
+                        "proposal_text": prop_text or "Sin detalle de propuesta",
+                        "severity": clean_risk,
+                        "responsible_area": area or "Operaciones",
+                        "action_owner": owner or "Auditoría",
+                        "target_date": target_date,
+                        "status": clean_status,
+                        "action_plans": [
+                            {
+                                "code": f"PA-{idx:03d}",
+                                "title": actions or prop_text[:100] or "Plan de Acción",
+                                "action_text": actions or prop_text or "Plan de Acción",
+                                "action_owner": owner or "Auditoría",
+                                "target_date": target_date,
+                                "status": clean_status,
+                                "progress_pct": pct,
+                                "notes": obs
+                            }
+                        ] if actions else []
+                    }
+                ]
+            }
+            findings_to_insert.append(finding_item)
+
+        if not findings_to_insert:
+            return jsonify({"error": "No se encontraron filas válidas en la planilla Excel"}), 400
+
+        report_data = {
+            "title": report_title,
+            "filename": report_filename,
+            "summary": f"Importación directa desde planilla Excel ({len(findings_to_insert)} hallazgos)."
+        }
+
+        save_relational_report_structure(report_data, findings_to_insert, report_filename)
+
+        return jsonify({
+            "success": True,
+            "message": f"Se importaron exitosamente {len(findings_to_insert)} hallazgos y propuestas desde Excel.",
+            "imported_count": len(findings_to_insert)
+        })
+
+    except Exception as exc:
+        print(f"Error procesando importación Excel: {exc}")
+        return jsonify({"error": f"No se pudo procesar la planilla Excel: {str(exc)}"}), 500
 
 
 if __name__ == "__main__":
