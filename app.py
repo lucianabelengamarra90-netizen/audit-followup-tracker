@@ -390,19 +390,17 @@ def api_notifications():
     return jsonify(alerts)
 
 
-@app.route("/export-excel", methods=["POST"])
+@app.route("/export-excel", methods=["POST", "GET"])
 def export_excel():
     findings = get_all_findings()
-    stats = get_dashboard_stats()
+    proposals = get_all_proposals()
+    action_plans = get_all_action_plans()
 
     wb = Workbook()
-    ws_kpi = wb.active
-    ws_kpi.title = "Tablero de Control"
 
-    NAVY = "17365D"
-    BLUE = "1F4E78"
+    NAVY = "0F172A"
     TEXT_COLOR = "1F2937"
-    BORDER_COLOR = "D0D7DE"
+    BORDER_COLOR = "E2E8F0"
     THIN_BORDER = Border(
         left=Side(style="thin", color=BORDER_COLOR),
         right=Side(style="thin", color=BORDER_COLOR),
@@ -410,80 +408,143 @@ def export_excel():
         bottom=Side(style="thin", color=BORDER_COLOR)
     )
 
-    ws_kpi.merge_cells("A1:G1")
-    title_cell = ws_kpi["A1"]
-    title_cell.value = "REPORTE CONSOLIDADO AUDITTRACK - TRAZABILIDAD INTEGRAL"
-    title_cell.font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
-    title_cell.fill = PatternFill("solid", fgColor=NAVY)
-    title_cell.alignment = Alignment(horizontal="center", vertical="center")
-    ws_kpi.row_dimensions[1].height = 40
+    def apply_header_styles(ws, headers):
+        ws.freeze_panes = "A2"
+        for col_idx, h in enumerate(headers, start=1):
+            c = ws.cell(row=1, column=col_idx, value=h)
+            c.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+            c.fill = PatternFill("solid", fgColor=NAVY)
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = THIN_BORDER
+        ws.row_dimensions[1].height = 28
 
-    kpi_items = [
-        ("Hallazgos Abiertos", stats.get("open_findings", 0)),
-        ("Riesgo Alto", stats.get("high_risk_findings", 0)),
-        ("Total Propuestas", stats.get("total_proposals", 0)),
-        ("Planes Vencidos", stats.get("overdue_plans", 0)),
-        ("% Implementación", f"{stats.get('impl_rate', 0)}%"),
+    def auto_fit_and_filter(ws, max_cols):
+        ws.auto_filter.ref = ws.dimensions
+        for col_idx in range(1, max_cols + 1):
+            col_letter = get_column_letter(col_idx)
+            max_len = 0
+            for row in ws.iter_rows(min_col=col_idx, max_col=col_idx):
+                val = str(row[0].value or "")
+                if len(val) > max_len:
+                    max_len = len(val)
+            ws.column_dimensions[col_letter].width = max(14, min(max_len + 3, 50))
+
+    # --------------------------------------------------
+    # SOLAPA 1: Hallazgos y Propuestas
+    # --------------------------------------------------
+    ws1 = wb.active
+    ws1.title = "Hallazgos y Propuestas"
+    headers_1 = [
+        "Área / Proceso", "ID Hallazgo", "Hallazgo (Situación Observada)",
+        "ID Propuesta", "Propuesta de Mejora (Recomendación)", "Riesgo",
+        "Responsable", "Fecha compromiso", "Estado", "Avance", "Acciones", "Observaciones"
     ]
-
-    for col_idx, (label, val) in enumerate(kpi_items, start=1):
-        cell_lbl = ws_kpi.cell(row=3, column=col_idx, value=label)
-        cell_lbl.font = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
-        cell_lbl.fill = PatternFill("solid", fgColor=BLUE)
-        cell_lbl.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-        cell_val = ws_kpi.cell(row=4, column=col_idx, value=val)
-        cell_val.font = Font(name="Calibri", size=14, bold=True, color=TEXT_COLOR)
-        cell_val.alignment = Alignment(horizontal="center", vertical="center")
-        cell_val.border = THIN_BORDER
-
-    ws_detail = wb.create_sheet("Trazabilidad Completa")
-
-    headers = [
-        "Área", "ID Hallazgo", "Informe", "Archivo", "Hallazgo (Situación)",
-        "Riesgo", "Propuesta de Mejora (Recomendación)", "Plan de Acción",
-        "Responsable", "Fecha Compromiso", "Estado"
-    ]
-
-    for col_idx, h in enumerate(headers, start=1):
-        c = ws_detail.cell(row=1, column=col_idx, value=h)
-        c.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
-        c.fill = PatternFill("solid", fgColor=NAVY)
-        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        c.border = THIN_BORDER
+    apply_header_styles(ws1, headers_1)
 
     row_idx = 2
     for f in findings:
-        props = f.get("proposals") or [{}]
+        props = f.get("proposals") or [None]
         for p in props:
-            plans = p.get("action_plans") or [{}]
-            for pa in plans:
-                vals = [
-                    f.get("responsible_area", ""),
-                    f.get("code", ""),
-                    f.get("report_title", ""),
-                    f.get("source_filename", ""),
-                    f.get("title", ""),
-                    f.get("severity", ""),
-                    p.get("proposal_text", p.get("title", "")),
-                    pa.get("action_text", pa.get("title", "")),
-                    pa.get("action_owner", f.get("action_owner", "")),
-                    pa.get("target_date", p.get("target_date", "")),
-                    pa.get("status", f.get("status", ""))
-                ]
-                for col_idx, v in enumerate(vals, start=1):
-                    c = ws_detail.cell(row=row_idx, column=col_idx, value=v)
-                    c.font = Font(name="Calibri", size=9, color=TEXT_COLOR)
-                    c.border = THIN_BORDER
-                    c.alignment = Alignment(vertical="center", wrap_text=True)
+            first_action = (p.get("action_plans") or [{}])[0] if p and p.get("action_plans") else {}
+            owner = (p.get("action_owner") if p else None) or first_action.get("action_owner") or f.get("action_owner", "Sin asignar")
+            target_date = (p.get("target_date") if p else None) or first_action.get("target_date") or ""
+            status = (p.get("status") if p else None) or f.get("status", "En proceso")
+            pct = first_action.get("progress_pct", 0) if first_action else 0
 
-                ws_detail.row_dimensions[row_idx].height = 32
-                row_idx += 1
+            vals = [
+                f.get("responsible_area") or "Pendiente de definir",
+                f.get("code", ""),
+                f.get("situation") or f.get("title", ""),
+                p.get("code", "Sin propuesta") if p else "Sin propuesta",
+                p.get("proposal_text") or p.get("title", "") if p else "",
+                f.get("severity", "Medio"),
+                owner,
+                target_date,
+                status,
+                f"{pct}%",
+                "",
+                f.get("observations", "")
+            ]
+            for col_idx, v in enumerate(vals, start=1):
+                c = ws1.cell(row=row_idx, column=col_idx, value=v)
+                c.font = Font(name="Calibri", size=9, color=TEXT_COLOR)
+                c.border = THIN_BORDER
+                c.alignment = Alignment(vertical="center", horizontal="center" if col_idx in [2, 4, 6, 8, 9, 10] else "left", wrap_text=True)
+            ws1.row_dimensions[row_idx].height = 30
+            row_idx += 1
+    auto_fit_and_filter(ws1, len(headers_1))
 
-    widths = [20, 14, 28, 22, 35, 12, 40, 40, 20, 16, 16]
-    for idx, w in enumerate(widths, start=1):
-        col_letter = get_column_letter(idx)
-        ws_detail.column_dimensions[col_letter].width = w
+    # --------------------------------------------------
+    # SOLAPA 2: Propuestas de Mejora
+    # --------------------------------------------------
+    ws2 = wb.create_sheet("Propuestas de Mejora")
+    headers_2 = [
+        "ID Propuesta", "Propuesta de Mejora", "Hallazgo Origen", "Área / Proceso",
+        "Estado de Implementación", "Responsable", "Planes de Acción",
+        "Fecha Compromiso", "Repositorio / Acción", "Informe"
+    ]
+    apply_header_styles(ws2, headers_2)
+
+    row_idx = 2
+    for p in proposals:
+        is_archived = (p.get("status") or "").lower() in ["finalizado", "completada", "implementada", "archivada"]
+        repo_action = "🗃️ Plan 2026" if is_archived else "Archivar"
+
+        vals = [
+            p.get("code", ""),
+            p.get("proposal_text") or p.get("title", ""),
+            p.get("finding_code", ""),
+            p.get("responsible_area", "Operaciones"),
+            p.get("status", "En proceso"),
+            p.get("action_owner", "Auditoría"),
+            f"{p.get('action_plans_count', 0)} plan(es)",
+            p.get("target_date", ""),
+            repo_action,
+            p.get("report_title", "")
+        ]
+        for col_idx, v in enumerate(vals, start=1):
+            c = ws2.cell(row=row_idx, column=col_idx, value=v)
+            c.font = Font(name="Calibri", size=9, color=TEXT_COLOR)
+            c.border = THIN_BORDER
+            c.alignment = Alignment(vertical="center", horizontal="center" if col_idx in [1, 3, 5, 7, 8, 9] else "left", wrap_text=True)
+        ws2.row_dimensions[row_idx].height = 28
+        row_idx += 1
+    auto_fit_and_filter(ws2, len(headers_2))
+
+    # --------------------------------------------------
+    # SOLAPA 3: Planes de Acción
+    # --------------------------------------------------
+    ws3 = wb.create_sheet("Planes de Acción")
+    headers_3 = [
+        "ID Plan", "Acción Compromiso", "Propuesta Vinculada", "Hallazgo",
+        "Informe", "Responsable", "Fecha Compromiso", "% Avance",
+        "Estado", "Evidencia", "Acciones"
+    ]
+    apply_header_styles(ws3, headers_3)
+
+    row_idx = 2
+    for pa in action_plans:
+        vals = [
+            pa.get("code") or f"PA-{pa.get('id', '')}",
+            pa.get("action_text") or pa.get("title", ""),
+            pa.get("proposal_code", ""),
+            pa.get("finding_code", ""),
+            pa.get("report_title", ""),
+            pa.get("action_owner", ""),
+            pa.get("target_date", ""),
+            f"{pa.get('progress_pct', 0)}%",
+            pa.get("status", "En proceso"),
+            pa.get("notes", ""),
+            ""
+        ]
+        for col_idx, v in enumerate(vals, start=1):
+            c = ws3.cell(row=row_idx, column=col_idx, value=v)
+            c.font = Font(name="Calibri", size=9, color=TEXT_COLOR)
+            c.border = THIN_BORDER
+            c.alignment = Alignment(vertical="center", horizontal="center" if col_idx in [1, 3, 4, 7, 8, 9] else "left", wrap_text=True)
+        ws3.row_dimensions[row_idx].height = 28
+        row_idx += 1
+    auto_fit_and_filter(ws3, len(headers_3))
 
     output = BytesIO()
     wb.save(output)

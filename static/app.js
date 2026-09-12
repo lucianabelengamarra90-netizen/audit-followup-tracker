@@ -42,6 +42,43 @@ function showToast(message, type = "info") {
     setTimeout(() => { toast.style.display = "none"; }, 3500);
 }
 
+function isStatusEqual(s1, s2) {
+    if (!s1 || !s2) return false;
+    const clean1 = s1.toString().trim().toLowerCase();
+    const clean2 = s2.toString().trim().toLowerCase();
+    if (clean1 === clean2) return true;
+    const isFinished1 = ["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"].includes(clean1);
+    const isFinished2 = ["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"].includes(clean2);
+    if (isFinished1 && isFinished2) return true;
+    return false;
+}
+
+async function exportExcelReport() {
+    try {
+        showToast("Generando reporte Excel...", "info");
+        const response = await fetch("/export-excel", {
+            method: "POST"
+        });
+        if (!response.ok) {
+            showToast("Error al exportar reporte Excel", "error");
+            return;
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.style.display = "none";
+        a.href = url;
+        a.download = `Reporte_AuditTrack_${new Date().toISOString().slice(0,10)}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        showToast("Excel exportado exitosamente", "success");
+    } catch (e) {
+        console.error("Error al exportar Excel:", e);
+        showToast("Error de conexión al exportar Excel", "error");
+    }
+}
+
 // ============================================================
 // TAB NAVIGATION
 // ============================================================
@@ -262,14 +299,17 @@ function filterAndRenderAll() {
     }
     if (activeFilters.status) {
         filteredF = filteredF.filter(i => {
-            const prop = currentProposals.find(p => p.finding_id === i.id || (i.proposal_ids && i.proposal_ids.includes(p.id)));
-            const st = (prop && prop.status) ? prop.status : (i.status || "En proceso");
-            const filterVal = activeFilters.status.toLowerCase();
-            const itemVal = st.toLowerCase();
-            if (filterVal === "finalizado" || filterVal === "completada") {
-                return ["finalizado", "completada", "completado", "implementada", "archivada"].includes(itemVal);
+            let statuses = [];
+            if (i.status) statuses.push(i.status);
+            if (i.proposals && i.proposals.length > 0) {
+                i.proposals.forEach(p => { if (p && p.status) statuses.push(p.status); });
             }
-            return itemVal === filterVal;
+            const relProp = currentProposals.filter(p => p.finding_id === i.id || (i.proposal_ids && i.proposal_ids.includes(p.id)));
+            relProp.forEach(p => { if (p && p.status) statuses.push(p.status); });
+
+            if (statuses.length === 0) statuses.push("En proceso");
+
+            return statuses.some(st => isStatusEqual(activeFilters.status, st));
         });
     }
     if (activeFilters.risk) {
@@ -342,7 +382,7 @@ function renderAuditTrackTable(items) {
 
             const statusOptions = ["En proceso", "En suspensión", "Finalizado"];
             const statusSelectHtml = `<select class="inline-select inline-select-status" data-finding-id="${item.id}" data-proposal-id="${prop ? prop.id : ''}" data-field="status" onchange="inlineUpdateStatus(this)">
-                ${statusOptions.map(s => `<option value="${s}" ${s === status ? 'selected' : ''}>${s}</option>`).join('')}
+                ${statusOptions.map(s => `<option value="${s}" ${isStatusEqual(s, status) ? 'selected' : ''}>${s}</option>`).join('')}
             </select>`;
 
             const propTextCell = prop
@@ -455,7 +495,14 @@ async function inlineUpdateStatus(el) {
 
     // Sincronizar la memoria local al instante
     const finding = currentFindings.find(f => f.id === findingId);
-    if (finding) finding.status = value;
+    if (finding) {
+        finding.status = value;
+        if (finding.proposals) {
+            finding.proposals.forEach(p => {
+                if (!proposalId || p.id === proposalId) p.status = value;
+            });
+        }
+    }
 
     if (proposalId) {
         const prop = currentProposals.find(p => p.id === proposalId);
