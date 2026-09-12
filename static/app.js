@@ -42,6 +42,12 @@ function showToast(message, type = "info") {
     setTimeout(() => { toast.style.display = "none"; }, 3500);
 }
 
+function getRowEffectiveStatus(item, prop) {
+    if (prop && prop.status) return prop.status;
+    if (item && item.status) return item.status;
+    return "En proceso";
+}
+
 function isStatusEqual(s1, s2) {
     if (!s1 || !s2) return false;
     const clean1 = s1.toString().trim().toLowerCase();
@@ -297,21 +303,7 @@ function filterAndRenderAll() {
     if (activeFilters.area) {
         filteredF = filteredF.filter(i => (i.responsible_area || "").toLowerCase() === activeFilters.area.toLowerCase());
     }
-    if (activeFilters.status) {
-        filteredF = filteredF.filter(i => {
-            let statuses = [];
-            if (i.status) statuses.push(i.status);
-            if (i.proposals && i.proposals.length > 0) {
-                i.proposals.forEach(p => { if (p && p.status) statuses.push(p.status); });
-            }
-            const relProp = currentProposals.filter(p => p.finding_id === i.id || (i.proposal_ids && i.proposal_ids.includes(p.id)));
-            relProp.forEach(p => { if (p && p.status) statuses.push(p.status); });
 
-            if (statuses.length === 0) statuses.push("En proceso");
-
-            return statuses.some(st => isStatusEqual(activeFilters.status, st));
-        });
-    }
     if (activeFilters.risk) {
         filteredF = filteredF.filter(i => (i.severity || "").toLowerCase() === activeFilters.risk.toLowerCase());
     }
@@ -344,21 +336,23 @@ function renderAuditTrackTable(items) {
     const countSpan = el("showingRecordsCount");
     if (!tbody) return;
 
-    if (countSpan) {
-        countSpan.textContent = `Mostrando ${items.length} de ${currentFindings.length} hallazgos`;
-    }
-
-    if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="13" style="text-align: center; color: #64748b; padding: 36px;">No hay hallazgos con los filtros aplicados. Cargar informe arriba.</td></tr>`;
-        return;
-    }
-
     let html = "";
+    let renderedRowCount = 0;
+
     items.forEach((item) => {
         const filename = item.source_filename || "Informe.xlsx";
         const proposalsToRender = (item.proposals && item.proposals.length > 0) ? item.proposals : [null];
 
         proposalsToRender.forEach((prop) => {
+            const status = getRowEffectiveStatus(item, prop);
+
+            // Row-level status filter: Skip rendering if row effective status does not match activeFilters.status
+            if (activeFilters.status && !isStatusEqual(activeFilters.status, status)) {
+                return;
+            }
+
+            renderedRowCount++;
+
             const propCodeCell = prop
                 ? `<a href="#" class="id-cell" style="color: #16A34A; font-weight:700;" onclick="openFindingDrawer('${item.id}'); return false;">${escapeHtml(prop.code)}</a>`
                 : `<span style="color:#94A3B8; font-size:11px;">Sin propuesta</span>`;
@@ -367,7 +361,6 @@ function renderAuditTrackTable(items) {
             let firstAction = (prop && prop.action_plans && prop.action_plans.length > 0) ? prop.action_plans[0] : null;
             let owner = (prop && prop.action_owner) ? prop.action_owner : (firstAction ? firstAction.action_owner : (item.action_owner || "Sin asignar"));
             let targetDate = (prop && prop.target_date) ? prop.target_date : (firstAction ? firstAction.target_date : "");
-            let status = (prop && prop.status) ? prop.status : (item.status || "En proceso");
             let pct = firstAction ? (firstAction.progress_pct || 0) : 0;
             let observations = item.observations || "";
 
@@ -433,6 +426,15 @@ function renderAuditTrackTable(items) {
             `;
         });
     });
+
+    if (countSpan) {
+        countSpan.textContent = `Mostrando ${renderedRowCount} de ${currentFindings.length} hallazgos`;
+    }
+
+    if (!renderedRowCount) {
+        tbody.innerHTML = `<tr><td colspan="13" style="text-align: center; color: #64748b; padding: 36px;">No hay hallazgos con los filtros aplicados. Cargar informe arriba.</td></tr>`;
+        return;
+    }
 
     tbody.innerHTML = html;
 }
