@@ -453,6 +453,15 @@ async function inlineUpdateStatus(el) {
     const proposalId = el.dataset.proposalId;
     const value = el.value;
 
+    // Sincronizar la memoria local al instante
+    const finding = currentFindings.find(f => f.id === findingId);
+    if (finding) finding.status = value;
+
+    if (proposalId) {
+        const prop = currentProposals.find(p => p.id === proposalId);
+        if (prop) prop.status = value;
+    }
+
     try {
         // Update finding status
         await fetch(`/findings/${findingId}/update`, {
