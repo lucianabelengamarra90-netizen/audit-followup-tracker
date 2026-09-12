@@ -43,8 +43,11 @@ function showToast(message, type = "info") {
 }
 
 function getRowEffectiveStatus(item, prop) {
-    if (prop && prop.status) return prop.status;
-    if (item && item.status) return item.status;
+    let raw = (prop && prop.status) ? prop.status : (item && item.status ? item.status : "En proceso");
+    if (!raw) return "En proceso";
+    const clean = raw.toString().trim().toLowerCase();
+    if (clean === "en suspensión" || clean === "en suspension") return "En suspensión";
+    if (["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"].includes(clean)) return "Finalizado";
     return "En proceso";
 }
 
