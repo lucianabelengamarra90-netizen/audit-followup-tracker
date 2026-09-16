@@ -1128,26 +1128,38 @@ function openNewPlanFromCurrentDrawer() {
     openNewActionPlanModal(fId);
 }
 
-function openUpdatePlanModal(planId) {
+async function openUpdatePlanModal(planId) {
     const plan = currentActionPlans.find(p => p.id === planId);
     if (!plan) return;
 
-    const newPct = prompt(`Actualizar porcentaje de avance para ${plan.code} (0-100):`, plan.progress_pct || 0);
-    if (newPct === null) return;
+    const inputVal = prompt(`Actualizar porcentaje de avance para ${plan.code} (0-100):`, plan.progress_pct || 0);
+    if (inputVal === null) return;
 
-    const newStatus = prompt(`Actualizar estado (En proceso / Pendiente / Completada):`, plan.status || "En proceso");
-    if (!newStatus) return;
+    const newPct = Math.max(0, Math.min(100, parseInt(inputVal) || 0));
+    let newStatus = plan.status || "En proceso";
 
-    fetch(`/action-plans/${plan.id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ progress_pct: parseInt(newPct) || 0, status: newStatus })
-    }).then(res => {
+    // Regla de Sincronización Automática
+    if (newPct === 100) {
+        newStatus = "Finalizado";
+    } else if (newPct < 100 && ["finalizado", "finalizada", "completado", "completada", "cerrado"].includes(newStatus.toLowerCase())) {
+        newStatus = "En proceso";
+    }
+
+    try {
+        const res = await fetch(`/action-plans/${plan.id}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ progress_pct: newPct, status: newStatus })
+        });
         if (res.ok) {
-            showToast("Plan actualizado.", "success");
-            loadAllData();
+            showToast(`Plan ${plan.code} actualizado: ${newPct}% (${newStatus})`, "success");
+            await loadAllData();
+        } else {
+            showToast("Error al actualizar plan", "error");
         }
-    });
+    } catch (e) {
+        showToast("Error de conexión al actualizar plan", "error");
+    }
 }
 
 // ============================================================

@@ -565,6 +565,22 @@ def update_proposal(proposal_id, data, user_name="Auditoría Interna"):
     if updated:
         add_history_log("proposal", proposal_id, user_name, f"Edición inline: {', '.join(changes)}", cursor=cursor)
 
+        # Sincronización automática con planes de acción vinculados
+        if "status" in data and data["status"] is not None:
+            st_clean = str(data["status"]).strip().lower()
+            if st_clean in ("finalizado", "finalizada", "completado", "completada", "archivada"):
+                cursor.execute("""
+                    UPDATE action_plans 
+                    SET status = 'Finalizado', progress_pct = 100 
+                    WHERE proposal_id = ? OR proposal_id IN (SELECT id FROM proposals WHERE code = ?)
+                """, (proposal_id, proposal_id))
+            elif st_clean in ("en proceso", "en-proceso"):
+                cursor.execute("""
+                    UPDATE action_plans 
+                    SET status = 'En proceso', progress_pct = CASE WHEN progress_pct >= 100 THEN 50 ELSE progress_pct END 
+                    WHERE proposal_id = ? OR proposal_id IN (SELECT id FROM proposals WHERE code = ?)
+                """, (proposal_id, proposal_id))
+
     conn.commit()
     conn.close()
     return updated
@@ -717,13 +733,36 @@ def update_action_plan(plan_id, status=None, progress_pct=None, notes=None, targ
     conn = get_db()
     cursor = conn.cursor()
 
+    # Sincronización automática de Avance y Estado
+    if progress_pct is not None:
+        try:
+            pct_val = int(progress_pct)
+            if pct_val >= 100:
+                if status is None or str(status).strip().lower() not in ("en suspensión", "en suspension", "stand-by"):
+                    status = "Finalizado"
+            elif pct_val < 100:
+                if status is None or str(status).strip().lower() in ("finalizado", "finalizada", "completado", "completada", "archivada"):
+                    status = "En proceso"
+        except Exception:
+            pass
+
+    if status is not None:
+        st_clean = str(status).strip().lower()
+        if st_clean in ("finalizado", "finalizada", "completado", "completada", "archivada"):
+            progress_pct = 100
+        elif st_clean in ("en proceso", "en-proceso") and progress_pct is None:
+            cursor.execute("SELECT progress_pct FROM action_plans WHERE id = ? OR code = ?", (plan_id, plan_id))
+            r = cursor.fetchone()
+            if r and r[0] >= 100:
+                progress_pct = 50
+
     fields = ["last_updated = CURRENT_TIMESTAMP"]
     params = []
 
     if status is not None:
         fields.append("status = ?")
         params.append(status)
-        if status.lower() in ("completado", "cerrado"):
+        if status.lower() in ("completado", "cerrado", "finalizado"):
             fields.append("closed_date = CURRENT_TIMESTAMP")
     if progress_pct is not None:
         fields.append("progress_pct = ?")
