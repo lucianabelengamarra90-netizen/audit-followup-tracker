@@ -390,6 +390,31 @@ def api_notifications():
     return jsonify(alerts)
 
 
+def compute_effective_status(status_raw, target_date_str):
+    raw = (status_raw or "En proceso").strip().lower()
+    if any(w in raw for w in ["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"]):
+        return "Finalizado"
+    if "suspensión" in raw or "suspension" in raw or "stand-by" in raw:
+        return "En suspensión"
+
+    if target_date_str:
+        try:
+            today = datetime.now().date()
+            d = None
+            t_str = str(target_date_str).strip()[:10]
+            if "-" in t_str and len(t_str) == 10:
+                d = datetime.strptime(t_str, "%Y-%m-%d").date()
+            elif "/" in t_str:
+                d = datetime.strptime(t_str, "%d/%m/%Y").date()
+
+            if d and d < today:
+                return "Vencido"
+        except Exception:
+            pass
+
+    return "En proceso"
+
+
 @app.route("/export-excel", methods=["POST", "GET"])
 def export_excel():
     findings = get_all_findings()
@@ -448,7 +473,8 @@ def export_excel():
             first_action = (p.get("action_plans") or [{}])[0] if p and p.get("action_plans") else {}
             owner = (p.get("action_owner") if p else None) or first_action.get("action_owner") or f.get("action_owner", "Sin asignar")
             target_date = (p.get("target_date") if p else None) or first_action.get("target_date") or ""
-            status = (p.get("status") if p else None) or f.get("status", "En proceso")
+            raw_status = (p.get("status") if p else None) or f.get("status", "En proceso")
+            eff_status = compute_effective_status(raw_status, target_date)
             pct = first_action.get("progress_pct", 0) if first_action else 0
 
             vals = [
@@ -460,7 +486,7 @@ def export_excel():
                 f.get("severity", "Medio"),
                 owner,
                 target_date,
-                status,
+                eff_status,
                 f"{pct}%",
                 "",
                 f.get("observations", "")
@@ -487,7 +513,8 @@ def export_excel():
 
     row_idx = 2
     for p in proposals:
-        is_archived = (p.get("status") or "").lower() in ["finalizado", "completada", "implementada", "archivada"]
+        eff_status = compute_effective_status(p.get("status"), p.get("target_date"))
+        is_archived = eff_status.lower() in ["finalizado", "completada", "implementada", "archivada"]
         repo_action = "🗃️ Plan 2026" if is_archived else "Archivar"
 
         vals = [
@@ -495,7 +522,7 @@ def export_excel():
             p.get("proposal_text") or p.get("title", ""),
             p.get("finding_code", ""),
             p.get("responsible_area", "Operaciones"),
-            p.get("status", "En proceso"),
+            eff_status,
             p.get("action_owner", "Auditoría"),
             f"{p.get('action_plans_count', 0)} plan(es)",
             p.get("target_date", ""),

@@ -42,12 +42,52 @@ function showToast(message, type = "info") {
     setTimeout(() => { toast.style.display = "none"; }, 3500);
 }
 
+function isDateOverdue(dateStr) {
+    if (!dateStr) return false;
+    let d = null;
+    const str = dateStr.toString().trim();
+    if (!str) return false;
+
+    // ISO format YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
+        const parts = str.slice(0, 10).split("-");
+        d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    } 
+    // Latam format DD/MM/YYYY
+    else if (/^\d{1,2}\/\d{1,2}\/\d{4}/.test(str)) {
+        const parts = str.slice(0, 10).split("/");
+        d = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+    }
+
+    if (!d || isNaN(d.getTime())) return false;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return d < today;
+}
+
 function getRowEffectiveStatus(item, prop) {
     let raw = (prop && prop.status) ? prop.status : (item && item.status ? item.status : "En proceso");
-    if (!raw) return "En proceso";
+    if (!raw) raw = "En proceso";
     const clean = raw.toString().trim().toLowerCase();
-    if (clean === "en suspensión" || clean === "en suspension") return "En suspensión";
-    if (["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"].includes(clean)) return "Finalizado";
+
+    // 1. Si estado = Finalizado -> estado efectivo = Finalizado
+    if (["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"].includes(clean)) {
+        return "Finalizado";
+    }
+
+    // 2. Si estado = En suspensión -> estado efectivo = En suspensión
+    if (clean === "en suspensión" || clean === "en suspension" || clean === "stand-by") {
+        return "En suspensión";
+    }
+
+    // 3, 4, 5. Si estado = En proceso (o similar) y hay fecha compromiso
+    const targetDateStr = (prop && prop.target_date) || (item && item.target_date) || "";
+    if (targetDateStr && isDateOverdue(targetDateStr)) {
+        return "Vencido";
+    }
+
     return "En proceso";
 }
 
@@ -56,9 +96,19 @@ function isStatusEqual(s1, s2) {
     const clean1 = s1.toString().trim().toLowerCase();
     const clean2 = s2.toString().trim().toLowerCase();
     if (clean1 === clean2) return true;
+
     const isFinished1 = ["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"].includes(clean1);
     const isFinished2 = ["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"].includes(clean2);
     if (isFinished1 && isFinished2) return true;
+
+    const isSuspended1 = ["en suspensión", "en suspension", "stand-by"].includes(clean1);
+    const isSuspended2 = ["en suspensión", "en suspension", "stand-by"].includes(clean2);
+    if (isSuspended1 && isSuspended2) return true;
+
+    const isOverdue1 = ["vencido", "vencida", "overdue"].includes(clean1);
+    const isOverdue2 = ["vencido", "vencida", "overdue"].includes(clean2);
+    if (isOverdue1 && isOverdue2) return true;
+
     return false;
 }
 
@@ -579,38 +629,41 @@ async function inlineUpdateStatus(el) {
     const proposalId = el.dataset.proposalId;
     const value = el.value;
 
+    // Normalizar: Vencido NUNCA se guarda en DB; se mapea a "En proceso"
+    const dbValue = (value === "Vencido") ? "En proceso" : value;
+
     // Sincronizar la memoria local al instante
     const finding = currentFindings.find(f => f.id === findingId);
     if (finding) {
-        finding.status = value;
+        finding.status = dbValue;
         if (finding.proposals) {
             finding.proposals.forEach(p => {
-                if (!proposalId || p.id === proposalId) p.status = value;
+                if (!proposalId || p.id === proposalId) p.status = dbValue;
             });
         }
     }
 
     if (proposalId) {
         const prop = currentProposals.find(p => p.id === proposalId);
-        if (prop) prop.status = value;
+        if (prop) prop.status = dbValue;
     }
 
     try {
-        // Update finding status
         await fetch(`/findings/${findingId}/update`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: value })
+            body: JSON.stringify({ status: dbValue })
         });
-        // Also update linked proposal status
         if (proposalId) {
             await fetch(`/proposals/${proposalId}/update`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ status: value })
+                body: JSON.stringify({ status: dbValue })
             });
         }
         showToast(`Estado actualizado a "${value}"`, "success");
+        renderAuditTrackTable(currentFindings);
+        renderProposalsTab();
     } catch (e) {
         showToast("Error al actualizar estado", "error");
     }
@@ -645,6 +698,21 @@ async function inlineUpdateDate(el) {
     const proposalId = el.dataset.proposalId;
     const value = el.value;
 
+    const finding = currentFindings.find(f => f.id === findingId);
+    if (finding) {
+        finding.target_date = value;
+        if (finding.proposals) {
+            finding.proposals.forEach(p => {
+                if (!proposalId || p.id === proposalId) p.target_date = value;
+            });
+        }
+    }
+
+    if (proposalId) {
+        const prop = currentProposals.find(p => p.id === proposalId);
+        if (prop) prop.target_date = value;
+    }
+
     try {
         if (proposalId) {
             await fetch(`/proposals/${proposalId}/update`, {
@@ -654,6 +722,8 @@ async function inlineUpdateDate(el) {
             });
         }
         showToast("Fecha actualizada", "success");
+        renderAuditTrackTable(currentFindings);
+        renderProposalsTab();
     } catch (e) {
         showToast("Error al actualizar fecha", "error");
     }
@@ -824,13 +894,14 @@ function renderProposalsTab() {
 
     // Filter proposals based on active filters & mode
     let filtered = currentProposals.filter(p => {
+        const effStatus = getRowEffectiveStatus(p, p);
         if (currentProposalViewMode === "repo") {
-            const isFinished = ["finalizado", "completada", "implementada", "archivada"].includes((p.status || "").toLowerCase());
+            const isFinished = ["finalizado", "completada", "implementada", "archivada"].includes(effStatus.toLowerCase());
             if (!isFinished) return false;
         }
         if (proposalFilters.report_id && p.report_id !== proposalFilters.report_id) return false;
         if (proposalFilters.area && p.responsible_area !== proposalFilters.area) return false;
-        if (proposalFilters.status && (p.status || "").toLowerCase() !== proposalFilters.status.toLowerCase()) return false;
+        if (proposalFilters.status && !isStatusEqual(effStatus, proposalFilters.status)) return false;
         return true;
     });
 
@@ -843,8 +914,9 @@ function renderProposalsTab() {
     }
 
     tbody.innerHTML = filtered.map(p => {
-        const isArchived = ["finalizado", "completada", "implementada", "archivada"].includes((p.status || "").toLowerCase());
-        const statusClass = (p.status || "en-proceso").toLowerCase().replace(/\s+/g, '-');
+        const effStatus = getRowEffectiveStatus(p, p);
+        const isArchived = ["finalizado", "completada", "implementada", "archivada"].includes(effStatus.toLowerCase());
+        const statusClass = effStatus.toLowerCase().replace(/\s+/g, '-').replace('ó', 'o').replace('sión', 'sion');
 
         const archiveActionCell = isArchived
             ? `<span class="repo-badge">🗃️ Plan 2026</span>`
@@ -858,7 +930,7 @@ function renderProposalsTab() {
                     <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${p.finding_id}'); return false;">${escapeHtml(p.finding_code)}</a>
                 </td>
                 <td><strong>${escapeHtml(p.responsible_area || 'Operaciones')}</strong></td>
-                <td><span class="pill pill-${statusClass}">${escapeHtml(p.status || 'En proceso')}</span></td>
+                <td><span class="pill pill-${statusClass}">${escapeHtml(effStatus)}</span></td>
                 <td>${escapeHtml(p.action_owner || 'Auditoría')}</td>
                 <td>
                     <button class="btn btn-outlined" style="padding:2px 8px; font-size:11px;" onclick="switchTab('planes')">

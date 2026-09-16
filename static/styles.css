@@ -1127,6 +1127,12 @@ body {
     border: 1px solid #BBF7D0 !important;
 }
 
+.pill-vencido, .pill-vencida {
+    background-color: #FEE2E2 !important;
+    color: #991B1B !important;
+    border: 1px solid #FCA5A5 !important;
+}
+
 /* Subtabs for Proposals Repository */
 .active-subtab {
     background-color: #0055D4 !important;
