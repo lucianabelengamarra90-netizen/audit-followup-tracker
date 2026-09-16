@@ -876,6 +876,57 @@ async function archiveProposal(proposalId) {
     }
 }
 
+async function inlineUpdateProposalStatus(el) {
+    const proposalId = el.dataset.proposalId;
+    const findingId = el.dataset.findingId;
+    const value = el.value;
+
+    const dbValue = (value === "Vencido") ? "En proceso" : value;
+
+    const prop = currentProposals.find(p => p.id === proposalId);
+    if (prop) prop.status = dbValue;
+
+    const finding = currentFindings.find(f => f.id === findingId);
+    if (finding) {
+        finding.status = dbValue;
+        if (finding.proposals) {
+            finding.proposals.forEach(p => {
+                if (p.id === proposalId) p.status = dbValue;
+            });
+        }
+    }
+
+    currentActionPlans.forEach(pa => {
+        if (pa.proposal_id === proposalId) {
+            if (dbValue === "Finalizado") {
+                pa.status = "Finalizado";
+                pa.progress_pct = 100;
+            } else if (dbValue === "En proceso" && pa.progress_pct >= 100) {
+                pa.status = "En proceso";
+                pa.progress_pct = 50;
+            }
+        }
+    });
+
+    try {
+        const resp = await fetch(`/proposals/${proposalId}/update`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: dbValue })
+        });
+        if (resp.ok) {
+            showToast(`Estado de propuesta actualizado a "${value}"`, "success");
+            renderAuditTrackTable(currentFindings);
+            renderProposalsTab();
+            renderActionPlansTab();
+        } else {
+            showToast("Error al actualizar propuesta", "error");
+        }
+    } catch (e) {
+        showToast("Error de conexión", "error");
+    }
+}
+
 function renderProposalsTab() {
     const tbody = el("proposalsTableBody");
     if (!tbody) return;
@@ -913,10 +964,16 @@ function renderProposalsTab() {
         return;
     }
 
+    const statusOptions = ["En proceso", "Vencido", "En suspensión", "Finalizado"];
+
     tbody.innerHTML = filtered.map(p => {
         const effStatus = getRowEffectiveStatus(p, p);
         const isArchived = ["finalizado", "completada", "implementada", "archivada"].includes(effStatus.toLowerCase());
         const statusClass = effStatus.toLowerCase().replace(/\s+/g, '-').replace('ó', 'o').replace('sión', 'sion');
+
+        const statusSelectHtml = `<select class="inline-select inline-select-status pill-${statusClass}" data-proposal-id="${p.id}" data-finding-id="${p.finding_id}" onchange="inlineUpdateProposalStatus(this)">
+            ${statusOptions.map(s => `<option value="${s}" ${isStatusEqual(s, effStatus) ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>`;
 
         const archiveActionCell = isArchived
             ? `<span class="repo-badge">🗃️ Plan 2026</span>`
@@ -930,7 +987,7 @@ function renderProposalsTab() {
                     <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${p.finding_id}'); return false;">${escapeHtml(p.finding_code)}</a>
                 </td>
                 <td><strong>${escapeHtml(p.responsible_area || 'Operaciones')}</strong></td>
-                <td><span class="pill pill-${statusClass}">${escapeHtml(effStatus)}</span></td>
+                <td>${statusSelectHtml}</td>
                 <td>${escapeHtml(p.action_owner || 'Auditoría')}</td>
                 <td>
                     <button class="btn btn-outlined" style="padding:2px 8px; font-size:11px;" onclick="switchTab('planes')">

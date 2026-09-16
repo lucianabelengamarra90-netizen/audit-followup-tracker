@@ -785,10 +785,42 @@ def update_action_plan(plan_id, status=None, progress_pct=None, notes=None, targ
     params.append(plan_id)
 
     cursor.execute(sql, params)
-    updated = cursor.rowcount > 0
-
     if updated:
         add_history_log("action_plan", plan_id, user_name, f"Actualización de plan de acción: Estado={status}, Avance={progress_pct}%", cursor=cursor)
+
+        # Sincronización en cascada con la propuesta y el hallazgo padre
+        if status is not None:
+            st_clean = str(status).strip().lower()
+            if st_clean in ("finalizado", "finalizada", "completado", "completada", "archivada"):
+                cursor.execute("""
+                    UPDATE proposals 
+                    SET status = 'Finalizado' 
+                    WHERE id IN (SELECT proposal_id FROM action_plans WHERE id = ? OR code = ?)
+                """, (plan_id, plan_id))
+                cursor.execute("""
+                    UPDATE findings 
+                    SET status = 'Finalizado' 
+                    WHERE id IN (
+                        SELECT finding_id FROM proposals WHERE id IN (
+                            SELECT proposal_id FROM action_plans WHERE id = ? OR code = ?
+                        )
+                    )
+                """, (plan_id, plan_id))
+            elif st_clean in ("en proceso", "en-proceso"):
+                cursor.execute("""
+                    UPDATE proposals 
+                    SET status = 'En proceso' 
+                    WHERE id IN (SELECT proposal_id FROM action_plans WHERE id = ? OR code = ?)
+                """, (plan_id, plan_id))
+                cursor.execute("""
+                    UPDATE findings 
+                    SET status = 'En proceso' 
+                    WHERE id IN (
+                        SELECT finding_id FROM proposals WHERE id IN (
+                            SELECT proposal_id FROM action_plans WHERE id = ? OR code = ?
+                        )
+                    )
+                """, (plan_id, plan_id))
 
     conn.commit()
     conn.close()
