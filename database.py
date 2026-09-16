@@ -785,6 +785,7 @@ def update_action_plan(plan_id, status=None, progress_pct=None, notes=None, targ
     params.append(plan_id)
 
     cursor.execute(sql, params)
+    updated = cursor.rowcount > 0
     if updated:
         add_history_log("action_plan", plan_id, user_name, f"Actualización de plan de acción: Estado={status}, Avance={progress_pct}%", cursor=cursor)
 

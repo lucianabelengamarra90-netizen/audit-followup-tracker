@@ -271,6 +271,67 @@ Informe de Auditoría Tabular 2026
                 os.remove(tmp_path)
 
 
+    def test_action_plan_sync_cascading(self):
+        report_data = {
+            "title": "Auditoría de Test Cascada",
+            "process": "Operaciones",
+            "area": "Finanzas",
+            "period": "2026",
+            "auditor": "Auditoría Interna"
+        }
+        findings_data = [
+            {
+                "code": "H-TEST-01",
+                "title": "Prueba de avance 100",
+                "situation": "Test situation",
+                "risk": "Alto",
+                "severity": "Alto",
+                "responsible_area": "Finanzas",
+                "action_owner": "Juan Pérez",
+                "status": "En proceso",
+                "proposals": [
+                    {
+                        "code": "PM-TEST-01",
+                        "title": "Propuesta de prueba",
+                        "proposal_text": "Propuesta de prueba",
+                        "responsible_area": "Finanzas",
+                        "action_owner": "Juan Pérez",
+                        "target_date": "2026-10-31",
+                        "status": "En proceso",
+                        "action_plans": [
+                            {
+                                "code": "PA-TEST-01",
+                                "title": "Plan de prueba",
+                                "action_text": "Plan de prueba",
+                                "action_owner": "Juan Pérez",
+                                "target_date": "2026-10-31",
+                                "status": "En proceso",
+                                "progress_pct": 0
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+        save_relational_report_structure(report_data, findings_data, "test_cascada.xlsx")
+
+        res_plans = self.app.get("/action-plans")
+        self.assertEqual(res_plans.status_code, 200)
+        plans = json.loads(res_plans.data).get("action_plans", [])
+        self.assertGreater(len(plans), 0)
+        plan_id = plans[0]["id"]
+
+        # Actualizar el plan al 100%
+        res_upd = self.app.post(f"/action-plans/{plan_id}", data=json.dumps({"progress_pct": 100}), content_type='application/json')
+        self.assertEqual(res_upd.status_code, 200)
+
+        # Verificar que la propuesta y el hallazgo se hayan actualizado a Finalizado
+        res_f = self.app.get("/findings")
+        findings = json.loads(res_f.data).get("findings", [])
+        self.assertEqual(findings[0]["status"], "Finalizado")
+        self.assertEqual(findings[0]["proposals"][0]["status"], "Finalizado")
+
+
 if __name__ == "__main__":
     unittest.main()
 
