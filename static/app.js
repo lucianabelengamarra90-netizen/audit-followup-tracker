@@ -62,8 +62,89 @@ function isStatusEqual(s1, s2) {
     return false;
 }
 
+function toggleExcelMenu(event) {
+    if (event) event.stopPropagation();
+    const dropdown = el("excelMenuDropdown");
+    if (!dropdown) return;
+    const isVisible = dropdown.style.display === "block";
+    dropdown.style.display = isVisible ? "none" : "block";
+}
+
+document.addEventListener("click", function(event) {
+    const dropdown = el("excelMenuDropdown");
+    if (dropdown && dropdown.style.display === "block") {
+        if (!dropdown.contains(event.target) && !event.target.closest('button[onclick*="toggleExcelMenu"]')) {
+            dropdown.style.display = "none";
+        }
+    }
+});
+
+async function downloadExcelTemplate() {
+    try {
+        const dropdown = el("excelMenuDropdown");
+        if (dropdown) dropdown.style.display = "none";
+        
+        showToast("Descargando plantilla modelo...", "info");
+        const response = await fetch("/download-template");
+        if (!response.ok) {
+            showToast("Error al descargar plantilla modelo", "error");
+            return;
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.style.display = "none";
+        a.href = url;
+        a.download = "Plantilla_Importacion_AuditTrack.xlsx";
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        showToast("Plantilla modelo descargada", "success");
+    } catch (e) {
+        console.error("Error al descargar plantilla:", e);
+        showToast("Error de conexión al descargar plantilla", "error");
+    }
+}
+
+async function importExcelFile(file) {
+    if (!file) return;
+    const dropdown = el("excelMenuDropdown");
+    if (dropdown) dropdown.style.display = "none";
+
+    try {
+        showToast("Procesando e importando planilla Excel...", "info");
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const response = await fetch("/import-excel", {
+            method: "POST",
+            body: formData
+        });
+
+        const data = await response.json();
+        const input = el("importExcelInput");
+        if (input) input.value = "";
+
+        if (!response.ok || data.error) {
+            showToast(data.error || "Error al importar el archivo Excel", "error");
+            return;
+        }
+
+        showToast(data.message || "Excel importado exitosamente", "success");
+        await loadAllData();
+    } catch (e) {
+        console.error("Error al importar Excel:", e);
+        showToast("Error de conexión al importar Excel", "error");
+        const input = el("importExcelInput");
+        if (input) input.value = "";
+    }
+}
+
 async function exportExcelReport() {
     try {
+        const dropdown = el("excelMenuDropdown");
+        if (dropdown) dropdown.style.display = "none";
+
         showToast("Generando reporte Excel...", "info");
         const response = await fetch("/export-excel", {
             method: "POST"
