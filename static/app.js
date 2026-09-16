@@ -1772,6 +1772,6 @@ function updateSidebarMetrics() {
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", () => {
-    switchTab("informes");
+    switchTab("hallazgos");
     loadAllData();
 });
