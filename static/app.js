@@ -629,24 +629,7 @@ async function inlineUpdateStatus(el) {
     const proposalId = el.dataset.proposalId;
     const value = el.value;
 
-    // Normalizar: Vencido NUNCA se guarda en DB; se mapea a "En proceso"
     const dbValue = (value === "Vencido") ? "En proceso" : value;
-
-    // Sincronizar la memoria local al instante
-    const finding = currentFindings.find(f => f.id === findingId);
-    if (finding) {
-        finding.status = dbValue;
-        if (finding.proposals) {
-            finding.proposals.forEach(p => {
-                if (!proposalId || p.id === proposalId) p.status = dbValue;
-            });
-        }
-    }
-
-    if (proposalId) {
-        const prop = currentProposals.find(p => p.id === proposalId);
-        if (prop) prop.status = dbValue;
-    }
 
     try {
         await fetch(`/findings/${findingId}/update`, {
@@ -661,11 +644,11 @@ async function inlineUpdateStatus(el) {
                 body: JSON.stringify({ status: dbValue })
             });
         }
-        showToast(`Estado actualizado a "${value}"`, "success");
-        renderAuditTrackTable(currentFindings);
-        renderProposalsTab();
+        showToast(`Estado actualizado a "${dbValue}"`, "success");
+        await loadAllData();
     } catch (e) {
-        showToast("Error al actualizar estado", "error");
+        showToast("Error de conexión", "error");
+        await loadAllData();
     }
 }
 
@@ -878,35 +861,9 @@ async function archiveProposal(proposalId) {
 
 async function inlineUpdateProposalStatus(el) {
     const proposalId = el.dataset.proposalId;
-    const findingId = el.dataset.findingId;
     const value = el.value;
 
     const dbValue = (value === "Vencido") ? "En proceso" : value;
-
-    const prop = currentProposals.find(p => p.id === proposalId);
-    if (prop) prop.status = dbValue;
-
-    const finding = currentFindings.find(f => f.id === findingId);
-    if (finding) {
-        finding.status = dbValue;
-        if (finding.proposals) {
-            finding.proposals.forEach(p => {
-                if (p.id === proposalId) p.status = dbValue;
-            });
-        }
-    }
-
-    currentActionPlans.forEach(pa => {
-        if (pa.proposal_id === proposalId) {
-            if (dbValue === "Finalizado") {
-                pa.status = "Finalizado";
-                pa.progress_pct = 100;
-            } else if (dbValue === "En proceso" && pa.progress_pct >= 100) {
-                pa.status = "En proceso";
-                pa.progress_pct = 50;
-            }
-        }
-    });
 
     try {
         const resp = await fetch(`/proposals/${proposalId}/update`, {
@@ -915,15 +872,15 @@ async function inlineUpdateProposalStatus(el) {
             body: JSON.stringify({ status: dbValue })
         });
         if (resp.ok) {
-            showToast(`Estado de propuesta actualizado a "${value}"`, "success");
-            renderAuditTrackTable(currentFindings);
-            renderProposalsTab();
-            renderActionPlansTab();
+            showToast(`Estado de propuesta actualizado a "${dbValue}"`, "success");
+            await loadAllData();
         } else {
             showToast("Error al actualizar propuesta", "error");
+            await loadAllData();
         }
     } catch (e) {
         showToast("Error de conexión", "error");
+        await loadAllData();
     }
 }
 
@@ -967,13 +924,18 @@ function renderProposalsTab() {
     const statusOptions = ["En proceso", "En suspensión", "Finalizado"];
 
     tbody.innerHTML = filtered.map(p => {
-        const effStatus = getRowEffectiveStatus(p, p);
+        const effStatus = p.effective_status || getRowEffectiveStatus(p, p);
+        const rawStatus = p.status || "En proceso";
         const isArchived = ["finalizado", "completada", "implementada", "archivada"].includes(effStatus.toLowerCase());
-        const statusClass = effStatus.toLowerCase().replace(/\s+/g, '-').replace('ó', 'o').replace('sión', 'sion');
+        const statusClass = rawStatus.toLowerCase().replace(/\s+/g, '-').replace('ó', 'o').replace('sión', 'sion');
 
         const statusSelectHtml = `<select class="inline-select inline-select-status pill-${statusClass}" data-proposal-id="${p.id}" data-finding-id="${p.finding_id}" onchange="inlineUpdateProposalStatus(this)">
-            ${statusOptions.map(s => `<option value="${s}" ${isStatusEqual(s, effStatus) ? 'selected' : ''}>${s}</option>`).join('')}
+            ${statusOptions.map(s => `<option value="${s}" ${isStatusEqual(s, rawStatus) ? 'selected' : ''}>${s}</option>`).join('')}
         </select>`;
+
+        const vencidoBadgeHtml = (effStatus.toLowerCase() === "vencido")
+            ? `<span class="pill-vencido" style="display:inline-block; padding:2px 8px; font-size:11px; font-weight:700; border-radius:12px; margin-left:4px;">🚨 Vencido</span>`
+            : ``;
 
         const archiveActionCell = isArchived
             ? `<span class="repo-badge">🗃️ Plan 2026</span>`
@@ -987,7 +949,7 @@ function renderProposalsTab() {
                     <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${p.finding_id}'); return false;">${escapeHtml(p.finding_code)}</a>
                 </td>
                 <td><strong>${escapeHtml(p.responsible_area || 'Operaciones')}</strong></td>
-                <td>${statusSelectHtml}</td>
+                <td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">${statusSelectHtml}${vencidoBadgeHtml}</div></td>
                 <td>${escapeHtml(p.action_owner || 'Auditoría')}</td>
                 <td>
                     <button class="btn btn-outlined" style="padding:2px 8px; font-size:11px;" onclick="switchTab('planes')">
@@ -1018,12 +980,17 @@ function renderActionPlansTab() {
     const statusOptions = ["En proceso", "En suspensión", "Finalizado"];
 
     tbody.innerHTML = currentActionPlans.map(pa => {
-        const effStatus = getRowEffectiveStatus(pa, pa);
-        const statusClass = effStatus.toLowerCase().replace(/\s+/g, '-').replace('ó', 'o').replace('sión', 'sion');
+        const effStatus = pa.effective_status || getRowEffectiveStatus(pa, pa);
+        const rawStatus = pa.status || "En proceso";
+        const statusClass = rawStatus.toLowerCase().replace(/\s+/g, '-').replace('ó', 'o').replace('sión', 'sion');
 
         const statusSelectHtml = `<select class="inline-select inline-select-status pill-${statusClass}" data-plan-id="${pa.id}" onchange="inlineUpdateActionPlanStatus(this)">
-            ${statusOptions.map(s => `<option value="${s}" ${isStatusEqual(s, effStatus) ? 'selected' : ''}>${s}</option>`).join('')}
+            ${statusOptions.map(s => `<option value="${s}" ${isStatusEqual(s, rawStatus) ? 'selected' : ''}>${s}</option>`).join('')}
         </select>`;
+
+        const vencidoBadgeHtml = (effStatus.toLowerCase() === "vencido")
+            ? `<span class="pill-vencido" style="display:inline-block; padding:2px 8px; font-size:11px; font-weight:700; border-radius:12px; margin-left:4px;">🚨 Vencido</span>`
+            : ``;
 
         return `
             <tr>
@@ -1044,7 +1011,7 @@ function renderActionPlansTab() {
                         <span>${pa.progress_pct || 0}%</span>
                     </div>
                 </td>
-                <td>${statusSelectHtml}</td>
+                <td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">${statusSelectHtml}${vencidoBadgeHtml}</div></td>
                 <td>${pa.evidence_file ? `📎 <small>${escapeHtml(pa.evidence_file)}</small>` : `<span style="color:#94A3B8;">Sin evidencia</span>`}</td>
                 <td>
                     <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openUpdatePlanModal('${pa.id}')">⚙️ Actualizar</button>
@@ -1202,27 +1169,22 @@ async function inlineUpdateActionPlanStatus(el) {
     const plan = currentActionPlans.find(p => p.id === planId);
     if (!plan) return;
 
-    let newPct = plan.progress_pct || 0;
-    if (value === "Finalizado") {
-        newPct = 100;
-    } else if (value === "En proceso" && newPct >= 100) {
-        newPct = 50;
-    }
-
     try {
         const res = await fetch(`/action-plans/${plan.id}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: value, progress_pct: newPct })
+            body: JSON.stringify({ status: value, confirm_finalize: (value === "Finalizado") })
         });
         if (res.ok) {
             showToast(`Estado de plan ${plan.code} actualizado a "${value}"`, "success");
             await loadAllData();
         } else {
             showToast("Error al actualizar estado del plan", "error");
+            await loadAllData();
         }
     } catch (e) {
         showToast("Error de conexión", "error");
+        await loadAllData();
     }
 }
 
