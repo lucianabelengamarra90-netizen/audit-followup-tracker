@@ -327,18 +327,19 @@ def init_db():
                     if tbl == "code_sequences":
                         stmt = "INSERT OR REPLACE INTO code_sequences (entity_type, year, last_value) VALUES (?, ?, ?)"
                     else:
-                        stmt = f"INSERT INTO {tbl} ({col_names}) VALUES ({placeholders})"
+                        if is_prod_db:
+                            stmt = f"INSERT INTO {tbl} ({col_names}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
+                        else:
+                            stmt = f"INSERT OR IGNORE INTO {tbl} ({col_names}) VALUES ({placeholders})"
 
                     for r in rows:
                         val_tuple = tuple(r[col] for col in cols)
-                        try:
-                            cursor.execute(stmt, val_tuple)
-                        except Exception:
-                            pass
+                        cursor.execute(stmt, val_tuple)
                 conn.commit()
                 print("[InitDB] Datos reales de auditoría (135 informes, 135 hallazgos, 191 propuestas, 79 planes) importados exitosamente en PostgreSQL Supabase.")
     except Exception as seed_err:
         print(f"[InitDB] Aviso sobre verificación de semilla: {seed_err}")
+
 
 
     sync_code_sequences(cursor)
