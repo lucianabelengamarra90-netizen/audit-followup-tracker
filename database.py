@@ -2,11 +2,13 @@ import sqlite3
 import os
 import uuid
 import re
+import sys
 from datetime import datetime, date, timedelta
 from domain.statuses import normalize_status, is_final_status, compute_effective_status
 from domain.dates import parse_date_to_iso, format_display_date, is_date_past
 
 DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit_tracker.db"))
+
 
 
 class PGRow(dict):
@@ -300,15 +302,15 @@ def init_db():
         )
     """)
 
-    # 6. Auto-poblado inteligente de datos reales solo en producción (p. ej. primera conexión a Supabase)
+    # 6. Auto-poblado inteligente de datos reales si la base está recién creada (p. ej. primera conexión a Supabase)
     db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
     is_prod_db = bool(db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")))
-    is_testing = bool(os.environ.get("TESTING") or os.environ.get("PYTEST_CURRENT_TEST"))
+    is_testing = bool(os.environ.get("TESTING") or "unittest" in sys.modules or "pytest" in sys.modules)
 
     try:
         cursor.execute("SELECT COUNT(*) FROM reports")
         count_rep = cursor.fetchone()[0]
-        if count_rep == 0 and is_prod_db and not is_testing:
+        if count_rep == 0 and not is_testing:
             seed_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initial_prod_seed.json")
             if os.path.exists(seed_path):
                 import json
@@ -336,9 +338,10 @@ def init_db():
                         val_tuple = tuple(r[col] for col in cols)
                         cursor.execute(stmt, val_tuple)
                 conn.commit()
-                print("[InitDB] Datos reales de auditoría (135 informes, 135 hallazgos, 191 propuestas, 79 planes) importados exitosamente en PostgreSQL Supabase.")
+                print("[InitDB] Datos reales de auditoría (135 informes, 135 hallazgos, 191 propuestas, 79 planes) importados exitosamente.")
     except Exception as seed_err:
         print(f"[InitDB] Aviso sobre verificación de semilla: {seed_err}")
+
 
 
 
