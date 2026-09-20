@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import uuid
+import re
 from datetime import datetime, date, timedelta
 from domain.statuses import normalize_status, is_final_status, compute_effective_status
 from domain.dates import parse_date_to_iso, format_display_date, is_date_past
@@ -8,7 +9,110 @@ from domain.dates import parse_date_to_iso, format_display_date, is_date_past
 DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit_tracker.db"))
 
 
+class PGRow(dict):
+    """
+    Simula la interfaz de sqlite3.Row para PostgreSQL / psycopg2.
+    Permite acceso por posición `row[0]`, por clave `row['code']` y conversión a dict `dict(row)`.
+    """
+    def __init__(self, cursor_description, row_tuple):
+        super().__init__()
+        self._keys = [col[0] for col in cursor_description]
+        self._values = list(row_tuple)
+        for k, v in zip(self._keys, self._values):
+            self[k] = v
+
+    def __getitem__(self, item):
+        if isinstance(item, int):
+            return self._values[item]
+        return super().__getitem__(item)
+
+
+class PGCursorWrapper:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    @property
+    def connection(self):
+        return PGConnWrapper(self._cursor.connection)
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    def execute(self, sql, params=None):
+        sql_clean = sql.strip()
+
+        # Adaptar PRAGMA table_info(table_name) de SQLite a PostgreSQL
+        if sql_clean.upper().startswith("PRAGMA TABLE_INFO"):
+            m = re.search(r"PRAGMA\s+table_info\(([^)]+)\)", sql_clean, re.IGNORECASE)
+            if m:
+                tbl_name = m.group(1).strip().strip("'\"")
+                pg_sql = "SELECT column_name as name FROM information_schema.columns WHERE table_name = %s"
+                self._cursor.execute(pg_sql, (tbl_name,))
+                return self
+
+        # Adaptar UPSERT de code_sequences
+        if "INSERT OR REPLACE INTO code_sequences" in sql_clean:
+            sql_clean = sql_clean.replace(
+                "INSERT OR REPLACE INTO code_sequences (entity_type, year, last_value) VALUES (?, ?, ?)",
+                "INSERT INTO code_sequences (entity_type, year, last_value) VALUES (%s, %s, %s) ON CONFLICT (entity_type, year) DO UPDATE SET last_value = EXCLUDED.last_value"
+            )
+
+        # Reemplazar '?' por '%s' para PostgreSQL
+        if "?" in sql_clean:
+            sql_clean = sql_clean.replace("?", "%s")
+
+        if params is not None:
+            self._cursor.execute(sql_clean, params)
+        else:
+            self._cursor.execute(sql_clean)
+        return self
+
+    def fetchone(self):
+        row_tuple = self._cursor.fetchone()
+        if row_tuple is None:
+            return None
+        return PGRow(self._cursor.description, row_tuple)
+
+    def fetchall(self):
+        rows = self._cursor.fetchall()
+        if not rows:
+            return []
+        desc = self._cursor.description
+        return [PGRow(desc, r) for r in rows]
+
+
+class PGConnWrapper:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return PGCursorWrapper(self._conn.cursor())
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+
 def get_db():
+    db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+    if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")):
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
+        import psycopg2
+        conn = psycopg2.connect(db_url)
+        return PGConnWrapper(conn)
+
     db_dir = os.path.dirname(os.path.abspath(DB_PATH))
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir, exist_ok=True)
@@ -17,6 +121,7 @@ def get_db():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
+
 
 
 def generate_next_code(entity_type: str, year: int = None, cursor=None) -> str:
