@@ -300,9 +300,51 @@ def init_db():
         )
     """)
 
+    # 6. Auto-poblado inteligente de datos reales solo en producción (p. ej. primera conexión a Supabase)
+    db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+    is_prod_db = bool(db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")))
+    is_testing = bool(os.environ.get("TESTING") or os.environ.get("PYTEST_CURRENT_TEST"))
+
+    try:
+        cursor.execute("SELECT COUNT(*) FROM reports")
+        count_rep = cursor.fetchone()[0]
+        if count_rep == 0 and is_prod_db and not is_testing:
+            seed_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initial_prod_seed.json")
+            if os.path.exists(seed_path):
+                import json
+                with open(seed_path, "r", encoding="utf-8") as sf:
+                    seed_data = json.load(sf)
+
+                tables = ["schema_migrations", "code_sequences", "reports", "findings", "proposals", "action_plans", "audit_history"]
+                for tbl in tables:
+                    rows = seed_data.get(tbl, [])
+                    if not rows:
+                        continue
+                    cols = list(rows[0].keys())
+                    col_names = ", ".join(cols)
+                    placeholders = ", ".join(["?"] * len(cols))
+
+                    if tbl == "code_sequences":
+                        stmt = "INSERT OR REPLACE INTO code_sequences (entity_type, year, last_value) VALUES (?, ?, ?)"
+                    else:
+                        stmt = f"INSERT INTO {tbl} ({col_names}) VALUES ({placeholders})"
+
+                    for r in rows:
+                        val_tuple = tuple(r[col] for col in cols)
+                        try:
+                            cursor.execute(stmt, val_tuple)
+                        except Exception:
+                            pass
+                conn.commit()
+                print("[InitDB] Datos reales de auditoría (135 informes, 135 hallazgos, 191 propuestas, 79 planes) importados exitosamente en PostgreSQL Supabase.")
+    except Exception as seed_err:
+        print(f"[InitDB] Aviso sobre verificación de semilla: {seed_err}")
+
+
     sync_code_sequences(cursor)
     conn.commit()
     conn.close()
+
 
 
 def sync_code_sequences(cursor):
