@@ -516,6 +516,68 @@
     </div>
 </div>
 
+<!-- MODAL: ACTUALIZAR PLAN DE ACCIÓN (ESTRUCTURADO SIN PROMPT) -->
+<div id="updatePlanModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3>⚙️ Actualizar Plan de Acción</h3>
+            <button type="button" class="modal-close" onclick="closeUpdatePlanModal()">×</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="editPlanId">
+            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:6px; padding:10px; margin-bottom:12px;">
+                <strong id="editPlanCode" style="color:#0055D4; font-size:14px;">PA-2026-001</strong>
+                <p id="editPlanTitle" style="font-size:12px; color:#475569; margin:4px 0 0 0;"></p>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>% Porcentaje de Avance (0 - 100)</label>
+                    <input type="number" id="editPlanProgress" min="0" max="100" value="0" oninput="onEditPlanProgressInput(this.value)">
+                </div>
+                <div class="form-group">
+                    <label>Estado de Implementación</label>
+                    <select id="editPlanStatus" onchange="onEditPlanStatusChange(this.value)">
+                        <option value="En proceso">En proceso</option>
+                        <option value="En suspensión">En suspensión</option>
+                        <option value="Finalizado">Finalizado</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Responsable</label>
+                    <input type="text" id="editPlanOwner" placeholder="Responsable de la acción">
+                </div>
+                <div class="form-group">
+                    <label>Fecha Compromiso</label>
+                    <input type="date" id="editPlanTargetDate">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Notas de Avance / Observaciones</label>
+                <textarea id="editPlanNotes" rows="2" placeholder="Describí los avances o novedades..."></textarea>
+            </div>
+
+            <div class="form-group">
+                <label>Nombre de Archivo de Evidencia (opcional)</label>
+                <input type="text" id="editPlanEvidence" placeholder="Ej. informe_avance_firmado.pdf">
+            </div>
+
+            <div id="finalizeConfirmAlert" style="display:none; background:#FEF2F2; border:1px solid #FCA5A5; color:#991B1B; padding:10px; border-radius:6px; font-size:12px; margin-bottom:12px;">
+                ⚠️ <strong>Sincronización al 100%:</strong> Al finalizar este plan, se actualizará automáticamente la sincronicidad del estado en la propuesta y hallazgo asociados.
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+                <button type="button" class="btn btn-outlined" onclick="closeUpdatePlanModal()">Cancelar</button>
+                <button type="button" class="btn btn-primary" onclick="submitUpdatePlanModal()">💾 Guardar Cambios</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- SLIDE-OVER DRAWER: DETALLE COMPLETO DEL HALLAZGO Y TRAZABILIDAD (EDITABLE CON LÁPIZ ✏️) -->
 <div id="drawerFindingDetail" class="drawer-overlay" style="display:none;" onclick="if(event.target===this) closeFindingDrawer()">
     <div class="drawer-panel">

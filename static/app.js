@@ -964,7 +964,7 @@ function renderProposalsTab() {
         return;
     }
 
-    const statusOptions = ["En proceso", "Vencido", "En suspensión", "Finalizado"];
+    const statusOptions = ["En proceso", "En suspensión", "Finalizado"];
 
     tbody.innerHTML = filtered.map(p => {
         const effStatus = getRowEffectiveStatus(p, p);
@@ -1015,32 +1015,43 @@ function renderActionPlansTab() {
         return;
     }
 
-    tbody.innerHTML = currentActionPlans.map(pa => `
-        <tr>
-            <td class="id-cell">${escapeHtml(pa.code)}</td>
-            <td><strong>${escapeHtml(pa.action_text || pa.title)}</strong></td>
-            <td><span style="color:#16A34A; font-weight:600;">💡 ${escapeHtml(pa.proposal_code)}</span></td>
-            <td>
-                <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${pa.finding_code}'); return false;">${escapeHtml(pa.finding_code)}</a>
-            </td>
-            <td>${escapeHtml(pa.report_title)}</td>
-            <td><strong>${escapeHtml(pa.action_owner)}</strong></td>
-            <td>${escapeHtml(pa.target_date || '30/09/2026')}</td>
-            <td>
-                <div style="display:flex; align-items:center; gap:6px;">
-                    <div style="background:#E2E8F0; border-radius:4px; height:8px; flex:1; overflow:hidden;">
-                        <div style="background:var(--primary-blue); width:${pa.progress_pct || 0}%; height:100%;"></div>
+    const statusOptions = ["En proceso", "En suspensión", "Finalizado"];
+
+    tbody.innerHTML = currentActionPlans.map(pa => {
+        const effStatus = getRowEffectiveStatus(pa, pa);
+        const statusClass = effStatus.toLowerCase().replace(/\s+/g, '-').replace('ó', 'o').replace('sión', 'sion');
+
+        const statusSelectHtml = `<select class="inline-select inline-select-status pill-${statusClass}" data-plan-id="${pa.id}" onchange="inlineUpdateActionPlanStatus(this)">
+            ${statusOptions.map(s => `<option value="${s}" ${isStatusEqual(s, effStatus) ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>`;
+
+        return `
+            <tr>
+                <td class="id-cell">${escapeHtml(pa.code)}</td>
+                <td><strong>${escapeHtml(pa.action_text || pa.title)}</strong></td>
+                <td><span style="color:#16A34A; font-weight:600;">💡 ${escapeHtml(pa.proposal_code)}</span></td>
+                <td>
+                    <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${pa.finding_code}'); return false;">${escapeHtml(pa.finding_code)}</a>
+                </td>
+                <td>${escapeHtml(pa.report_title)}</td>
+                <td><strong>${escapeHtml(pa.action_owner)}</strong></td>
+                <td>${escapeHtml(pa.target_date || '30/09/2026')}</td>
+                <td>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <div style="background:#E2E8F0; border-radius:4px; height:8px; flex:1; overflow:hidden;">
+                            <div style="background:var(--primary-blue); width:${pa.progress_pct || 0}%; height:100%;"></div>
+                        </div>
+                        <span>${pa.progress_pct || 0}%</span>
                     </div>
-                    <span>${pa.progress_pct || 0}%</span>
-                </div>
-            </td>
-            <td><span class="pill pill-${(pa.status||'en-proceso').toLowerCase()}">${escapeHtml(pa.status)}</span></td>
-            <td>${pa.evidence_file ? `📎 <small>${escapeHtml(pa.evidence_file)}</small>` : `<span style="color:#94A3B8;">Sin evidencia</span>`}</td>
-            <td>
-                <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openUpdatePlanModal('${pa.id}')">⚙️ Actualizar</button>
-            </td>
-        </tr>
-    `).join("");
+                </td>
+                <td>${statusSelectHtml}</td>
+                <td>${pa.evidence_file ? `📎 <small>${escapeHtml(pa.evidence_file)}</small>` : `<span style="color:#94A3B8;">Sin evidencia</span>`}</td>
+                <td>
+                    <button class="btn btn-outlined" style="padding: 3px 8px; font-size: 11px;" onclick="openUpdatePlanModal('${pa.id}')">⚙️ Actualizar</button>
+                </td>
+            </tr>
+        `;
+    }).join("");
 }
 
 function openNewActionPlanModal(preselectedFindingId = null) {
@@ -1185,34 +1196,126 @@ function openNewPlanFromCurrentDrawer() {
     openNewActionPlanModal(fId);
 }
 
-async function openUpdatePlanModal(planId) {
+async function inlineUpdateActionPlanStatus(el) {
+    const planId = el.dataset.planId;
+    const value = el.value;
     const plan = currentActionPlans.find(p => p.id === planId);
     if (!plan) return;
 
-    const inputVal = prompt(`Actualizar porcentaje de avance para ${plan.code} (0-100):`, plan.progress_pct || 0);
-    if (inputVal === null) return;
-
-    const newPct = Math.max(0, Math.min(100, parseInt(inputVal) || 0));
-    let newStatus = plan.status || "En proceso";
-
-    // Regla de Sincronización Automática
-    if (newPct === 100) {
-        newStatus = "Finalizado";
-    } else if (newPct < 100 && ["finalizado", "finalizada", "completado", "completada", "cerrado"].includes(newStatus.toLowerCase())) {
-        newStatus = "En proceso";
+    let newPct = plan.progress_pct || 0;
+    if (value === "Finalizado") {
+        newPct = 100;
+    } else if (value === "En proceso" && newPct >= 100) {
+        newPct = 50;
     }
 
     try {
         const res = await fetch(`/action-plans/${plan.id}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ progress_pct: newPct, status: newStatus })
+            body: JSON.stringify({ status: value, progress_pct: newPct })
         });
         if (res.ok) {
-            showToast(`Plan ${plan.code} actualizado: ${newPct}% (${newStatus})`, "success");
+            showToast(`Estado de plan ${plan.code} actualizado a "${value}"`, "success");
             await loadAllData();
         } else {
-            showToast("Error al actualizar plan", "error");
+            showToast("Error al actualizar estado del plan", "error");
+        }
+    } catch (e) {
+        showToast("Error de conexión", "error");
+    }
+}
+
+function openUpdatePlanModal(planId) {
+    const plan = currentActionPlans.find(p => p.id === planId || p.code === planId);
+    if (!plan) return;
+
+    if (el("editPlanId")) el("editPlanId").value = plan.id;
+    if (el("editPlanCode")) el("editPlanCode").textContent = plan.code;
+    if (el("editPlanTitle")) el("editPlanTitle").textContent = plan.action_text || plan.title || "";
+    if (el("editPlanProgress")) el("editPlanProgress").value = plan.progress_pct || 0;
+    if (el("editPlanStatus")) el("editPlanStatus").value = plan.status || "En proceso";
+    if (el("editPlanOwner")) el("editPlanOwner").value = plan.action_owner || "";
+    if (el("editPlanTargetDate")) el("editPlanTargetDate").value = (plan.target_date || "").slice(0, 10);
+    if (el("editPlanNotes")) el("editPlanNotes").value = plan.notes || "";
+    if (el("editPlanEvidence")) el("editPlanEvidence").value = plan.evidence_file || "";
+
+    const alertBox = el("finalizeConfirmAlert");
+    if (alertBox) {
+        alertBox.style.display = (plan.progress_pct >= 100 || plan.status === "Finalizado") ? "block" : "none";
+    }
+
+    const modal = el("updatePlanModal");
+    if (modal) modal.style.display = "flex";
+}
+
+function closeUpdatePlanModal() {
+    const modal = el("updatePlanModal");
+    if (modal) modal.style.display = "none";
+}
+
+function onEditPlanProgressInput(val) {
+    const num = Math.max(0, Math.min(100, parseInt(val) || 0));
+    const statusSelect = el("editPlanStatus");
+    const alertBox = el("finalizeConfirmAlert");
+
+    if (num === 100) {
+        // No seleccionar Finalizado automáticamente.
+        // Si no se selecciona Finalizado explícitamente, se mantiene En proceso (100% con pendiente de validación).
+        if (alertBox) alertBox.style.display = "block";
+    } else {
+        if (statusSelect && statusSelect.value === "Finalizado") {
+            statusSelect.value = "En proceso";
+        }
+        if (alertBox) alertBox.style.display = "none";
+    }
+}
+
+function onEditPlanStatusChange(val) {
+    const progressInput = el("editPlanProgress");
+    const alertBox = el("finalizeConfirmAlert");
+
+    if (val === "Finalizado") {
+        if (progressInput) progressInput.value = 100;
+        if (alertBox) alertBox.style.display = "block";
+    } else {
+        // Al reabrir o cambiar de estado, se conserva el porcentaje de avance existente (sin forzar 50%)
+        if (alertBox) alertBox.style.display = "none";
+    }
+}
+
+async function submitUpdatePlanModal() {
+    const planId = el("editPlanId")?.value;
+    if (!planId) return;
+
+    const progress_pct = Math.max(0, Math.min(100, parseInt(el("editPlanProgress")?.value) || 0));
+    const status = el("editPlanStatus")?.value || "En proceso";
+    const action_owner = el("editPlanOwner")?.value;
+    const target_date = el("editPlanTargetDate")?.value;
+    const notes = el("editPlanNotes")?.value;
+    const evidence_file = el("editPlanEvidence")?.value;
+
+    try {
+        const res = await fetch(`/action-plans/${planId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                progress_pct,
+                status,
+                action_owner,
+                target_date,
+                notes,
+                evidence_file,
+                confirm_finalize: (status === "Finalizado")
+            })
+        });
+
+        if (res.ok) {
+            showToast("Plan de Acción actualizado exitosamente.", "success");
+            closeUpdatePlanModal();
+            await loadAllData();
+        } else {
+            showToast("Error al actualizar Plan de Acción.", "error");
         }
     } catch (e) {
         showToast("Error de conexión al actualizar plan", "error");

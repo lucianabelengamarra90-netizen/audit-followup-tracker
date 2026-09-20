@@ -2,30 +2,102 @@ import sqlite3
 import os
 import uuid
 from datetime import datetime, date, timedelta
+from domain.statuses import normalize_status, is_final_status, compute_effective_status
+from domain.dates import parse_date_to_iso, format_display_date, is_date_past
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit_tracker.db")
+DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit_tracker.db"))
 
 
 def get_db():
+    db_dir = os.path.dirname(os.path.abspath(DB_PATH))
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
 
+def generate_next_code(entity_type: str, year: int = None, cursor=None) -> str:
+    """
+    Genera el siguiente código formateado de forma segura y transaccional mediante la tabla `code_sequences`.
+    Evita colisiones y duplicados tras eliminaciones.
+    Ejemplos: AUD-2026-001, H-2026-001, PM-2026-001, PA-2026-001
+    """
+    if year is None:
+        year = datetime.now().year
+        
+    entity_prefix = {
+        "report": "AUD",
+        "finding": "H",
+        "proposal": "PM",
+        "action_plan": "PA"
+    }.get(entity_type.lower(), entity_type.upper())
+
+    table_map = {
+        "report": "reports",
+        "finding": "findings",
+        "proposal": "proposals",
+        "action_plan": "action_plans"
+    }
+
+    close_cursor = False
+    if cursor is None:
+        conn = get_db()
+        cursor = conn.cursor()
+        close_cursor = True
+
+    try:
+        cursor.execute("SELECT last_value FROM code_sequences WHERE entity_type = ? AND year = ?", (entity_type, year))
+        row = cursor.fetchone()
+        next_val = (row[0] + 1) if row else 1
+
+        table_name = table_map.get(entity_type.lower())
+        if table_name:
+            while True:
+                candidate = f"{entity_prefix}-{year}-{next_val:03d}"
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE code = ?", (candidate,))
+                if cursor.fetchone()[0] == 0:
+                    break
+                next_val += 1
+
+        cursor.execute("INSERT OR REPLACE INTO code_sequences (entity_type, year, last_value) VALUES (?, ?, ?)", (entity_type, year, next_val))
+        return f"{entity_prefix}-{year}-{next_val:03d}"
+    finally:
+        if close_cursor:
+            cursor.connection.commit()
+            cursor.connection.close()
+
+
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
 
-    # Verify if old schema exists
+    # 0. Tabla de Control de Migraciones
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # 0. Tabla de Secuencias Persistentes para Generación de Códigos
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS code_sequences (
+            entity_type TEXT NOT NULL,
+            year INTEGER NOT NULL,
+            last_value INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (entity_type, year)
+        )
+    """)
+
+    # Verify if old schema exists and migrate code column safely without DROP TABLE
     cursor.execute("PRAGMA table_info(reports)")
     cols = [r["name"] for r in cursor.fetchall()]
     if cols and "code" not in cols:
-        cursor.execute("DROP TABLE IF EXISTS findings")
-        cursor.execute("DROP TABLE IF EXISTS reports")
-        cursor.execute("DROP TABLE IF EXISTS proposals")
-        cursor.execute("DROP TABLE IF EXISTS action_plans")
-        cursor.execute("DROP TABLE IF EXISTS audit_history")
+        cursor.execute("ALTER TABLE reports ADD COLUMN code TEXT")
         conn.commit()
 
     # 1. Informes (Registro Padre)
@@ -56,7 +128,7 @@ def init_db():
             severity TEXT DEFAULT 'Medio',
             responsible_area TEXT,
             action_owner TEXT,
-            status TEXT DEFAULT 'Pendiente',
+            status TEXT DEFAULT 'En proceso',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             observations TEXT DEFAULT '',
@@ -83,7 +155,7 @@ def init_db():
             responsible_area TEXT,
             action_owner TEXT,
             target_date TEXT,
-            status TEXT DEFAULT 'Pendiente',
+            status TEXT DEFAULT 'En proceso',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (finding_id) REFERENCES findings (id) ON DELETE CASCADE
@@ -100,7 +172,7 @@ def init_db():
             action_text TEXT NOT NULL,
             action_owner TEXT,
             target_date TEXT,
-            status TEXT DEFAULT 'Pendiente',
+            status TEXT DEFAULT 'En proceso',
             progress_pct INTEGER DEFAULT 0,
             notes TEXT,
             evidence_file TEXT,
@@ -123,8 +195,58 @@ def init_db():
         )
     """)
 
+    sync_code_sequences(cursor)
     conn.commit()
     conn.close()
+
+
+def sync_code_sequences(cursor):
+    """
+    Sincroniza la tabla `code_sequences` escaneando los códigos existentes en
+    `reports`, `findings`, `proposals` y `action_plans`.
+    Asegura que el contador sea siempre mayor o igual al valor numérico máximo existente.
+    """
+    entity_configs = [
+        ("report", "reports", "AUD"),
+        ("finding", "findings", "H"),
+        ("proposal", "proposals", "PM"),
+        ("action_plan", "action_plans", "PA")
+    ]
+
+    current_year = datetime.now().year
+
+    for entity_type, table_name, prefix in entity_configs:
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        cols = [r["name"] for r in cursor.fetchall()]
+        if "code" not in cols:
+            continue
+
+        cursor.execute(f"SELECT code FROM {table_name} WHERE code IS NOT NULL AND code != ''")
+        rows = cursor.fetchall()
+        max_by_year = {}
+
+        for row in rows:
+            code_str = str(row[0]).strip()
+            parts = code_str.split("-")
+            if len(parts) >= 3:
+                try:
+                    yr = int(parts[1])
+                    seq = int(parts[2])
+                    if yr not in max_by_year or seq > max_by_year[yr]:
+                        max_by_year[yr] = seq
+                except ValueError:
+                    pass
+
+        if current_year not in max_by_year:
+            max_by_year[current_year] = 0
+
+        for yr, max_val in max_by_year.items():
+            cursor.execute("SELECT last_value FROM code_sequences WHERE entity_type = ? AND year = ?", (entity_type, yr))
+            seq_row = cursor.fetchone()
+            if not seq_row:
+                cursor.execute("INSERT INTO code_sequences (entity_type, year, last_value) VALUES (?, ?, ?)", (entity_type, yr, max_val))
+            elif max_val > seq_row[0]:
+                cursor.execute("UPDATE code_sequences SET last_value = ? WHERE entity_type = ? AND year = ?", (max_val, entity_type, yr))
 
 
 def add_history_log(entity_type, entity_id, user_name, description, cursor=None):
@@ -165,148 +287,125 @@ def get_history_logs(entity_type=None, entity_id=None):
 
 def save_relational_report_structure(report_data, findings_hierarchy, source_filename=""):
     """
-    Guarda la relación Informe -> Hallazgos -> Propuestas -> Planes.
-
-    Reglas:
-    - No inventa riesgo si no viene informado.
-    - No inventa fecha compromiso.
-    - No inventa planes de acción.
-    - Una propuesta puede existir sin plan.
-    - Un hallazgo puede tener múltiples propuestas.
+    Guarda la relación Informe -> Hallazgos -> Propuestas -> Planes de manera atómica con rollback en caso de error.
+    Utiliza secuencias persistentes `generate_next_code`.
     """
     init_db()
     conn = get_db()
     cursor = conn.cursor()
 
-    report_id = str(uuid.uuid4())
-    rep_idx_cursor = conn.cursor()
-    rep_idx_cursor.execute("SELECT COUNT(*) FROM reports")
-    rep_num = rep_idx_cursor.fetchone()[0] + 1
-    rep_code = f"AUD-2026-{rep_num:03d}"
+    try:
+        report_id = str(uuid.uuid4())
+        rep_code = generate_next_code("report", cursor=cursor)
 
-    title = (report_data.get("title") or f"Informe de Auditoría {rep_code}").strip()
-    process = (report_data.get("process") or "Proceso General").strip()
-    area = (report_data.get("area") or "Operaciones").strip()
-    period = (report_data.get("period") or "2026").strip()
-    auditor = (report_data.get("auditor") or "Auditoría Interna").strip()
-    summary = (report_data.get("summary") or "").strip()
-
-    cursor.execute("""
-        INSERT INTO reports (id, code, title, process, area, period, auditor, summary, source_filename)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (report_id, rep_code, title, process, area, period, auditor, summary, source_filename))
-
-    add_history_log("report", report_id, auditor, f"Carga inicial de informe {title} ({source_filename})", cursor=cursor)
-
-    f_c_cursor = conn.cursor()
-    f_c_cursor.execute("SELECT COUNT(*) FROM findings")
-    finding_counter = f_c_cursor.fetchone()[0] + 1
-
-    p_c_cursor = conn.cursor()
-    p_c_cursor.execute("SELECT COUNT(*) FROM proposals")
-    proposal_counter = p_c_cursor.fetchone()[0] + 1
-
-    pa_c_cursor = conn.cursor()
-    pa_c_cursor.execute("SELECT COUNT(*) FROM action_plans")
-    action_counter = pa_c_cursor.fetchone()[0] + 1
-
-
-    for f_item in findings_hierarchy:
-        finding_id = str(uuid.uuid4())
-        raw_f_code = f_item.get("code") or f"H-2026-{finding_counter:03d}"
-        finding_counter += 1
-
-        chk_f = conn.cursor()
-        chk_f.execute("SELECT COUNT(*) FROM findings WHERE code = ?", (raw_f_code,))
-        if chk_f.fetchone()[0] > 0:
-            f_code = f"{raw_f_code}-{finding_counter:03d}"
-        else:
-            f_code = raw_f_code
-
-        f_title = (f_item.get("title") or "Observación de Auditoría").strip()
-        situation = (f_item.get("situation") or f_title).strip()
-        risk = (f_item.get("risk") or "").strip()
-        severity = (f_item.get("severity") or "Medio").strip()
-        if severity.lower() in ("alto", "alta"):
-            severity = "Alto"
-        elif severity.lower() in ("bajo", "baja"):
-            severity = "Bajo"
-        else:
-            severity = "Medio"
-
-        responsible_area = (f_item.get("responsible_area") or area).strip()
-        action_owner = (f_item.get("action_owner") or "Pendiente de definir").strip()
-        status = (f_item.get("status") or "Pendiente").strip()
+        title = (report_data.get("title") or f"Informe de Auditoría {rep_code}").strip()
+        process = (report_data.get("process") or "Proceso General").strip()
+        area = (report_data.get("area") or "Operaciones").strip()
+        period = (report_data.get("period") or "2026").strip()
+        auditor = (report_data.get("auditor") or "Auditoría Interna").strip()
+        summary = (report_data.get("summary") or "").strip()
 
         cursor.execute("""
-            INSERT INTO findings (id, report_id, code, title, situation, risk, severity, responsible_area, action_owner, status, observations)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (finding_id, report_id, f_code, f_title, situation, risk, severity, responsible_area, action_owner, status, ""))
+            INSERT INTO reports (id, code, title, process, area, period, auditor, summary, source_filename)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (report_id, rep_code, title, process, area, period, auditor, summary, source_filename))
 
-        add_history_log("finding", finding_id, auditor, f"Creación de hallazgo {f_code}: {f_title}", cursor=cursor)
+        add_history_log("report", report_id, auditor, f"Carga inicial de informe {title} ({source_filename})", cursor=cursor)
 
-        # Propuestas asociadas a este Hallazgo
-        proposals_list = f_item.get("proposals") or []
-        if not proposals_list and f_item.get("proposal"):
-            proposals_list = [{"title": f_item.get("title"), "proposal_text": f_item.get("proposal")}]
+        for f_item in findings_hierarchy:
+            finding_id = str(uuid.uuid4())
+            f_code = f_item.get("code") or generate_next_code("finding", cursor=cursor)
 
-        for p_item in proposals_list:
-            proposal_id = str(uuid.uuid4())
-            raw_p_code = p_item.get("code") or f"PM-2026-{proposal_counter:03d}"
-            proposal_counter += 1
+            cursor.execute("SELECT COUNT(*) FROM findings WHERE code = ?", (f_code,))
+            if cursor.fetchone()[0] > 0:
+                f_code = generate_next_code("finding", cursor=cursor)
 
-            chk_p = conn.cursor()
-            chk_p.execute("SELECT COUNT(*) FROM proposals WHERE code = ?", (raw_p_code,))
-            if chk_p.fetchone()[0] > 0:
-                p_code = f"{raw_p_code}-{proposal_counter:03d}"
+            f_title = (f_item.get("title") or "Observación de Auditoría").strip()
+            situation = (f_item.get("situation") or f_title).strip()
+            risk = (f_item.get("risk") or "").strip()
+            severity = (f_item.get("severity") or "Medio").strip()
+            if severity.lower() in ("alto", "alta"):
+                severity = "Alto"
+            elif severity.lower() in ("bajo", "baja"):
+                severity = "Bajo"
             else:
-                p_code = raw_p_code
+                severity = "Medio"
 
-            p_title = (p_item.get("title") or f"Propuesta para {f_title}").strip()
-            p_text = (p_item.get("proposal_text") or p_item.get("proposal") or p_title).strip()
-            p_target_date = (p_item.get("target_date") or "").strip()
-            p_status = (p_item.get("status") or "Pendiente").strip()
+            responsible_area = (f_item.get("responsible_area") or area).strip()
+            action_owner = (f_item.get("action_owner") or "Pendiente de definir").strip()
+            status = normalize_status(f_item.get("status") or "En proceso")
 
             cursor.execute("""
-                INSERT INTO proposals (id, finding_id, code, title, proposal_text, severity, responsible_area, action_owner, target_date, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (proposal_id, finding_id, p_code, p_title, p_text, severity, responsible_area, action_owner, p_target_date, p_status))
+                INSERT INTO findings (id, report_id, code, title, situation, risk, severity, responsible_area, action_owner, status, observations)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (finding_id, report_id, f_code, f_title, situation, risk, severity, responsible_area, action_owner, status, f_item.get("observations", "")))
 
-            add_history_log("proposal", proposal_id, auditor, f"Creación de propuesta {p_code} vinculada a {f_code}", cursor=cursor)
+            add_history_log("finding", finding_id, auditor, f"Creación de hallazgo {f_code}: {f_title}", cursor=cursor)
 
-            plans_list = p_item.get("action_plans") or []
+            proposals_list = f_item.get("proposals") or []
+            if not proposals_list and f_item.get("proposal"):
+                proposals_list = [{"title": f_item.get("title"), "proposal_text": f_item.get("proposal")}]
 
-            for pa_item in plans_list:
-                plan_id = str(uuid.uuid4())
-                raw_pa_code = pa_item.get("code") or f"PA-2026-{action_counter:03d}"
-                action_counter += 1
+            for p_item in proposals_list:
+                proposal_id = str(uuid.uuid4())
+                p_code = p_item.get("code") or generate_next_code("proposal", cursor=cursor)
 
-                chk_pa = conn.cursor()
-                chk_pa.execute("SELECT COUNT(*) FROM action_plans WHERE code = ?", (raw_pa_code,))
-                if chk_pa.fetchone()[0] > 0:
-                    pa_code = f"{raw_pa_code}-{action_counter:03d}"
-                else:
-                    pa_code = raw_pa_code
+                cursor.execute("SELECT COUNT(*) FROM proposals WHERE code = ?", (p_code,))
+                if cursor.fetchone()[0] > 0:
+                    p_code = generate_next_code("proposal", cursor=cursor)
 
-                pa_title = (pa_item.get("title") or f"Acción para {p_code}").strip()
-                pa_text = (pa_item.get("action_text") or pa_title).strip()
-                pa_owner = (pa_item.get("action_owner") or action_owner).strip()
-                pa_date = (pa_item.get("target_date") or p_target_date).strip()
-                pa_pct = int(pa_item.get("progress_pct") or 0)
-                pa_status = (pa_item.get("status") or "Pendiente").strip()
-                pa_notes = (pa_item.get("notes") or "").strip()
-                pa_evidence = (pa_item.get("evidence_file") or "").strip()
+                p_title = (p_item.get("title") or f"Propuesta para {f_title}").strip()
+                p_text = (p_item.get("proposal_text") or p_item.get("proposal") or p_title).strip()
+                p_target_date = parse_date_to_iso(p_item.get("target_date") or "")
+                p_status = normalize_status(p_item.get("status") or status)
 
                 cursor.execute("""
-                    INSERT INTO action_plans (id, proposal_id, code, title, action_text, action_owner, target_date, status, progress_pct, notes, evidence_file)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (plan_id, proposal_id, pa_code, pa_title, pa_text, pa_owner, pa_date, pa_status, pa_pct, pa_notes, pa_evidence))
+                    INSERT INTO proposals (id, finding_id, code, title, proposal_text, severity, responsible_area, action_owner, target_date, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (proposal_id, finding_id, p_code, p_title, p_text, severity, responsible_area, action_owner, p_target_date, p_status))
 
-                add_history_log("action_plan", plan_id, pa_owner, f"Creación de plan de acción {pa_code} vinculado a propuesta {p_code}", cursor=cursor)
+                add_history_log("proposal", proposal_id, auditor, f"Creación de propuesta {p_code} vinculada a {f_code}", cursor=cursor)
 
-    conn.commit()
-    conn.close()
-    return report_id
+                plans_list = p_item.get("action_plans") or []
+
+                for pa_item in plans_list:
+                    plan_id = str(uuid.uuid4())
+                    pa_code = pa_item.get("code") or generate_next_code("action_plan", cursor=cursor)
+
+                    cursor.execute("SELECT COUNT(*) FROM action_plans WHERE code = ?", (pa_code,))
+                    if cursor.fetchone()[0] > 0:
+                        pa_code = generate_next_code("action_plan", cursor=cursor)
+
+                    pa_title = (pa_item.get("title") or f"Acción para {p_code}").strip()
+                    pa_text = (pa_item.get("action_text") or pa_title).strip()
+                    pa_owner = (pa_item.get("action_owner") or action_owner).strip()
+                    pa_date = parse_date_to_iso(pa_item.get("target_date") or p_target_date)
+                    try:
+                        pa_pct = max(0, min(100, int(pa_item.get("progress_pct") or 0)))
+                    except Exception:
+                        pa_pct = 0
+                    pa_status = normalize_status(pa_item.get("status") or p_status)
+                    if pa_pct == 100 and pa_status != "En suspensión":
+                        pa_status = "Finalizado"
+
+                    closed_dt = datetime.now().strftime("%Y-%m-%d") if pa_status == "Finalizado" else None
+                    pa_notes = (pa_item.get("notes") or "").strip()
+                    pa_evidence = (pa_item.get("evidence_file") or "").strip()
+
+                    cursor.execute("""
+                        INSERT INTO action_plans (id, proposal_id, code, title, action_text, action_owner, target_date, status, progress_pct, notes, evidence_file, closed_date)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (plan_id, proposal_id, pa_code, pa_title, pa_text, pa_owner, pa_date, pa_status, pa_pct, pa_notes, pa_evidence, closed_dt))
+
+                    add_history_log("action_plan", plan_id, pa_owner, f"Creación de plan de acción {pa_code} vinculado a propuesta {p_code}", cursor=cursor)
+
+        conn.commit()
+        return report_id
+    except Exception as exc:
+        conn.rollback()
+        raise exc
+    finally:
+        conn.close()
 
 
 def get_all_reports():
@@ -340,7 +439,7 @@ def get_all_reports():
             SELECT COUNT(*) FROM action_plans pa
             JOIN proposals p ON pa.proposal_id = p.id
             JOIN findings f ON p.finding_id = f.id
-            WHERE f.report_id = ? AND LOWER(pa.status) != 'completado' AND LOWER(pa.status) != 'cerrado'
+            WHERE f.report_id = ? AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivada')
         """, (rep_id,))
         rep["pending_plans_count"] = cursor.fetchone()[0]
 
@@ -361,7 +460,6 @@ def get_report_detail(report_id):
     rep = dict(r)
     rep_id = rep["id"]
 
-    # Findings
     cursor.execute("SELECT * FROM findings WHERE report_id = ? ORDER BY code ASC", (rep_id,))
     findings = [dict(f) for f in cursor.fetchall()]
 
@@ -377,7 +475,6 @@ def get_report_detail(report_id):
 
     rep["findings"] = findings
 
-    # History logs for report
     cursor.execute("SELECT * FROM audit_history WHERE entity_type = 'report' AND entity_id = ? ORDER BY change_date DESC", (rep_id,))
     rep["history"] = [dict(h) for h in cursor.fetchall()]
 
@@ -397,9 +494,6 @@ def get_all_findings(filters=None):
     """
     params = []
     if filters:
-        if filters.get("status"):
-            query += " AND LOWER(f.status) = LOWER(?)"
-            params.append(filters["status"])
         if filters.get("severity"):
             query += " AND LOWER(f.severity) = LOWER(?)"
             params.append(filters["severity"])
@@ -415,7 +509,6 @@ def get_all_findings(filters=None):
     cursor.execute(query, params)
     findings = [dict(row) for row in cursor.fetchall()]
 
-    # Nest proposals and action plans for total traceability
     for f in findings:
         f_id = f["id"]
         cursor.execute("SELECT * FROM proposals WHERE finding_id = ? ORDER BY code ASC", (f_id,))
@@ -424,13 +517,44 @@ def get_all_findings(filters=None):
         for p in proposals:
             p_id = p["id"]
             cursor.execute("SELECT * FROM action_plans WHERE proposal_id = ? ORDER BY code ASC", (p_id,))
-            p["action_plans"] = [dict(pa) for pa in cursor.fetchall()]
+            plans = [dict(pa) for pa in cursor.fetchall()]
+            for pa in plans:
+                pa["effective_status"] = compute_effective_status(pa.get("status"), pa.get("target_date"))
+            p["action_plans"] = plans
+            
+            p_target = p.get("target_date")
+            if not p_target and plans:
+                dates = [pa["target_date"] for pa in plans if pa.get("target_date")]
+                p_target = min(dates) if dates else None
+            p_eff = compute_effective_status(p.get("status"), p_target)
+            if p_eff == "En proceso" and plans:
+                if any(pa.get("effective_status") == "Vencido" for pa in plans):
+                    p_eff = "Vencido"
+            p["effective_status"] = p_eff
 
         f["proposals"] = proposals
         f["proposals_count"] = len(proposals)
         f["action_plans_count"] = sum(len(p["action_plans"]) for p in proposals)
 
+        f_eff = compute_effective_status(f.get("status"), None)
+        if f_eff == "En proceso" and proposals:
+            if any(p.get("effective_status") == "Vencido" for p in proposals):
+                f_eff = "Vencido"
+        f["effective_status"] = f_eff
+
     conn.close()
+
+    if filters and filters.get("status"):
+        st_filter = filters["status"].strip().lower()
+        if st_filter == "vencido":
+            findings = [f for f in findings if f["effective_status"].lower() == "vencido"]
+        elif st_filter == "en proceso":
+            findings = [f for f in findings if f["effective_status"].lower() == "en proceso"]
+        elif st_filter in ("en suspensión", "en suspension", "stand-by"):
+            findings = [f for f in findings if f["effective_status"].lower() == "en suspensión"]
+        elif st_filter in ("finalizado", "completado", "cerrado"):
+            findings = [f for f in findings if f["effective_status"].lower() == "finalizado"]
+
     return findings
 
 
@@ -472,7 +596,6 @@ def get_finding_detail(finding_id):
     f["proposals"] = proposals
     f["evidence_files"] = all_evidence
 
-    # History timeline
     cursor.execute("""
         SELECT * FROM audit_history
         WHERE (entity_type = 'finding' AND entity_id = ?)
@@ -491,42 +614,79 @@ def update_finding(finding_id, data, user_name="Auditoría Interna"):
     conn = get_db()
     cursor = conn.cursor()
 
-    fields = ["last_updated = CURRENT_TIMESTAMP"]
-    params = []
-    changes = []
+    try:
+        cursor.execute("SELECT id, status FROM findings WHERE id = ? OR code = ?", (finding_id, finding_id))
+        f_row = cursor.fetchone()
+        if not f_row:
+            return False
 
-    updatable = {
-        "title": "title",
-        "situation": "situation",
-        "severity": "severity",
-        "responsible_area": "responsible_area",
-        "action_owner": "action_owner",
-        "status": "status",
-        "observations": "observations"
-    }
+        actual_finding_id = f_row[0]
 
-    for key, col in updatable.items():
-        if key in data and data[key] is not None:
-            fields.append(f"{col} = ?")
-            params.append(data[key])
-            changes.append(f"{key}={data[key]}")
+        fields = ["last_updated = CURRENT_TIMESTAMP"]
+        params = []
+        changes = []
 
-    if len(fields) <= 1:
+        updatable = {
+            "title": "title",
+            "situation": "situation",
+            "severity": "severity",
+            "responsible_area": "responsible_area",
+            "action_owner": "action_owner",
+            "status": "status",
+            "observations": "observations"
+        }
+
+        for key, col in updatable.items():
+            if key in data and data[key] is not None:
+                val = data[key]
+                if key == "status":
+                    val = normalize_status(val)
+                fields.append(f"{col} = ?")
+                params.append(val)
+                changes.append(f"{key}={val}")
+
+        if len(fields) <= 1:
+            return False
+
+        params.append(actual_finding_id)
+        params.append(actual_finding_id)
+        sql = f"UPDATE findings SET {', '.join(fields)} WHERE id = ? OR code = ?"
+        cursor.execute(sql, params)
+        updated = cursor.rowcount > 0
+
+        if updated:
+            add_history_log("finding", actual_finding_id, user_name, f"Edición inline: {', '.join(changes)}", cursor=cursor)
+
+            if "status" in data and data["status"] is not None:
+                st_clean = normalize_status(data["status"])
+                today_str = datetime.now().strftime("%Y-%m-%d")
+
+                if st_clean == "Finalizado":
+                    cursor.execute("""
+                        UPDATE proposals SET status = 'Finalizado'
+                        WHERE finding_id = ? AND status != 'En suspensión'
+                    """, (actual_finding_id,))
+                    cursor.execute("""
+                        UPDATE action_plans SET status = 'Finalizado', progress_pct = 100, closed_date = ?
+                        WHERE proposal_id IN (SELECT id FROM proposals WHERE finding_id = ?) AND status != 'En suspensión'
+                    """, (today_str, actual_finding_id))
+                elif st_clean == "En proceso":
+                    cursor.execute("""
+                        UPDATE proposals SET status = 'En proceso'
+                        WHERE finding_id = ? AND status = 'Finalizado'
+                    """, (actual_finding_id,))
+                    cursor.execute("""
+                        UPDATE action_plans SET status = 'En proceso', closed_date = NULL
+                        WHERE proposal_id IN (SELECT id FROM proposals WHERE finding_id = ?) AND status = 'Finalizado'
+                    """, (actual_finding_id,))
+
+        conn.commit()
+        return updated
+    except Exception as exc:
+        conn.rollback()
+        raise exc
+    finally:
         conn.close()
-        return False
-
-    params.append(finding_id)
-    params.append(finding_id)
-    sql = f"UPDATE findings SET {', '.join(fields)} WHERE id = ? OR code = ?"
-    cursor.execute(sql, params)
-    updated = cursor.rowcount > 0
-
-    if updated:
-        add_history_log("finding", finding_id, user_name, f"Edición inline: {', '.join(changes)}", cursor=cursor)
-
-    conn.commit()
-    conn.close()
-    return updated
 
 
 def update_proposal(proposal_id, data, user_name="Auditoría Interna"):
@@ -534,56 +694,77 @@ def update_proposal(proposal_id, data, user_name="Auditoría Interna"):
     conn = get_db()
     cursor = conn.cursor()
 
-    fields = ["last_updated = CURRENT_TIMESTAMP"]
-    params = []
-    changes = []
+    try:
+        cursor.execute("SELECT id, finding_id, status FROM proposals WHERE id = ? OR code = ?", (proposal_id, proposal_id))
+        p_row = cursor.fetchone()
+        if not p_row:
+            return False
 
-    updatable = {
-        "proposal_text": "proposal_text",
-        "title": "title",
-        "action_owner": "action_owner",
-        "target_date": "target_date",
-        "status": "status"
-    }
+        actual_proposal_id = p_row[0]
+        finding_id = p_row[1]
 
-    for key, col in updatable.items():
-        if key in data and data[key] is not None:
-            fields.append(f"{col} = ?")
-            params.append(data[key])
-            changes.append(f"{key}={data[key]}")
+        fields = ["last_updated = CURRENT_TIMESTAMP"]
+        params = []
+        changes = []
 
-    if len(fields) <= 1:
+        updatable = {
+            "proposal_text": "proposal_text",
+            "title": "title",
+            "action_owner": "action_owner",
+            "target_date": "target_date",
+            "status": "status"
+        }
+
+        for key, col in updatable.items():
+            if key in data and data[key] is not None:
+                val = data[key]
+                if key == "target_date":
+                    val = parse_date_to_iso(val)
+                elif key == "status":
+                    val = normalize_status(val)
+                fields.append(f"{col} = ?")
+                params.append(val)
+                changes.append(f"{key}={val}")
+
+        if len(fields) <= 1:
+            return False
+
+        params.append(actual_proposal_id)
+        params.append(actual_proposal_id)
+        sql = f"UPDATE proposals SET {', '.join(fields)} WHERE id = ? OR code = ?"
+        cursor.execute(sql, params)
+        updated = cursor.rowcount > 0
+
+        if updated:
+            add_history_log("proposal", actual_proposal_id, user_name, f"Edición inline: {', '.join(changes)}", cursor=cursor)
+
+            if "status" in data and data["status"] is not None:
+                st_clean = normalize_status(data["status"])
+                today_str = datetime.now().strftime("%Y-%m-%d")
+
+                if st_clean == "Finalizado":
+                    cursor.execute("""
+                        UPDATE action_plans 
+                        SET status = 'Finalizado', progress_pct = 100, closed_date = ?
+                        WHERE proposal_id = ? AND status != 'En suspensión'
+                    """, (today_str, actual_proposal_id))
+                elif st_clean == "En proceso":
+                    cursor.execute("""
+                        UPDATE action_plans 
+                        SET status = 'En proceso', closed_date = NULL
+                        WHERE proposal_id = ? AND status = 'Finalizado'
+                    """, (actual_proposal_id,))
+
+                if finding_id:
+                    _evaluate_finding_cascade(cursor, finding_id)
+
+        conn.commit()
+        return updated
+    except Exception as exc:
+        conn.rollback()
+        raise exc
+    finally:
         conn.close()
-        return False
-
-    params.append(proposal_id)
-    params.append(proposal_id)
-    sql = f"UPDATE proposals SET {', '.join(fields)} WHERE id = ? OR code = ?"
-    cursor.execute(sql, params)
-    updated = cursor.rowcount > 0
-
-    if updated:
-        add_history_log("proposal", proposal_id, user_name, f"Edición inline: {', '.join(changes)}", cursor=cursor)
-
-        # Sincronización automática con planes de acción vinculados
-        if "status" in data and data["status"] is not None:
-            st_clean = str(data["status"]).strip().lower()
-            if st_clean in ("finalizado", "finalizada", "completado", "completada", "archivada"):
-                cursor.execute("""
-                    UPDATE action_plans 
-                    SET status = 'Finalizado', progress_pct = 100 
-                    WHERE proposal_id = ? OR proposal_id IN (SELECT id FROM proposals WHERE code = ?)
-                """, (proposal_id, proposal_id))
-            elif st_clean in ("en proceso", "en-proceso"):
-                cursor.execute("""
-                    UPDATE action_plans 
-                    SET status = 'En proceso', progress_pct = CASE WHEN progress_pct >= 100 THEN 50 ELSE progress_pct END 
-                    WHERE proposal_id = ? OR proposal_id IN (SELECT id FROM proposals WHERE code = ?)
-                """, (proposal_id, proposal_id))
-
-    conn.commit()
-    conn.close()
-    return updated
 
 
 def create_proposal_for_finding(finding_id, proposal_text, action_owner="", target_date="", status="En proceso", user_name="Auditoría Interna"):
@@ -600,22 +781,21 @@ def create_proposal_for_finding(finding_id, proposal_text, action_owner="", targ
     actual_finding_id = finding["id"]
 
     proposal_id = str(uuid.uuid4())
-    idx_cursor = conn.cursor()
-    idx_cursor.execute("SELECT COUNT(*) FROM proposals")
-    pm_num = idx_cursor.fetchone()[0] + 1
-    pm_code = f"PM-2026-{pm_num:03d}"
+    pm_code = generate_next_code("proposal", cursor=cursor)
 
     p_title = f"Propuesta {pm_code}"
+    iso_target_date = parse_date_to_iso(target_date)
+    norm_status = normalize_status(status)
+
     cursor.execute("""
         INSERT INTO proposals (id, finding_id, code, title, proposal_text, severity, responsible_area, action_owner, target_date, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (proposal_id, actual_finding_id, pm_code, p_title, proposal_text, finding.get("severity", ""), finding.get("responsible_area", ""), action_owner or finding.get("action_owner", ""), target_date, status))
+    """, (proposal_id, actual_finding_id, pm_code, p_title, proposal_text, finding.get("severity", ""), finding.get("responsible_area", ""), action_owner or finding.get("action_owner", ""), iso_target_date, norm_status))
 
     add_history_log("proposal", proposal_id, user_name, f"Nueva propuesta agregada {pm_code}: {proposal_text}", cursor=cursor)
     conn.commit()
     conn.close()
     return proposal_id, pm_code
-
 
 
 def get_all_proposals(filters=None):
@@ -631,14 +811,10 @@ def get_all_proposals(filters=None):
         WHERE 1=1
     """
     params = []
-    if filters:
-        if filters.get("status"):
-            query += " AND LOWER(p.status) = LOWER(?)"
-            params.append(filters["status"])
-        if filters.get("search"):
-            q = f"%{filters['search'].lower()}%"
-            query += " AND (LOWER(p.code) LIKE ? OR LOWER(p.proposal_text) LIKE ? OR LOWER(f.code) LIKE ? OR LOWER(f.title) LIKE ?)"
-            params.extend([q, q, q, q])
+    if filters and filters.get("search"):
+        q = f"%{filters['search'].lower()}%"
+        query += " AND (LOWER(p.code) LIKE ? OR LOWER(p.proposal_text) LIKE ? OR LOWER(f.code) LIKE ? OR LOWER(f.title) LIKE ?)"
+        params.extend([q, q, q, q])
 
     query += " ORDER BY p.code ASC"
     cursor.execute(query, params)
@@ -648,10 +824,35 @@ def get_all_proposals(filters=None):
         p_id = p["id"]
         cursor.execute("SELECT * FROM action_plans WHERE proposal_id = ? ORDER BY code ASC", (p_id,))
         plans = [dict(pa) for pa in cursor.fetchall()]
+        for pa in plans:
+            pa["effective_status"] = compute_effective_status(pa.get("status"), pa.get("target_date"))
         p["action_plans"] = plans
         p["action_plans_count"] = len(plans)
 
+        p_target = p.get("target_date")
+        if not p_target and plans:
+            dates = [pa["target_date"] for pa in plans if pa.get("target_date")]
+            p_target = min(dates) if dates else None
+
+        p_eff = compute_effective_status(p.get("status"), p_target)
+        if p_eff == "En proceso" and plans:
+            if any(pa.get("effective_status") == "Vencido" for pa in plans):
+                p_eff = "Vencido"
+        p["effective_status"] = p_eff
+
     conn.close()
+
+    if filters and filters.get("status"):
+        st_filter = filters["status"].strip().lower()
+        if st_filter == "vencido":
+            proposals = [p for p in proposals if p["effective_status"].lower() == "vencido"]
+        elif st_filter == "en proceso":
+            proposals = [p for p in proposals if p["effective_status"].lower() == "en proceso"]
+        elif st_filter in ("en suspensión", "en suspension", "stand-by"):
+            proposals = [p for p in proposals if p["effective_status"].lower() == "en suspensión"]
+        elif st_filter in ("finalizado", "completado", "cerrado"):
+            proposals = [p for p in proposals if p["effective_status"].lower() == "finalizado"]
+
     return proposals
 
 
@@ -670,19 +871,30 @@ def get_all_action_plans(filters=None):
         WHERE 1=1
     """
     params = []
-    if filters:
-        if filters.get("status"):
-            query += " AND LOWER(pa.status) = LOWER(?)"
-            params.append(filters["status"])
-        if filters.get("search"):
-            q = f"%{filters['search'].lower()}%"
-            query += " AND (LOWER(pa.code) LIKE ? OR LOWER(pa.action_text) LIKE ? OR LOWER(pa.action_owner) LIKE ? OR LOWER(p.code) LIKE ? OR LOWER(f.code) LIKE ?)"
-            params.extend([q, q, q, q, q])
+    if filters and filters.get("search"):
+        q = f"%{filters['search'].lower()}%"
+        query += " AND (LOWER(pa.code) LIKE ? OR LOWER(pa.action_text) LIKE ? OR LOWER(pa.action_owner) LIKE ? OR LOWER(p.code) LIKE ? OR LOWER(f.code) LIKE ?)"
+        params.extend([q, q, q, q, q])
 
     query += " ORDER BY pa.code ASC"
     cursor.execute(query, params)
     plans = [dict(row) for row in cursor.fetchall()]
     conn.close()
+
+    for pa in plans:
+        pa["effective_status"] = compute_effective_status(pa.get("status"), pa.get("target_date"))
+
+    if filters and filters.get("status"):
+        st_filter = filters["status"].strip().lower()
+        if st_filter == "vencido":
+            plans = [pa for pa in plans if pa["effective_status"].lower() == "vencido"]
+        elif st_filter == "en proceso":
+            plans = [pa for pa in plans if pa["effective_status"].lower() == "en proceso"]
+        elif st_filter in ("en suspensión", "en suspension", "stand-by"):
+            plans = [pa for pa in plans if pa["effective_status"].lower() == "en suspensión"]
+        elif st_filter in ("finalizado", "completado", "cerrado"):
+            plans = [pa for pa in plans if pa["effective_status"].lower() == "finalizado"]
+
     return plans
 
 
@@ -703,7 +915,6 @@ def create_action_plan(proposal_id, action_text, action_owner, target_date, stat
     conn = get_db()
     cursor = conn.cursor()
 
-    # Resolve proposal_id if code was passed instead of UUID
     p_chk = conn.cursor()
     p_chk.execute("SELECT id FROM proposals WHERE id = ? OR code = ?", (proposal_id, proposal_id))
     p_row = p_chk.fetchone()
@@ -711,16 +922,21 @@ def create_action_plan(proposal_id, action_text, action_owner, target_date, stat
         proposal_id = p_row[0]
 
     plan_id = str(uuid.uuid4())
-    idx_cursor = conn.cursor()
-    idx_cursor.execute("SELECT COUNT(*) FROM action_plans")
-    pa_num = idx_cursor.fetchone()[0] + 1
-    pa_code = f"PA-2026-{pa_num:03d}"
+    pa_code = generate_next_code("action_plan", cursor=cursor)
 
     title = f"Acción comprometida {pa_code}"
+    iso_date = parse_date_to_iso(target_date)
+    norm_status = normalize_status(status)
+    clean_pct = max(0, min(100, int(progress_pct or 0)))
+    if clean_pct == 100 and norm_status != "En suspensión":
+        norm_status = "Finalizado"
+
+    closed_dt = datetime.now().strftime("%Y-%m-%d") if norm_status == "Finalizado" else None
+
     cursor.execute("""
-        INSERT INTO action_plans (id, proposal_id, code, title, action_text, action_owner, target_date, status, progress_pct, notes, evidence_file)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (plan_id, proposal_id, pa_code, title, action_text, action_owner, target_date, status, progress_pct, notes, evidence_file))
+        INSERT INTO action_plans (id, proposal_id, code, title, action_text, action_owner, target_date, status, progress_pct, notes, evidence_file, closed_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (plan_id, proposal_id, pa_code, title, action_text, action_owner, iso_date, norm_status, clean_pct, notes, evidence_file, closed_dt))
 
     add_history_log("action_plan", plan_id, action_owner, f"Nuevo plan de acción creado {pa_code}: {action_text}", cursor=cursor)
     conn.commit()
@@ -728,104 +944,175 @@ def create_action_plan(proposal_id, action_text, action_owner, target_date, stat
     return plan_id, pa_code
 
 
-def update_action_plan(plan_id, status=None, progress_pct=None, notes=None, target_date=None, evidence_file=None, action_owner=None, user_name="Auditoría Interna"):
+def _evaluate_proposal_cascade(cursor, proposal_id):
+    """
+    Evalúa y actualiza la cascada ascendente del estado de una Propuesta.
+    Reglas v2:
+    - Si la propuesta está 'En suspensión' (manual), NO se sobrescribe.
+    - Si la propuesta tiene 0 planes de acción, NO se finaliza automáticamente.
+    - Si TODOS los planes de acción del grupo están 'Finalizado' (y hay al menos 1), la propuesta pasa a 'Finalizado'.
+    - Si al menos un plan vuelve a 'En proceso', la propuesta pasa a 'En proceso'.
+    """
+    cursor.execute("SELECT status, finding_id FROM proposals WHERE id = ?", (proposal_id,))
+    p_row = cursor.fetchone()
+    if not p_row:
+        return
+
+    p_curr_status = normalize_status(p_row[0])
+    finding_id = p_row[1]
+
+    if p_curr_status == "En suspensión":
+        if finding_id:
+            _evaluate_finding_cascade(cursor, finding_id)
+        return
+
+    cursor.execute("SELECT status FROM action_plans WHERE proposal_id = ?", (proposal_id,))
+    child_plans = [normalize_status(r[0]) for r in cursor.fetchall()]
+
+    if not child_plans:
+        if finding_id:
+            _evaluate_finding_cascade(cursor, finding_id)
+        return
+
+    all_plans_final = all(s == "Finalizado" for s in child_plans)
+    new_p_status = "Finalizado" if all_plans_final else "En proceso"
+
+    if new_p_status != p_curr_status:
+        cursor.execute("UPDATE proposals SET status = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (new_p_status, proposal_id))
+
+    if finding_id:
+        _evaluate_finding_cascade(cursor, finding_id)
+
+
+def _evaluate_finding_cascade(cursor, finding_id):
+    """
+    Evalúa y actualiza la cascada ascendente del estado de un Hallazgo.
+    Reglas v2:
+    - Si el hallazgo está 'En suspensión' (manual), NO se sobrescribe.
+    - Si el hallazgo tiene 0 propuestas, NO se finaliza automáticamente.
+    - Si TODAS las propuestas del grupo están 'Finalizado' (y hay al menos 1), el hallazgo pasa a 'Finalizado'.
+    - Si al menos una propuesta vuelve a 'En proceso', el hallazgo pasa a 'En proceso'.
+    """
+    cursor.execute("SELECT status FROM findings WHERE id = ?", (finding_id,))
+    f_row = cursor.fetchone()
+    if not f_row:
+        return
+
+    f_curr_status = normalize_status(f_row[0])
+
+    if f_curr_status == "En suspensión":
+        return
+
+    cursor.execute("SELECT status FROM proposals WHERE finding_id = ?", (finding_id,))
+    child_props = [normalize_status(r[0]) for r in cursor.fetchall()]
+
+    if not child_props:
+        return
+
+    all_props_final = all(s == "Finalizado" for s in child_props)
+    new_f_status = "Finalizado" if all_props_final else "En proceso"
+
+    if new_f_status != f_curr_status:
+        cursor.execute("UPDATE findings SET status = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (new_f_status, finding_id))
+
+
+def update_action_plan(plan_id, status=None, progress_pct=None, notes=None, target_date=None, evidence_file=None, action_owner=None, user_name="Auditoría Interna", confirm_finalize=False):
+    """
+    Actualización atómica de Plan de Acción con sincronización inteligente de Avance (0-100),
+    Estado efectivo ('En proceso', 'En suspensión', 'Finalizado') y cascada en Proposal y Finding.
+    """
     init_db()
     conn = get_db()
     cursor = conn.cursor()
 
-    # Sincronización automática de Avance y Estado
-    if progress_pct is not None:
-        try:
-            pct_val = int(progress_pct)
-            if pct_val >= 100:
-                if status is None or str(status).strip().lower() not in ("en suspensión", "en suspension", "stand-by"):
-                    status = "Finalizado"
-            elif pct_val < 100:
-                if status is None or str(status).strip().lower() in ("finalizado", "finalizada", "completado", "completada", "archivada"):
-                    status = "En proceso"
-        except Exception:
-            pass
+    try:
+        cursor.execute("SELECT id, proposal_id, status, progress_pct, notes FROM action_plans WHERE id = ? OR code = ?", (plan_id, plan_id))
+        current_plan = cursor.fetchone()
+        if not current_plan:
+            return False
 
-    if status is not None:
-        st_clean = str(status).strip().lower()
-        if st_clean in ("finalizado", "finalizada", "completado", "completada", "archivada"):
-            progress_pct = 100
-        elif st_clean in ("en proceso", "en-proceso") and progress_pct is None:
-            cursor.execute("SELECT progress_pct FROM action_plans WHERE id = ? OR code = ?", (plan_id, plan_id))
-            r = cursor.fetchone()
-            if r and r[0] >= 100:
-                progress_pct = 50
+        actual_plan_id = current_plan[0]
+        proposal_id = current_plan[1]
+        curr_status = normalize_status(current_plan[2])
+        curr_pct = current_plan[3] if current_plan[3] is not None else 0
+        curr_notes = current_plan[4] or ""
 
-    fields = ["last_updated = CURRENT_TIMESTAMP"]
-    params = []
+        target_pct = curr_pct
+        if progress_pct is not None:
+            try:
+                target_pct = max(0, min(100, int(progress_pct)))
+            except Exception:
+                pass
 
-    if status is not None:
-        fields.append("status = ?")
-        params.append(status)
-        if status.lower() in ("completado", "cerrado", "finalizado"):
-            fields.append("closed_date = CURRENT_TIMESTAMP")
-    if progress_pct is not None:
-        fields.append("progress_pct = ?")
-        params.append(int(progress_pct))
-    if notes is not None:
-        fields.append("notes = ?")
-        params.append(notes)
-    if target_date is not None:
-        fields.append("target_date = ?")
-        params.append(target_date)
-    if evidence_file is not None:
-        fields.append("evidence_file = ?")
-        params.append(evidence_file)
-    if action_owner is not None:
-        fields.append("action_owner = ?")
-        params.append(action_owner)
-
-    params.append(plan_id)
-    sql = f"UPDATE action_plans SET {', '.join(fields)} WHERE id = ? OR code = ?"
-    params.append(plan_id)
-
-    cursor.execute(sql, params)
-    updated = cursor.rowcount > 0
-    if updated:
-        add_history_log("action_plan", plan_id, user_name, f"Actualización de plan de acción: Estado={status}, Avance={progress_pct}%", cursor=cursor)
-
-        # Sincronización en cascada con la propuesta y el hallazgo padre
+        req_status = curr_status
         if status is not None:
-            st_clean = str(status).strip().lower()
-            if st_clean in ("finalizado", "finalizada", "completado", "completada", "archivada"):
-                cursor.execute("""
-                    UPDATE proposals 
-                    SET status = 'Finalizado' 
-                    WHERE id IN (SELECT proposal_id FROM action_plans WHERE id = ? OR code = ?)
-                """, (plan_id, plan_id))
-                cursor.execute("""
-                    UPDATE findings 
-                    SET status = 'Finalizado' 
-                    WHERE id IN (
-                        SELECT finding_id FROM proposals WHERE id IN (
-                            SELECT proposal_id FROM action_plans WHERE id = ? OR code = ?
-                        )
-                    )
-                """, (plan_id, plan_id))
-            elif st_clean in ("en proceso", "en-proceso"):
-                cursor.execute("""
-                    UPDATE proposals 
-                    SET status = 'En proceso' 
-                    WHERE id IN (SELECT proposal_id FROM action_plans WHERE id = ? OR code = ?)
-                """, (plan_id, plan_id))
-                cursor.execute("""
-                    UPDATE findings 
-                    SET status = 'En proceso' 
-                    WHERE id IN (
-                        SELECT finding_id FROM proposals WHERE id IN (
-                            SELECT proposal_id FROM action_plans WHERE id = ? OR code = ?
-                        )
-                    )
-                """, (plan_id, plan_id))
+            req_status = normalize_status(status)
 
-    conn.commit()
-    conn.close()
-    return updated
+        if req_status == "Finalizado":
+            target_pct = 100
+
+        if target_pct == 100:
+            if req_status != "En suspensión":
+                if (status is not None and normalize_status(status) == "Finalizado") or confirm_finalize:
+                    final_status = "Finalizado"
+                else:
+                    final_status = "En proceso"
+                    if "Pendiente de validación" not in (notes or curr_notes):
+                        val_tag = " (Pendiente de validación)"
+                        notes = (notes + val_tag) if notes is not None else (curr_notes + val_tag if curr_notes else "Pendiente de validación")
+            else:
+                final_status = "En suspensión"
+        else:
+            final_status = req_status
+
+        fields = ["last_updated = CURRENT_TIMESTAMP"]
+        params = []
+
+        fields.append("status = ?")
+        params.append(final_status)
+
+        if final_status == "Finalizado":
+            fields.append("closed_date = ?")
+            params.append(datetime.now().strftime("%Y-%m-%d"))
+        else:
+            fields.append("closed_date = NULL")
+
+        fields.append("progress_pct = ?")
+        params.append(target_pct)
+
+        if notes is not None:
+            fields.append("notes = ?")
+            params.append(notes)
+        if target_date is not None:
+            fields.append("target_date = ?")
+            params.append(parse_date_to_iso(target_date))
+        if evidence_file is not None:
+            fields.append("evidence_file = ?")
+            params.append(evidence_file)
+        if action_owner is not None:
+            fields.append("action_owner = ?")
+            params.append(action_owner)
+
+        params.append(actual_plan_id)
+        params.append(actual_plan_id)
+        sql = f"UPDATE action_plans SET {', '.join(fields)} WHERE id = ? OR code = ?"
+
+        cursor.execute(sql, params)
+        updated = cursor.rowcount > 0
+
+        if updated:
+            add_history_log("action_plan", actual_plan_id, user_name, f"Actualización de plan de acción: Estado={final_status}, Avance={target_pct}%", cursor=cursor)
+
+            if proposal_id:
+                _evaluate_proposal_cascade(cursor, proposal_id)
+
+        conn.commit()
+        return updated
+    except Exception as exc:
+        conn.rollback()
+        raise exc
+    finally:
+        conn.close()
 
 
 def delete_report(report_id):
@@ -855,35 +1142,29 @@ def get_dashboard_stats():
     conn = get_db()
     cursor = conn.cursor()
 
-    # Total de hallazgos abiertos (status != 'Cerrado')
-    cursor.execute("SELECT COUNT(*) FROM findings WHERE LOWER(status) NOT LIKE '%cerrado%' AND LOWER(status) NOT LIKE '%completado%'")
+    cursor.execute("SELECT COUNT(*) FROM findings WHERE LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')")
     open_findings = cursor.fetchone()[0]
 
-    # Hallazgos de riesgo alto
-    cursor.execute("SELECT COUNT(*) FROM findings WHERE LOWER(severity) = 'alto' AND LOWER(status) NOT LIKE '%cerrado%'")
+    cursor.execute("SELECT COUNT(*) FROM findings WHERE LOWER(severity) = 'alto' AND LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')")
     high_risk_findings = cursor.fetchone()[0]
 
-    # Total propuestas de mejora
     cursor.execute("SELECT COUNT(*) FROM proposals")
     total_proposals = cursor.fetchone()[0]
 
-    # Planes de acción vencidos (target_date < today AND status != 'Completado')
     today_str = date.today().strftime("%Y-%m-%d")
     cursor.execute("""
         SELECT COUNT(*) FROM action_plans
-        WHERE target_date != '' AND target_date < ?
-          AND LOWER(status) NOT LIKE '%completado%' AND LOWER(status) NOT LIKE '%cerrado%'
+        WHERE target_date != '' AND target_date IS NOT NULL AND target_date < ?
+          AND LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')
     """, (today_str,))
     overdue_plans = cursor.fetchone()[0]
 
-    # % Implementación de planes
     cursor.execute("SELECT COUNT(*) FROM action_plans")
     total_plans = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM action_plans WHERE LOWER(status) LIKE '%completado%' OR LOWER(status) LIKE '%cerrado%'")
+    cursor.execute("SELECT COUNT(*) FROM action_plans WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')")
     completed_plans = cursor.fetchone()[0]
     impl_rate = round((completed_plans / total_plans) * 100, 1) if total_plans > 0 else 0
 
-    # Risk breakdown
     cursor.execute("SELECT severity, COUNT(*) as cnt FROM findings GROUP BY severity")
     risk_breakdown = {"Alto": 0, "Medio": 0, "Bajo": 0}
     for r in cursor.fetchall():
@@ -891,21 +1172,18 @@ def get_dashboard_stats():
         if sev in risk_breakdown:
             risk_breakdown[sev] = r["cnt"]
 
-    # Status breakdown (findings)
     cursor.execute("SELECT status, COUNT(*) as cnt FROM findings GROUP BY status")
-    status_breakdown = {r["status"]: r["cnt"] for r in cursor.fetchall()}
+    status_breakdown = {normalize_status(r["status"]): r["cnt"] for r in cursor.fetchall()}
 
-    # Area breakdown
     cursor.execute("""
         SELECT responsible_area, COUNT(*) as total,
-               SUM(CASE WHEN LOWER(status) LIKE '%cerrado%' OR LOWER(status) LIKE '%completado%' THEN 1 ELSE 0 END) as closed
+               SUM(CASE WHEN LOWER(status) IN ('finalizado', 'completado', 'cerrado') THEN 1 ELSE 0 END) as closed
         FROM findings
         GROUP BY responsible_area
     """, ())
     area_breakdown = {r["responsible_area"]: {"total": r["total"], "closed": r["closed"]} for r in cursor.fetchall()}
 
-    # Aging breakdown (días transcurridos desde creación para hallazgos abiertos)
-    cursor.execute("SELECT created_at, status FROM findings WHERE LOWER(status) NOT LIKE '%cerrado%'")
+    cursor.execute("SELECT created_at, status FROM findings WHERE LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')")
     aging = {"0-30 días": 0, "31-60 días": 0, "61-90 días": 0, "Más de 90 días": 0}
     now = datetime.now()
     for row in cursor.fetchall():
@@ -924,21 +1202,20 @@ def get_dashboard_stats():
         except Exception:
             aging["0-30 días"] += 1
 
-    # Pendientes críticos (Alto riesgo o planes vencidos)
     cursor.execute("""
         SELECT f.code as finding_code, f.title as finding_title, f.severity, f.responsible_area, f.action_owner,
                pa.target_date, pa.code as plan_code
         FROM findings f
         LEFT JOIN proposals p ON p.finding_id = f.id
         LEFT JOIN action_plans pa ON pa.proposal_id = p.id
-        WHERE LOWER(f.severity) = 'alto' OR (pa.target_date != '' AND pa.target_date < ? AND LOWER(pa.status) NOT LIKE '%completado%')
+        WHERE LOWER(f.severity) = 'alto' OR (pa.target_date != '' AND pa.target_date IS NOT NULL AND pa.target_date < ? AND LOWER(pa.status) NOT IN ('finalizado', 'completado'))
         ORDER BY f.severity DESC, pa.target_date ASC
         LIMIT 10
     """, (today_str,))
 
     critical_pending = []
     for r in cursor.fetchall():
-        target = r["target_date"] or "2026-09-30"
+        target = r["target_date"] or today_str
         days_overdue = 0
         try:
             t_dt = datetime.strptime(target[:10], "%Y-%m-%d")
@@ -973,32 +1250,33 @@ def get_dashboard_stats():
 
 
 def get_kpi_indicators():
+    """
+    Retorna indicadores reales sin fallbacks duros inventados.
+    Calcula el tiempo promedio real de cierre o devuelve 'Sin datos'.
+    """
     init_db()
     conn = get_db()
     cursor = conn.cursor()
 
     today_str = date.today().strftime("%Y-%m-%d")
 
-    # 1. Hallazgos cerrados en término
-    cursor.execute("SELECT COUNT(*) FROM action_plans WHERE LOWER(status) LIKE '%completado%' OR LOWER(status) LIKE '%cerrado%'")
+    cursor.execute("SELECT COUNT(*) FROM action_plans WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')")
     completed_cnt = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM action_plans")
     total_plans = cursor.fetchone()[0]
 
-    on_time_pct = round((completed_cnt / total_plans) * 100, 1) if total_plans > 0 else 100
+    on_time_pct = round((completed_cnt / total_plans) * 100, 1) if total_plans > 0 else 0
     on_time_status = "Verde" if on_time_pct >= 90 else "Amarillo" if on_time_pct >= 75 else "Rojo"
 
-    # 2. Planes de acción vencidos
     cursor.execute("""
         SELECT COUNT(*) FROM action_plans
-        WHERE target_date != '' AND target_date < ?
-          AND LOWER(status) NOT LIKE '%completado%' AND LOWER(status) NOT LIKE '%cerrado%'
+        WHERE target_date != '' AND target_date IS NOT NULL AND target_date < ?
+          AND LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')
     """, (today_str,))
     overdue_cnt = cursor.fetchone()[0]
     overdue_pct = round((overdue_cnt / total_plans) * 100, 1) if total_plans > 0 else 0
     overdue_status = "Verde" if overdue_pct <= 5 else "Amarillo" if overdue_pct <= 15 else "Rojo"
 
-    # 3. Propuestas sin plan de acción
     cursor.execute("""
         SELECT COUNT(*) FROM proposals p
         LEFT JOIN action_plans pa ON pa.proposal_id = p.id
@@ -1007,33 +1285,56 @@ def get_kpi_indicators():
     unassigned_prop_cnt = cursor.fetchone()[0]
     unassigned_status = "Verde" if unassigned_prop_cnt == 0 else "Amarillo" if unassigned_prop_cnt <= 2 else "Rojo"
 
-    # 4. Hallazgos de riesgo alto abiertos
-    cursor.execute("SELECT COUNT(*) FROM findings WHERE LOWER(severity) = 'alto' AND LOWER(status) NOT LIKE '%cerrado%'")
+    cursor.execute("SELECT COUNT(*) FROM findings WHERE LOWER(severity) = 'alto' AND LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')")
     open_high_risk = cursor.fetchone()[0]
     high_risk_status = "Verde" if open_high_risk == 0 else "Amarillo" if open_high_risk <= 2 else "Rojo"
 
-    # 5. Planes próximos a vencer (próximos 15 días)
     future_15 = (date.today() + timedelta(days=15)).strftime("%Y-%m-%d")
     cursor.execute("""
         SELECT COUNT(*) FROM action_plans
-        WHERE target_date != '' AND target_date >= ? AND target_date <= ?
-          AND LOWER(status) NOT LIKE '%completado%' AND LOWER(status) NOT LIKE '%cerrado%'
+        WHERE target_date != '' AND target_date IS NOT NULL AND target_date >= ? AND target_date <= ?
+          AND LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')
     """, (today_str, future_15))
     due_soon_cnt = cursor.fetchone()[0]
     due_soon_status = "Verde" if due_soon_cnt == 0 else "Amarillo"
 
+    cursor.execute("""
+        SELECT created_at, closed_date FROM action_plans
+        WHERE closed_date IS NOT NULL AND closed_date != '' AND closed_date != 'None'
+    """)
+    closed_rows = cursor.fetchall()
+    if closed_rows:
+        tot_days = 0
+        cnt_c = 0
+        for r in closed_rows:
+            try:
+                st = datetime.strptime(str(r["created_at"])[:10], "%Y-%m-%d")
+                cl = datetime.strptime(str(r["closed_date"])[:10], "%Y-%m-%d")
+                diff = (cl - st).days
+                if diff >= 0:
+                    tot_days += diff
+                    cnt_c += 1
+            except Exception:
+                pass
+        avg_days = round(tot_days / cnt_c) if cnt_c > 0 else 0
+        avg_days_val = f"{avg_days} días"
+        avg_status = "Verde" if avg_days <= 30 else "Amarillo" if avg_days <= 60 else "Rojo"
+    else:
+        avg_days_val = "Sin datos"
+        avg_status = "Verde"
+
     indicators = [
         {
             "name": "Hallazgos cerrados en término",
-            "value": f"{on_time_pct}%",
+            "value": f"{on_time_pct}%" if total_plans > 0 else "Sin datos",
             "target": "Meta ≥ 90%",
             "status": on_time_status,
             "filter_key": "status",
-            "filter_val": "Completada"
+            "filter_val": "Finalizado"
         },
         {
             "name": "Planes de acción vencidos",
-            "value": f"{overdue_cnt} ({overdue_pct}%)",
+            "value": f"{overdue_cnt} ({overdue_pct}%)" if total_plans > 0 else "Sin datos",
             "target": "Meta ≤ 5%",
             "status": overdue_status,
             "filter_key": "overdue",
@@ -1065,104 +1366,16 @@ def get_kpi_indicators():
         },
         {
             "name": "Tiempo promedio de cierre",
-            "value": "18 días",
+            "value": avg_days_val,
             "target": "Meta ≤ 30 días",
-            "status": "Verde",
+            "status": avg_status,
             "filter_key": "status",
-            "filter_val": "Completada"
+            "filter_val": "Finalizado"
         }
     ]
 
     conn.close()
     return indicators
-
-
-def seed_relational_demo_data():
-    init_db()
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM reports")
-    if cursor.fetchone()[0] > 0:
-        conn.close()
-        return
-
-    conn.close()
-
-    report_1 = {
-        "title": "Auditoría de Inventarios y Bienes de Uso 2026",
-        "process": "Inventarios y Control de Stock",
-        "area": "Tiendas / Stock",
-        "period": "Ene-Jun 2026",
-        "auditor": "Auditoría Interna",
-        "summary": "Revisión integral de saldos de proveedores, rotación de activos y diferencias en recuentos físicos."
-    }
-
-    findings_1 = [
-        {
-            "code": "H-2026-001",
-            "title": "Diferencias en saldos de proveedores y pasivos",
-            "situation": "Conciliación de saldos de proveedores con discrepancias no justificadas al cierre contable.",
-            "risk": "Riesgo de registración errónea del pasivo e imprecisión financiera.",
-            "severity": "Alto",
-            "responsible_area": "Contabilidad",
-            "action_owner": "Hernán López",
-            "status": "En proceso",
-            "proposals": [
-                {
-                    "code": "PM-2026-001",
-                    "title": "Circularización obligatoria mensual de saldos de proveedores",
-                    "proposal_text": "Implementar rutina mensual de confirmación de saldos con principales proveedores en SAP.",
-                    "target_date": "2026-10-15",
-                    "status": "En proceso",
-                    "action_plans": [
-                        {
-                            "code": "PA-2026-001",
-                            "title": "Crear reporte automático de conciliación de proveedores",
-                            "action_text": "Configurar transacción Z en SAP para envío masivo de circularizaciones.",
-                            "action_owner": "Hernán López",
-                            "target_date": "2026-09-30",
-                            "progress_pct": 60,
-                            "status": "En proceso",
-                            "notes": "Desarrollo SAP en testing con área de sistemas."
-                        }
-                    ]
-                }
-            ]
-        },
-        {
-            "code": "H-2026-002",
-            "title": "Materiales de consumo con vida útil igual a 0",
-            "situation": "Existencia de materiales parametrizados con vida útil nula en el maestro de repuestos.",
-            "risk": "Inexactitud en la valorización y amortización del activo fijo.",
-            "severity": "Medio",
-            "responsible_area": "Abastecimiento",
-            "action_owner": "Kari Gómez",
-            "status": "Pendiente",
-            "proposals": [
-                {
-                    "code": "PM-2026-002",
-                    "title": "Parametrización de control automático de vida útil < 75%",
-                    "proposal_text": "Definir regla de sistema para alertar ítems con amortización nula.",
-                    "target_date": "2026-10-31",
-                    "status": "Planificada",
-                    "action_plans": [
-                        {
-                            "code": "PA-2026-002",
-                            "title": "Depurar maestro de artículos en ERP",
-                            "action_text": "Revisar lista de repuestos críticos y actualizar tabla de amortización.",
-                            "action_owner": "Kari Gómez",
-                            "target_date": "2026-10-15",
-                            "progress_pct": 10,
-                            "status": "Pendiente",
-                            "notes": "Planificación iniciada con jefe de almacén."
-                        }
-                    ]
-                }
-            ]
-        }
-    ]
-
-    save_relational_report_structure(report_1, findings_1, "Proveedores_y_VidaUtil_2026.xlsx")
 
 
 def get_active_alerts():
@@ -1172,20 +1385,18 @@ def get_active_alerts():
 
     today_dt = date.today()
     today_str = today_dt.strftime("%Y-%m-%d")
-    future_7_str = (today_dt + timedelta(days=7)).strftime("%Y-%m-%d")
 
     overdue_alerts = []
     due_today_alerts = []
     due_soon_alerts = []
     attention_alerts = []
 
-    # 1. Propuestas y Planes Vencidos / Próximos
     cursor.execute("""
         SELECT 'propuesta' as item_type, p.id, p.code, p.title, p.proposal_text as text, p.target_date, p.status, f.id as finding_id, f.code as finding_code, r.auditor as report_auditor
         FROM proposals p
         JOIN findings f ON p.finding_id = f.id
         JOIN reports r ON f.report_id = r.id
-        WHERE p.target_date != '' AND LOWER(p.status) NOT IN ('completada', 'cerrada', 'implementada')
+        WHERE p.target_date != '' AND p.target_date IS NOT NULL AND LOWER(p.status) NOT IN ('finalizado', 'completada', 'cerrada', 'implementada')
     """)
     props = [dict(r) for r in cursor.fetchall()]
 
@@ -1195,7 +1406,7 @@ def get_active_alerts():
         JOIN proposals p ON pa.proposal_id = p.id
         JOIN findings f ON p.finding_id = f.id
         JOIN reports r ON f.report_id = r.id
-        WHERE pa.target_date != '' AND LOWER(pa.status) NOT IN ('completado', 'cerrado')
+        WHERE pa.target_date != '' AND pa.target_date IS NOT NULL AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado')
     """)
     plans = [dict(r) for r in cursor.fetchall()]
 
@@ -1245,7 +1456,6 @@ def get_active_alerts():
         except Exception:
             pass
 
-    # 2. Propuestas sin Plan de Acción
     cursor.execute("""
         SELECT p.id, p.code, p.title, p.proposal_text, f.id as finding_id, r.auditor as report_auditor
         FROM proposals p
@@ -1266,7 +1476,6 @@ def get_active_alerts():
             "message": f"{r['code']} continúa sin Plan de Acción asociado."
         })
 
-    # 3. Hallazgos de riesgo Alto sin propuesta
     cursor.execute("""
         SELECT f.id, f.code, f.title, r.auditor as report_auditor
         FROM findings f
@@ -1286,7 +1495,6 @@ def get_active_alerts():
             "message": f"{r['code']} de riesgo Alto no posee una Propuesta de Mejora asociada."
         })
 
-    # 4. Plan sin actualización en 30 días
     past_30_str = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
     cursor.execute("""
         SELECT pa.id, pa.code, pa.action_text, f.id as finding_id, r.auditor as report_auditor
@@ -1294,7 +1502,7 @@ def get_active_alerts():
         JOIN proposals p ON pa.proposal_id = p.id
         JOIN findings f ON p.finding_id = f.id
         JOIN reports r ON f.report_id = r.id
-        WHERE pa.last_updated < ? AND LOWER(pa.status) NOT IN ('completado', 'cerrado')
+        WHERE pa.last_updated < ? AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado')
     """, (past_30_str,))
     for r in cursor.fetchall():
         attention_alerts.append({
@@ -1308,7 +1516,6 @@ def get_active_alerts():
             "message": f"{r['code']} no registra actualizaciones desde hace 30 días."
         })
 
-    # 5. Nueva evidencia cargada
     cursor.execute("""
         SELECT pa.id, pa.code, pa.evidence_file, f.id as finding_id, r.auditor as report_auditor
         FROM action_plans pa
@@ -1330,7 +1537,6 @@ def get_active_alerts():
             "message": f"Nueva evidencia cargada para {r['code']}."
         })
 
-    # 6. Propuesta sin responsable o sin fecha compromiso
     cursor.execute("""
         SELECT p.id, p.code, p.title, p.proposal_text, f.id as finding_id, r.auditor as report_auditor
         FROM proposals p
@@ -1351,7 +1557,6 @@ def get_active_alerts():
             "message": f"{r['code']} requiere definir responsable o fecha compromiso."
         })
 
-
     conn.close()
 
     total_count = len(overdue_alerts) + len(due_today_alerts) + len(due_soon_alerts) + len(attention_alerts)
@@ -1363,4 +1568,3 @@ def get_active_alerts():
         "due_soon": due_soon_alerts,
         "attention": attention_alerts
     }
-

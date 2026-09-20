@@ -7,6 +7,10 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+_TMP_INIT_PATH = tempfile.mktemp(suffix=".db")
+os.environ["DATABASE_PATH"] = _TMP_INIT_PATH
+
+import database
 from app import app
 from database import init_db, save_relational_report_structure, get_all_findings, get_all_proposals
 from report_parser import parse_audit_report, extract_raw_text_from_file
@@ -15,9 +19,20 @@ from report_parser import parse_audit_report, extract_raw_text_from_file
 class AuditTrackRelationalTests(unittest.TestCase):
 
     def setUp(self):
+        self.tmp_fd, self.tmp_path = tempfile.mkstemp(suffix=".db")
+        os.close(self.tmp_fd)
+        os.environ["DATABASE_PATH"] = self.tmp_path
+        database.DB_PATH = self.tmp_path
+        database.init_db()
         self.app = app.test_client()
         self.app.testing = True
-        init_db()
+
+    def tearDown(self):
+        if hasattr(self, "tmp_path") and os.path.exists(self.tmp_path):
+            try:
+                os.remove(self.tmp_path)
+            except Exception:
+                pass
 
     def test_health_endpoint(self):
         res = self.app.get("/health")
@@ -321,8 +336,8 @@ Informe de Auditoría Tabular 2026
         self.assertGreater(len(plans), 0)
         plan_id = plans[0]["id"]
 
-        # Actualizar el plan al 100%
-        res_upd = self.app.post(f"/action-plans/{plan_id}", data=json.dumps({"progress_pct": 100}), content_type='application/json')
+        # Actualizar el plan al 100% y confirmar finalización
+        res_upd = self.app.post(f"/action-plans/{plan_id}", data=json.dumps({"progress_pct": 100, "confirm_finalize": True}), content_type='application/json')
         self.assertEqual(res_upd.status_code, 200)
 
         # Verificar que la propuesta y el hallazgo se hayan actualizado a Finalizado

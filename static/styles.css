@@ -635,6 +635,8 @@ body {
 
 .pill-pendiente { background: #FFEDD5; color: #C2410C; border: 1px solid #FED7AA; }
 .pill-en-proceso, .pill-en_proceso { background: #DBEAFE; color: #1E40AF; border: 1px solid #BFDBFE; }
+.pill-vencido { background: #FEE2E2; color: #991B1B; border: 1px solid #FCA5A5; }
+.pill-en-suspension, .pill-en_suspension { background: #E2E8F0; color: #475569; border: 1px solid #CBD5E1; }
 .pill-planificada { background: #DBEAFE; color: #2563EB; border: 1px solid #BFDBFE; }
 .pill-completada, .pill-finalizado, .pill-implementada { background: #DCFCE7; color: #166534; border: 1px solid #BBF7D0; }
 

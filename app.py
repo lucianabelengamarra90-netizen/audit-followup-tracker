@@ -365,8 +365,9 @@ def update_action_plan_route(plan_id):
     evidence_file = data.get("evidence_file")
     action_owner = data.get("action_owner")
     user_name = data.get("user_name") or "Auditoría Interna"
+    confirm_finalize = bool(data.get("confirm_finalize", False) or data.get("confirmed", False))
 
-    updated = update_action_plan(plan_id, status, progress_pct, notes, target_date, evidence_file, action_owner, user_name)
+    updated = update_action_plan(plan_id, status, progress_pct, notes, target_date, evidence_file, action_owner, user_name, confirm_finalize)
     if updated:
         return jsonify({"message": "Plan de Acción actualizado."})
     return jsonify({"error": "Plan de Acción no encontrado."}), 404
@@ -488,7 +489,7 @@ def export_excel():
                 target_date,
                 eff_status,
                 f"{pct}%",
-                "",
+                first_action.get("action_text") or first_action.get("title", ""),
                 f.get("observations", "")
             ]
             for col_idx, v in enumerate(vals, start=1):
@@ -751,7 +752,7 @@ def import_excel():
                                 "progress_pct": pct,
                                 "notes": obs
                             }
-                        ] if actions else []
+                        ] if (actions or pct > 0) else []
                     }
                 ]
             }
