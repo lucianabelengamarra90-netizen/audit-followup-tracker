@@ -88,6 +88,22 @@ def health():
     return jsonify({"status": "ok", "app": "AuditTrack Relacional"})
 
 
+@app.route("/api/admin/purge", methods=["POST", "GET"])
+def admin_purge():
+    conn = database.get_db()
+    cursor = conn.cursor()
+    tables = ["action_plans", "proposals", "findings", "reports", "audit_history", "code_sequences"]
+    for tbl in tables:
+        try:
+            cursor.execute(f"DELETE FROM {tbl}")
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "purged", "message": "Todos los datos de prueba han sido eliminados de la base de datos."})
+
+
+
 @app.route("/upload-report", methods=["POST"])
 def upload_report():
     if "file" not in request.files:
