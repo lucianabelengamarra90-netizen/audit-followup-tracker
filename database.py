@@ -526,33 +526,32 @@ def get_all_reports():
     cursor.execute("SELECT * FROM reports ORDER BY created_at DESC")
     reports = [dict(r) for r in cursor.fetchall()]
 
+    if not reports:
+        conn.close()
+        return []
+
+    counts_sql = """
+        SELECT r.id as report_id,
+               COUNT(DISTINCT f.id) as findings_count,
+               COUNT(DISTINCT p.id) as proposals_count,
+               COUNT(DISTINCT pa.id) as action_plans_count,
+               COUNT(DISTINCT CASE WHEN LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivada') THEN pa.id END) as pending_plans_count
+        FROM reports r
+        LEFT JOIN findings f ON f.report_id = r.id
+        LEFT JOIN proposals p ON p.finding_id = f.id
+        LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+        GROUP BY r.id
+    """
+    cursor.execute(counts_sql)
+    counts_map = {row["report_id"]: dict(row) for row in cursor.fetchall()}
+
     for rep in reports:
         rep_id = rep["id"]
-        cursor.execute("SELECT COUNT(*) FROM findings WHERE report_id = ?", (rep_id,))
-        rep["findings_count"] = cursor.fetchone()[0]
-
-        cursor.execute("""
-            SELECT COUNT(*) FROM proposals p
-            JOIN findings f ON p.finding_id = f.id
-            WHERE f.report_id = ?
-        """, (rep_id,))
-        rep["proposals_count"] = cursor.fetchone()[0]
-
-        cursor.execute("""
-            SELECT COUNT(*) FROM action_plans pa
-            JOIN proposals p ON pa.proposal_id = p.id
-            JOIN findings f ON p.finding_id = f.id
-            WHERE f.report_id = ?
-        """, (rep_id,))
-        rep["action_plans_count"] = cursor.fetchone()[0]
-
-        cursor.execute("""
-            SELECT COUNT(*) FROM action_plans pa
-            JOIN proposals p ON pa.proposal_id = p.id
-            JOIN findings f ON p.finding_id = f.id
-            WHERE f.report_id = ? AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivada')
-        """, (rep_id,))
-        rep["pending_plans_count"] = cursor.fetchone()[0]
+        c_info = counts_map.get(rep_id, {})
+        rep["findings_count"] = c_info.get("findings_count", 0)
+        rep["proposals_count"] = c_info.get("proposals_count", 0)
+        rep["action_plans_count"] = c_info.get("action_plans_count", 0)
+        rep["pending_plans_count"] = c_info.get("pending_plans_count", 0)
 
     conn.close()
     return reports
@@ -620,36 +619,56 @@ def get_all_findings(filters=None):
     cursor.execute(query, params)
     findings = [dict(row) for row in cursor.fetchall()]
 
+    if not findings:
+        conn.close()
+        return []
+
+    finding_ids = [f["id"] for f in findings]
+
+    placeholders = ", ".join(["?"] * len(finding_ids))
+    cursor.execute(f"SELECT * FROM proposals WHERE finding_id IN ({placeholders}) ORDER BY code ASC", finding_ids)
+    all_proposals = [dict(p) for p in cursor.fetchall()]
+
+    proposal_ids = [p["id"] for p in all_proposals]
+
+    all_plans_map = {}
+    if proposal_ids:
+        pl_placeholders = ", ".join(["?"] * len(proposal_ids))
+        cursor.execute(f"SELECT * FROM action_plans WHERE proposal_id IN ({pl_placeholders}) ORDER BY code ASC", proposal_ids)
+        for pa in cursor.fetchall():
+            pa_dict = dict(pa)
+            pa_dict["effective_status"] = compute_effective_status(pa_dict.get("status"), pa_dict.get("target_date"))
+            all_plans_map.setdefault(pa_dict["proposal_id"], []).append(pa_dict)
+
+    proposals_map = {}
+    for p in all_proposals:
+        p_id = p["id"]
+        plans = all_plans_map.get(p_id, [])
+        p["action_plans"] = plans
+        p["action_plans_count"] = len(plans)
+
+        p_target = p.get("target_date")
+        if not p_target and plans:
+            dates = [pa["target_date"] for pa in plans if pa.get("target_date")]
+            p_target = min(dates) if dates else None
+
+        p_eff = compute_effective_status(p.get("status"), p_target)
+        if p_eff == "En proceso" and plans:
+            if any(pa.get("effective_status") == "Vencido" for pa in plans):
+                p_eff = "Vencido"
+        p["effective_status"] = p_eff
+        proposals_map.setdefault(p["finding_id"], []).append(p)
+
     for f in findings:
         f_id = f["id"]
-        cursor.execute("SELECT * FROM proposals WHERE finding_id = ? ORDER BY code ASC", (f_id,))
-        proposals = [dict(p) for p in cursor.fetchall()]
-
-        for p in proposals:
-            p_id = p["id"]
-            cursor.execute("SELECT * FROM action_plans WHERE proposal_id = ? ORDER BY code ASC", (p_id,))
-            plans = [dict(pa) for pa in cursor.fetchall()]
-            for pa in plans:
-                pa["effective_status"] = compute_effective_status(pa.get("status"), pa.get("target_date"))
-            p["action_plans"] = plans
-            
-            p_target = p.get("target_date")
-            if not p_target and plans:
-                dates = [pa["target_date"] for pa in plans if pa.get("target_date")]
-                p_target = min(dates) if dates else None
-            p_eff = compute_effective_status(p.get("status"), p_target)
-            if p_eff == "En proceso" and plans:
-                if any(pa.get("effective_status") == "Vencido" for pa in plans):
-                    p_eff = "Vencido"
-            p["effective_status"] = p_eff
-
-        f["proposals"] = proposals
-        f["proposals_count"] = len(proposals)
-        f["action_plans_count"] = sum(len(p["action_plans"]) for p in proposals)
+        props = proposals_map.get(f_id, [])
+        f["proposals"] = props
+        f["proposals_count"] = len(props)
+        f["action_plans_count"] = sum(p["action_plans_count"] for p in props)
 
         f_eff = compute_effective_status(f.get("status"), None)
-        if f_eff == "En proceso" and proposals:
-            if any(p.get("effective_status") == "Vencido" for p in proposals):
+        if f_eff == "En proceso" and props:
+            if any(p.get("effective_status") == "Vencido" for p in props):
                 f_eff = "Vencido"
         f["effective_status"] = f_eff
 
@@ -667,6 +686,7 @@ def get_all_findings(filters=None):
             findings = [f for f in findings if f["effective_status"].lower() == "finalizado"]
 
     return findings
+
 
 
 def get_finding_detail(finding_id):
@@ -931,12 +951,25 @@ def get_all_proposals(filters=None):
     cursor.execute(query, params)
     proposals = [dict(row) for row in cursor.fetchall()]
 
+    if not proposals:
+        conn.close()
+        return []
+
+    prop_ids = [p["id"] for p in proposals]
+    pl_placeholders = ", ".join(["?"] * len(prop_ids))
+    cursor.execute(f"SELECT * FROM action_plans WHERE proposal_id IN ({pl_placeholders}) ORDER BY code ASC", prop_ids)
+
+    plans_map = {}
+    for pa in cursor.fetchall():
+        pa_dict = dict(pa)
+        pa_dict["effective_status"] = compute_effective_status(pa_dict.get("status"), pa_dict.get("target_date"))
+        plans_map.setdefault(pa_dict["proposal_id"], []).append(pa_dict)
+
+    conn.close()
+
     for p in proposals:
         p_id = p["id"]
-        cursor.execute("SELECT * FROM action_plans WHERE proposal_id = ? ORDER BY code ASC", (p_id,))
-        plans = [dict(pa) for pa in cursor.fetchall()]
-        for pa in plans:
-            pa["effective_status"] = compute_effective_status(pa.get("status"), pa.get("target_date"))
+        plans = plans_map.get(p_id, [])
         p["action_plans"] = plans
         p["action_plans_count"] = len(plans)
 
@@ -951,8 +984,6 @@ def get_all_proposals(filters=None):
                 p_eff = "Vencido"
         p["effective_status"] = p_eff
 
-    conn.close()
-
     if filters and filters.get("status"):
         st_filter = filters["status"].strip().lower()
         if st_filter == "vencido":
@@ -965,6 +996,7 @@ def get_all_proposals(filters=None):
             proposals = [p for p in proposals if p["effective_status"].lower() == "finalizado"]
 
     return proposals
+
 
 
 def get_all_action_plans(filters=None):
