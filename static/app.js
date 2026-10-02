@@ -1422,38 +1422,148 @@ function renderCriticalPendingTable(criticalItems) {
 }
 
 // ============================================================
-// 5. INDICADORES TAB (KPIs DE AUDITORÍA CON SEMÁFOROS Y FILTROS)
+// 5. INDICADORES TAB (DASHBOARD EJECUTIVO KPIS & TABLA DECISIONES)
 // ============================================================
+
+let currentExecutiveKPIs = null;
+let currentDecisionFilter = null;
 
 async function loadKpiIndicatorsTab() {
     try {
-        const res = await fetch("/kpi-indicators");
+        const res = await fetch("/api/kpi-executive");
         if (!res.ok) return;
-        currentKpiIndicators = (await res.json()).indicators || [];
-        renderKpiIndicatorsTable(currentKpiIndicators);
+        const data = await res.json();
+        currentExecutiveKPIs = data.kpis || data.indicators || {};
+        renderExecutiveKpiCards(currentExecutiveKPIs);
+        renderAreaBreakdownList();
+        renderDecisionTable(currentDecisionFilter);
     } catch (err) {
-        console.error("Error cargando indicadores:", err);
+        console.error("Error cargando indicadores ejecutivos:", err);
     }
 }
 
-function renderKpiIndicatorsTable(indicators) {
-    const tbody = el("kpiTableBody");
-    if (!tbody) return;
+function renderExecutiveKpiCards(kpis) {
+    if (!kpis) return;
 
-    tbody.innerHTML = indicators.map(kpi => {
-        const colorClass = kpi.status === "Verde" ? "semaforo-verde" : kpi.status === "Amarillo" ? "semaforo-amarillo" : "semaforo-rojo";
+    // 1. Riesgo Alto Abierto
+    const hr = kpis.high_risk_open || {};
+    if (el("execValHighRisk")) el("execValHighRisk").textContent = hr.count ?? 0;
+    if (el("execContextHighRisk")) el("execContextHighRisk").textContent = hr.context || "0 hallazgos críticos";
+
+    // 2. Compromisos Vencidos
+    const ov = kpis.overdue_commitments || {};
+    if (el("execValOverdue")) el("execValOverdue").textContent = ov.count ?? 0;
+    if (el("execContextOverdue")) el("execContextOverdue").textContent = ov.context || "0 planes vencidos";
+
+    // 3. Implementación Validada
+    const vi = kpis.validated_implementation || {};
+    if (el("execValValidated")) el("execValValidated").textContent = vi.percentage || "0%";
+    if (el("execContextValidated")) el("execContextValidated").textContent = vi.context || "0 propuestas validadas";
+
+    // 4. Cierre en Plazo
+    const ot = kpis.on_time_closure || {};
+    if (el("execValOnTime")) el("execValOnTime").textContent = ot.percentage || "Sin datos";
+    if (el("execContextOnTime")) el("execContextOnTime").textContent = ot.context || "0 cierres evaluables";
+
+    // 5. Pendiente de Validación
+    const pv = kpis.pending_validation || {};
+    if (el("execValPendingVal")) el("execValPendingVal").textContent = pv.count ?? 0;
+    if (el("execContextPendingVal")) el("execContextPendingVal").textContent = pv.context || "0 compromisos al 100%";
+}
+
+function renderAreaBreakdownList() {
+    const container = el("areaBreakdownList");
+    if (!container) return;
+
+    const areaMap = {};
+    (currentFindings || []).forEach(f => {
+        const area = f.responsible_area || "Operaciones";
+        if (!areaMap[area]) {
+            areaMap[area] = { total: 0, high: 0, open: 0 };
+        }
+        areaMap[area].total += 1;
+        if ((f.severity || "").toLowerCase() === "alto") areaMap[area].high += 1;
+        if ((f.status || "").toLowerCase() !== "finalizado") areaMap[area].open += 1;
+    });
+
+    const areas = Object.keys(areaMap).sort((a, b) => areaMap[b].total - areaMap[a].total);
+
+    if (areas.length === 0) {
+        container.innerHTML = `<div style="padding: 16px; color: #64748B; text-align: center;">No hay hallazgos registrados por área.</div>`;
+        return;
+    }
+
+    container.innerHTML = areas.map(area => {
+        const info = areaMap[area];
         return `
-            <tr>
-                <td><strong>${escapeHtml(kpi.name)}</strong></td>
-                <td style="font-size: 16px; font-weight: 700; color: #0F172A;">${escapeHtml(kpi.value)}</td>
-                <td><span style="font-size: 12px; color: #64748B;">${escapeHtml(kpi.target)}</span></td>
-                <td><span class="semaforo-badge ${colorClass}">● ${escapeHtml(kpi.status)}</span></td>
-                <td>
-                    <button class="btn btn-outlined" style="padding: 4px 10px; font-size: 11px;" onclick="applyKpiFilter('${kpi.filter_key}', '${kpi.filter_val}')">👁️ Ver Registros</button>
-                </td>
-            </tr>
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid #E2E8F0;">
+                <div>
+                    <strong style="color:#0F172A; font-size:13px;">${escapeHtml(area)}</strong>
+                    <div style="font-size:11px; color:#64748B; margin-top:2px;">
+                        ${info.open} abiertos | <span style="color:#DC2626; font-weight:600;">${info.high} Riesgo Alto</span>
+                    </div>
+                </div>
+                <div style="background:#F1F5F9; font-size:12px; font-weight:700; color:#0F172A; padding:4px 10px; border-radius:12px;">
+                    ${info.total} hallazgos
+                </div>
+            </div>
         `;
     }).join("");
+}
+
+function renderDecisionTable(filterKey = null) {
+    const tbody = el("decisionTableBody");
+    const titleEl = el("decisionTableTitle");
+    if (!tbody) return;
+
+    let items = currentFindings || [];
+
+    if (filterKey === "high_risk") {
+        items = items.filter(f => (f.severity || "").toLowerCase() === "alto" && (f.status || "").toLowerCase() !== "finalizado");
+        if (titleEl) titleEl.textContent = "Tabla de Decisiones: Hallazgos de Riesgo Alto Abiertos";
+    } else if (filterKey === "overdue") {
+        items = items.filter(f => {
+            const status = (f.status || "").toLowerCase();
+            return status === "vencido" || isDateOverdue(f.target_date);
+        });
+        if (titleEl) titleEl.textContent = "Tabla de Decisiones: Compromisos Vencidos";
+    } else if (filterKey === "validated") {
+        items = items.filter(f => ["finalizado", "completado", "validado"].includes((f.status || "").toLowerCase()));
+        if (titleEl) titleEl.textContent = "Tabla de Decisiones: Implementaciones Validadas";
+    } else if (filterKey === "pending_val") {
+        items = items.filter(f => (f.progress_pct === 100 || (f.status || "").toLowerCase() === "pendiente de validación") && (f.status || "").toLowerCase() !== "finalizado");
+        if (titleEl) titleEl.textContent = "Tabla de Decisiones: Pendientes de Validación";
+    } else {
+        if (titleEl) titleEl.textContent = "Tabla de Decisiones Ejecutivas (Todos)";
+    }
+
+    if (items.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:#64748B;">No se encontraron registros para este filtro.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = items.map(item => `
+        <tr>
+            <td>
+                <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${item.code}'); return false;">${escapeHtml(item.code)}</a>
+                <div style="font-size:11px; color:#475569; max-width:280px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">${escapeHtml(item.title || item.situation)}</div>
+            </td>
+            <td>${escapeHtml(item.responsible_area || "Operaciones")}</td>
+            <td><span class="pill pill-${(item.severity || 'medio').toLowerCase()}">${escapeHtml(item.severity)}</span></td>
+            <td><strong>${escapeHtml(item.action_owner || "Auditoría")}</strong></td>
+            <td><span class="pill pill-${(item.status || 'en proceso').toLowerCase().replace(' ', '-')}">${escapeHtml(item.status || "En proceso")}</span></td>
+        </tr>
+    `).join("");
+}
+
+function filterDecisionTable(filterKey) {
+    currentDecisionFilter = filterKey;
+    renderDecisionTable(filterKey);
+}
+
+function resetDecisionTableFilter() {
+    currentDecisionFilter = null;
+    renderDecisionTable(null);
 }
 
 function applyKpiFilter(key, val) {
@@ -1976,8 +2086,111 @@ function updateSidebarMetrics() {
     if (pctEl) pctEl.textContent = `${pct}%`;
 }
 
+// ============================================================
+// AUTHENTICATION & ROLE-BASED ACCESS CONTROL (RBAC)
+// ============================================================
+
+window.currentUser = null;
+window.currentUserRole = "Validador";
+
+async function initUserSession() {
+    try {
+        const res = await fetch("/api/user");
+        if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.user) {
+                window.currentUser = data.user;
+                window.currentUserRole = data.user.role || "Validador";
+                updateUserHeaderUI(data.user);
+            }
+        }
+    } catch (e) {
+        console.error("Error cargando usuario:", e);
+    }
+    applyRolePermissions();
+}
+
+function updateUserHeaderUI(user) {
+    if (!user) return;
+    const nameEl = el("userName");
+    const roleBadge = el("userRoleBadge");
+    const avatarEl = el("userAvatar");
+    const selectEl = el("roleSwitcherSelect");
+
+    if (nameEl) nameEl.textContent = user.name || user.username;
+    if (roleBadge) {
+        roleBadge.textContent = user.role;
+        roleBadge.className = user.role === "Validador" ? "pill pill-alto" : user.role === "Editor" ? "pill pill-en-proceso" : "pill pill-bajo";
+    }
+    if (avatarEl) {
+        const initials = (user.name || user.username || "U").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+        avatarEl.textContent = initials || "LG";
+    }
+    if (selectEl) {
+        selectEl.value = user.username || "admin";
+    }
+}
+
+async function switchUserRole(usernameKey) {
+    const passwords = {
+        "admin": "audit2026admin",
+        "editor": "audit2026editor",
+        "lector": "audit2026reader",
+        "luciana": "audit2026admin"
+    };
+    const pwd = passwords[usernameKey] || "audit2026admin";
+    try {
+        const res = await fetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: usernameKey, password: pwd })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.user) {
+                window.currentUser = data.user;
+                window.currentUserRole = data.user.role;
+                updateUserHeaderUI(data.user);
+                applyRolePermissions();
+                showToast(`Rol cambiado a: ${data.user.role} (${data.user.name})`, "success");
+            }
+        } else {
+            showToast("Error al cambiar de rol.", "error");
+        }
+    } catch (e) {
+        console.error("Error al cambiar rol:", e);
+    }
+}
+
+async function logoutCurrentSession() {
+    await fetch("/logout", { method: "POST" });
+    window.location.reload();
+}
+
+function applyRolePermissions() {
+    const role = window.currentUserRole || "Validador";
+    const isReader = role === "Consulta";
+    const isValidator = role === "Validador";
+
+    // Botones de edición / carga
+    const uploadBtn = document.querySelector('button[onclick*="reportInputMainTab"]');
+    if (uploadBtn) uploadBtn.style.display = isReader ? "none" : "inline-flex";
+
+    const createPlanBtn = document.querySelector('button[onclick*="openNewActionPlanModal"]');
+    if (createPlanBtn) createPlanBtn.style.display = isReader ? "none" : "inline-flex";
+
+    const drawerSaveBtn = document.querySelector('button[onclick*="saveFindingFromDrawer"]');
+    if (drawerSaveBtn) drawerSaveBtn.style.display = isReader ? "none" : "block";
+
+    // Visibilidad de acciones de eliminación (requieren Validador)
+    document.querySelectorAll(".btn-delete-report, .btn-delete-finding").forEach(btn => {
+        btn.style.display = isValidator ? "inline-block" : "none";
+    });
+}
+
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", () => {
     switchTab("hallazgos");
+    initUserSession();
     loadAllData();
 });

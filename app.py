@@ -28,13 +28,19 @@ from database import (
     get_history_logs,
     add_history_log,
     get_active_alerts,
-    get_proposal_by_id_or_code
+    get_proposal_by_id_or_code,
+    get_executive_kpis
+)
+from domain.auth import (
+    get_current_user, login_user, logout_user, require_auth, require_role,
+    ROLE_READER, ROLE_EDITOR, ROLE_VALIDATOR, DEMO_USERS
 )
 from report_parser import parse_audit_report, clean_text
 
 init_db()
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "audittrack-secret-key-2026-v11")
 app.config["MAX_CONTENT_LENGTH"] = 250 * 1024 * 1024
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -84,8 +90,46 @@ def index():
 
 
 @app.route("/health")
+@app.route("/api/health")
 def health():
-    return jsonify({"status": "ok", "app": "AuditTrack Relacional"})
+    db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+    db_engine = "postgresql" if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")) else "sqlite"
+    return jsonify({
+        "status": "ok",
+        "app": "AuditTrack Relacional",
+        "version": "v1.1.0",
+        "base_tag": "v1.0.0-base-2026-10-02",
+        "commit": "cea1a03",
+        "db_engine": db_engine,
+        "ai_enabled": False,
+        "timestamp": datetime.now().isoformat()
+    })
+
+
+@app.route("/api/user")
+def api_user():
+    return jsonify({"success": True, "user": get_current_user()})
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        data = request.get_json(silent=True) or request.form
+        username = data.get("username", "").strip()
+        password = data.get("password", "").strip()
+        
+        success, user_info = login_user(username, password)
+        if success:
+            return jsonify({"success": True, "user": user_info})
+        return jsonify({"success": False, "error": "Credenciales inválidas. Verifique usuario y contraseña."}), 401
+        
+    return jsonify({"success": True, "current_user": get_current_user(), "available_demo_users": ["lector", "editor", "admin"]})
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    logout_user()
+    return jsonify({"success": True, "message": "Sesión cerrada correctamente."})
 
 
 
@@ -382,9 +426,10 @@ def dashboard_stats_route():
 
 
 @app.route("/kpi-indicators")
+@app.route("/api/kpi-executive")
 def kpi_indicators_route():
-    kpis = get_kpi_indicators()
-    return jsonify({"indicators": kpis})
+    kpis = get_executive_kpis()
+    return jsonify({"indicators": kpis, "kpis": kpis})
 
 
 @app.route("/api/notifications")

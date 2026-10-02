@@ -44,12 +44,19 @@
                 </div>
             </div>
 
-            <div class="user-avatar">AI</div>
+            <div class="user-avatar" id="userAvatar">LG</div>
             <div class="user-info">
-                <strong>Auditoría Interna</strong>
-                <span>Equipo Auditor</span>
+                <strong id="userName">Luciana Gamarra</strong>
+                <span id="userRoleBadge" class="pill pill-en-proceso" style="font-size:10px; padding:2px 6px;">Validador</span>
             </div>
-            <div class="header-quote">"Mejores procesos, mayores resultados"</div>
+            <div style="display:flex; align-items:center; gap:6px;">
+                <select id="roleSwitcherSelect" onchange="switchUserRole(this.value)" style="font-size:11px; padding:4px 8px; border-radius:6px; border:1px solid #CBD5E1; background:#F8FAFC; color:#0F172A; cursor:pointer;">
+                    <option value="admin">luciana (Validador)</option>
+                    <option value="editor">editor (Editor)</option>
+                    <option value="lector">lector (Consulta)</option>
+                </select>
+                <button type="button" class="btn btn-outlined" onclick="logoutCurrentSession()" style="padding:4px 8px; font-size:11px;" title="Cerrar sesión">🚪</button>
+            </div>
         </div>
     </header>
 
@@ -403,30 +410,79 @@
                 </div>
             </section>
 
-            <!-- 6. INDICADORES (AUDIT KPIS CON SEMÁFOROS Y METAS) -->
+            <!-- 6. INDICADORES (DASHBOARD EJECUTIVO Y 5 TARJETAS KPIS) -->
             <section class="tab-pane" id="tab-indicadores">
                 <div class="view-header">
                     <div>
-                        <h2>Indicadores de Auditoría Interna</h2>
-                        <p>KPIs de desempeño y cumplimiento con semaforización automatizada (Verde / Amarillo / Rojo).</p>
+                        <h2>Tablero Ejecutivo de Indicadores de Auditoría</h2>
+                        <p>Visión gerencial de desempeño, conciliación de 5 KPIs finitos y gestión por área responsable.</p>
                     </div>
                 </div>
 
-                <div class="table-card">
-                    <table class="audittrack-table">
-                        <thead>
-                            <tr>
-                                <th>Indicador</th>
-                                <th>Resultado Actual</th>
-                                <th>Meta</th>
-                                <th>Estado (Semáforo)</th>
-                                <th>Acción</th>
-                            </tr>
-                        </thead>
-                        <tbody id="kpiTableBody">
-                            <!-- Filas de indicadores -->
-                        </tbody>
-                    </table>
+                <!-- 5 TARJETAS EJECUTIVAS KPIS -->
+                <div class="kpi-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px;">
+                    <div class="kpi-card" id="execCardHighRisk" style="border-left: 4px solid #DC2626; cursor: pointer;" onclick="filterDecisionTable('high_risk')" title="Click para filtrar decisiones de riesgo alto">
+                        <div class="kpi-label" style="color: #991B1B;">Riesgo Alto Abierto</div>
+                        <div class="kpi-value" style="color: #DC2626;" id="execValHighRisk">0</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execContextHighRisk">0 hallazgos en 0 informes</div>
+                    </div>
+
+                    <div class="kpi-card" id="execCardOverdue" style="border-left: 4px solid #D97706; cursor: pointer;" onclick="filterDecisionTable('overdue')" title="Click para filtrar compromisos vencidos">
+                        <div class="kpi-label" style="color: #92400E;">Compromisos Vencidos</div>
+                        <div class="kpi-value" style="color: #D97706;" id="execValOverdue">0</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execContextOverdue">0 planes vencidos</div>
+                    </div>
+
+                    <div class="kpi-card" id="execCardValidated" style="border-left: 4px solid #16A34A; cursor: pointer;" onclick="filterDecisionTable('validated')" title="Click para ver propuestas validadas">
+                        <div class="kpi-label" style="color: #166534;">Implementación Validada</div>
+                        <div class="kpi-value" style="color: #16A34A;" id="execValValidated">0%</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execContextValidated">0 de 0 propuestas validadas</div>
+                    </div>
+
+                    <div class="kpi-card" id="execCardOnTime" style="border-left: 4px solid #0284C7; cursor: pointer;" onclick="filterDecisionTable('on_time')" title="Click para ver cierres en plazo">
+                        <div class="kpi-label" style="color: #075985;">Cierre en Plazo</div>
+                        <div class="kpi-value" style="color: #0284C7;" id="execValOnTime">Sin datos</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execContextOnTime">0 cierres evaluables</div>
+                    </div>
+
+                    <div class="kpi-card" id="execCardPendingVal" style="border-left: 4px solid #2563EB; cursor: pointer;" onclick="filterDecisionTable('pending_val')" title="Click para ver planes pendientes de validación">
+                        <div class="kpi-label" style="color: #1E40AF;">Pendiente de Validación</div>
+                        <div class="kpi-value" style="color: #2563EB;" id="execValPendingVal">0</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execContextPendingVal">0 compromisos al 100%</div>
+                    </div>
+                </div>
+
+                <!-- DESGLOSE POR ÁREA Y TABLA DE DECISIONES EJECUTIVAS -->
+                <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 20px; margin-bottom: 24px;">
+                    <div class="card">
+                        <h3 style="margin-bottom: 12px;">Desglose por Área Responsable</h3>
+                        <div id="areaBreakdownList" style="max-height: 380px; overflow-y: auto;">
+                            <!-- Lista dinámica de áreas -->
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <h3 id="decisionTableTitle">Tabla de Decisiones Ejecutivas</h3>
+                            <button class="btn btn-outlined" style="font-size: 11px;" onclick="resetDecisionTableFilter()">Ver Todos los Registros</button>
+                        </div>
+                        <div style="max-height: 380px; overflow-y: auto;">
+                            <table class="audittrack-table">
+                                <thead>
+                                    <tr>
+                                        <th>Código / Hallazgo</th>
+                                        <th>Área</th>
+                                        <th>Riesgo</th>
+                                        <th>Responsable</th>
+                                        <th>Estado</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="decisionTableBody">
+                                    <!-- Filas de la tabla de decisión -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </section>
 

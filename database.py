@@ -1392,133 +1392,128 @@ def get_dashboard_stats():
     }
 
 
-def get_kpi_indicators():
+def get_executive_kpis(filters=None):
     """
-    Retorna indicadores reales sin fallbacks duros inventados.
-    Calcula el tiempo promedio real de cierre o devuelve 'Sin datos'.
+    Calcula las 5 Tarjetas Ejecutivas de Indicadores con fórmulas finitas exactas:
+    1. Riesgo Alto Abierto: Hallazgos únicos con severidad Alto no finalizados.
+    2. Compromisos Vencidos: Planes activos En proceso con fecha compromiso vencida.
+    3. Implementación Validada: % de propuestas cerradas con validación registrada sobre total propuestas.
+    4. Cierre en Plazo: % de planes cerrados en o antes de su fecha compromiso (indica explícitamente excluidos por falta de fechas).
+    5. Pendiente de Validación: Planes al 100% de avance que requieren validación formal.
     """
     init_db()
     conn = get_db()
     cursor = conn.cursor()
 
-    today_str = date.today().strftime("%Y-%m-%d")
+    today_str = datetime.now().strftime("%Y-%m-%d")
 
-    cursor.execute("SELECT COUNT(*) FROM action_plans WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')")
-    completed_cnt = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM action_plans")
-    total_plans = cursor.fetchone()[0]
-
-    on_time_pct = round((completed_cnt / total_plans) * 100, 1) if total_plans > 0 else 0
-    on_time_status = "Verde" if on_time_pct >= 90 else "Amarillo" if on_time_pct >= 75 else "Rojo"
-
+    # 1. Riesgo Alto Abierto
     cursor.execute("""
-        SELECT COUNT(*) FROM action_plans
-        WHERE target_date != '' AND target_date IS NOT NULL AND target_date < ?
-          AND LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')
+        SELECT COUNT(DISTINCT f.id), COUNT(DISTINCT f.report_id)
+        FROM findings f
+        WHERE LOWER(f.severity) = 'alto'
+          AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')
+    """)
+    r_high = cursor.fetchone()
+    high_risk_cnt = r_high[0] or 0
+    high_risk_reports = r_high[1] or 0
+
+    # 2. Compromisos Vencidos
+    cursor.execute("""
+        SELECT COUNT(pa.id), COUNT(DISTINCT p.finding_id)
+        FROM action_plans pa
+        JOIN proposals p ON pa.proposal_id = p.id
+        WHERE pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ?
+          AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')
     """, (today_str,))
-    overdue_cnt = cursor.fetchone()[0]
-    overdue_pct = round((overdue_cnt / total_plans) * 100, 1) if total_plans > 0 else 0
-    overdue_status = "Verde" if overdue_pct <= 5 else "Amarillo" if overdue_pct <= 15 else "Rojo"
+    r_overdue = cursor.fetchone()
+    overdue_plans_cnt = r_overdue[0] or 0
+    overdue_findings_cnt = r_overdue[1] or 0
+
+    # 3. Implementación Validada
+    cursor.execute("SELECT COUNT(*) FROM proposals")
+    total_proposals = cursor.fetchone()[0] or 0
 
     cursor.execute("""
-        SELECT COUNT(*) FROM proposals p
-        LEFT JOIN action_plans pa ON pa.proposal_id = p.id
-        WHERE pa.id IS NULL
+        SELECT COUNT(*) FROM proposals
+        WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado', 'validado')
     """)
-    unassigned_prop_cnt = cursor.fetchone()[0]
-    unassigned_status = "Verde" if unassigned_prop_cnt == 0 else "Amarillo" if unassigned_prop_cnt <= 2 else "Rojo"
+    validated_proposals = cursor.fetchone()[0] or 0
+    validated_pct = round((validated_proposals / total_proposals) * 100, 1) if total_proposals > 0 else 0.0
 
-    cursor.execute("SELECT COUNT(*) FROM findings WHERE LOWER(severity) = 'alto' AND LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')")
-    open_high_risk = cursor.fetchone()[0]
-    high_risk_status = "Verde" if open_high_risk == 0 else "Amarillo" if open_high_risk <= 2 else "Rojo"
-
-    future_15 = (date.today() + timedelta(days=15)).strftime("%Y-%m-%d")
+    # 4. Cierre en Plazo
     cursor.execute("""
         SELECT COUNT(*) FROM action_plans
-        WHERE target_date != '' AND target_date IS NOT NULL AND target_date >= ? AND target_date <= ?
-          AND LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')
-    """, (today_str, future_15))
-    due_soon_cnt = cursor.fetchone()[0]
-    due_soon_status = "Verde" if due_soon_cnt == 0 else "Amarillo"
+        WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
+          AND closed_date IS NOT NULL AND closed_date != ''
+          AND target_date IS NOT NULL AND target_date != ''
+          AND closed_date <= target_date
+    """)
+    on_time_closed_cnt = cursor.fetchone()[0] or 0
 
     cursor.execute("""
-        SELECT created_at, closed_date FROM action_plans
-        WHERE closed_date IS NOT NULL AND closed_date != '' AND closed_date != 'None'
+        SELECT COUNT(*) FROM action_plans
+        WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
+          AND closed_date IS NOT NULL AND closed_date != ''
+          AND target_date IS NOT NULL AND target_date != ''
     """)
-    closed_rows = cursor.fetchall()
-    if closed_rows:
-        tot_days = 0
-        cnt_c = 0
-        for r in closed_rows:
-            try:
-                st = datetime.strptime(str(r["created_at"])[:10], "%Y-%m-%d")
-                cl = datetime.strptime(str(r["closed_date"])[:10], "%Y-%m-%d")
-                diff = (cl - st).days
-                if diff >= 0:
-                    tot_days += diff
-                    cnt_c += 1
-            except Exception:
-                pass
-        avg_days = round(tot_days / cnt_c) if cnt_c > 0 else 0
-        avg_days_val = f"{avg_days} días"
-        avg_status = "Verde" if avg_days <= 30 else "Amarillo" if avg_days <= 60 else "Rojo"
-    else:
-        avg_days_val = "Sin datos"
-        avg_status = "Verde"
+    total_closed_with_both_dates = cursor.fetchone()[0] or 0
 
-    indicators = [
-        {
-            "name": "Hallazgos cerrados en término",
-            "value": f"{on_time_pct}%" if total_plans > 0 else "Sin datos",
-            "target": "Meta ≥ 90%",
-            "status": on_time_status,
-            "filter_key": "status",
-            "filter_val": "Finalizado"
+    cursor.execute("""
+        SELECT COUNT(*) FROM action_plans
+        WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
+          AND (closed_date IS NULL OR closed_date = '' OR target_date IS NULL OR target_date = '')
+    """)
+    excluded_missing_dates_cnt = cursor.fetchone()[0] or 0
+
+    on_time_closed_pct = round((on_time_closed_cnt / total_closed_with_both_dates) * 100, 1) if total_closed_with_both_dates > 0 else 0.0
+
+    # 5. Pendiente de Validación
+    cursor.execute("""
+        SELECT COUNT(*) FROM action_plans
+        WHERE (progress_pct = 100 OR LOWER(status) = 'pendiente de validación')
+          AND LOWER(status) NOT IN ('finalizado', 'validado', 'cerrado')
+    """)
+    pending_validation_cnt = cursor.fetchone()[0] or 0
+
+    return {
+        "high_risk_open": {
+            "count": high_risk_cnt,
+            "affected_reports": high_risk_reports,
+            "label": "Riesgo Alto Abierto",
+            "context": f"{high_risk_cnt} hallazgos críticos abiertos en {high_risk_reports} informes"
         },
-        {
-            "name": "Planes de acción vencidos",
-            "value": f"{overdue_cnt} ({overdue_pct}%)" if total_plans > 0 else "Sin datos",
-            "target": "Meta ≤ 5%",
-            "status": overdue_status,
-            "filter_key": "overdue",
-            "filter_val": "true"
+        "overdue_commitments": {
+            "count": overdue_plans_cnt,
+            "affected_findings": overdue_findings_cnt,
+            "label": "Compromisos Vencidos",
+            "context": f"{overdue_plans_cnt} planes vencidos en {overdue_findings_cnt} hallazgos"
         },
-        {
-            "name": "Propuestas sin plan asociado",
-            "value": f"{unassigned_prop_cnt}",
-            "target": "Meta = 0",
-            "status": unassigned_status,
-            "filter_key": "no_plan",
-            "filter_val": "true"
+        "validated_implementation": {
+            "count": validated_proposals,
+            "total": total_proposals,
+            "percentage": f"{validated_pct}%" if total_proposals > 0 else "Sin datos",
+            "label": "Implementación Validada",
+            "context": f"{validated_proposals} de {total_proposals} propuestas validadas"
         },
-        {
-            "name": "Hallazgos de riesgo alto abiertos",
-            "value": f"{open_high_risk}",
-            "target": "Meta = 0",
-            "status": high_risk_status,
-            "filter_key": "severity",
-            "filter_val": "Alto"
+        "on_time_closure": {
+            "count": on_time_closed_cnt,
+            "total_evaluable": total_closed_with_both_dates,
+            "excluded_missing_dates": excluded_missing_dates_cnt,
+            "percentage": f"{on_time_closed_pct}%" if total_closed_with_both_dates > 0 else "Sin datos",
+            "label": "Cierre en Plazo",
+            "context": f"{on_time_closed_cnt} de {total_closed_with_both_dates} cierres evaluables ({excluded_missing_dates_cnt} excluidos sin fecha)"
         },
-        {
-            "name": "Planes próximos a vencer (15 días)",
-            "value": f"{due_soon_cnt}",
-            "target": "Meta = 0",
-            "status": due_soon_status,
-            "filter_key": "due_soon",
-            "filter_val": "true"
-        },
-        {
-            "name": "Tiempo promedio de cierre",
-            "value": avg_days_val,
-            "target": "Meta ≤ 30 días",
-            "status": avg_status,
-            "filter_key": "status",
-            "filter_val": "Finalizado"
+        "pending_validation": {
+            "count": pending_validation_cnt,
+            "label": "Pendiente de Validación",
+            "context": f"{pending_validation_cnt} compromisos al 100% que aguardan validación"
         }
-    ]
+    }
 
-    conn.close()
-    return indicators
+
+def get_kpi_indicators():
+    return get_executive_kpis()
 
 
 def get_active_alerts():

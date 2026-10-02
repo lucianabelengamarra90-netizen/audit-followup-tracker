@@ -87,10 +87,13 @@ def clean_text(value):
 # ============================================================
 
 def _get_openai_client():
-    api_key = os.getenv("OPENAI_API_KEY")
+    ai_enabled = os.getenv("AI_ENABLED", "false").lower() in ("true", "1")
+    if not ai_enabled:
+        return None
 
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        print("[IA] OPENAI_API_KEY no configurada. Se usará fallback heurístico.")
+        print("[IA] OPENAI_API_KEY no configurada. Se usará fallback heurístico local.")
         return None
 
     return OpenAI(api_key=api_key)
