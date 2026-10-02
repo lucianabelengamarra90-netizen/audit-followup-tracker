@@ -193,6 +193,36 @@ Propuesta 1 (relacionada con Hallazgo 1): Configurar firma conjunta obligatoria 
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
+    def test_xlsx_legales_strict_column_mapping(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Hallazgos Legales"
+        ws.append(["INFORME DE AUDITORÍA DE LEGALES Y CONTRATOS 2026"])
+        ws.append([])
+        ws.append(["Área / Proceso", "ID Hallazgo", "Hallazgo (Situación Observada)", "ID Propuesta", "Propuesta de Mejora (Recomendación)", "Riesgo", "Responsable", "Fecha compromiso"])
+        ws.append(["Asesoría Jurídica", "H-1", "Omisión de cláusulas de responsabilidad civil.", "P-1", "Redactar e incorporar anexo de responsabilidad.", "Alto", "Juan Pérez", "2026-11-30"])
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            wb.save(f.name)
+            tmp_path = f.name
+
+        try:
+            parsed = parse_audit_report(tmp_path, "legales.xlsx")
+            self.assertEqual(parsed["report"]["area"], "Asesoría Jurídica")
+            findings = parsed.get("findings", [])
+            self.assertEqual(len(findings), 1)
+            f = findings[0]
+            self.assertEqual(f["code"], "H-1")
+            self.assertEqual(f["responsible_area"], "Asesoría Jurídica")
+            self.assertEqual(f["action_owner"], "Juan Pérez")
+            self.assertEqual(f["severity"], "Alto")
+            self.assertEqual(len(f["proposals"]), 1)
+            self.assertEqual(f["proposals"][0]["action_owner"], "Juan Pérez")
+            self.assertIn("Redactar e incorporar anexo", f["proposals"][0]["proposal_text"])
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
     def test_parse_preview_endpoint_contract(self):
         txt_content = """Informe de Prueba
 Hallazgo 1: Falta de respaldo de servidores

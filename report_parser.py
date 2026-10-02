@@ -527,6 +527,9 @@ def _looks_like_finding_start(
             return False
 
 def _is_proposals_section_header(line, norm_line):
+    if "|" in line or "[table_row]" in norm_line or "[table" in norm_line:
+        return False
+
     clean_l = re.sub(r"\[[A-Z0-9_]+\]", "", line).strip()
     header_text = re.sub(r"^(?:secci[oó]n|cap[ií]tulo)?\s*(?:\d+[\.\:\)\-]*|\d+\.\d+[\.\:\)\-]*|[-•])\s*", "", clean_l, flags=re.IGNORECASE).strip()
     header_text = header_text.rstrip(":. -")
@@ -1229,7 +1232,8 @@ def parse_document(
                 continue
 
         if (
-            _is_non_finding_header(norm)
+            "|" not in line
+            and _is_non_finding_header(norm)
             and len(line) < 120
         ):
             if current_finding:
@@ -1637,9 +1641,16 @@ def _parse_tabular_findings(
 
     header_idx = None
     col_hallazgo = None
+    col_hallazgo_code = None
     col_propuesta = None
+    col_propuesta_code = None
     col_area = None
     col_riesgo = None
+    col_responsable = None
+    col_fecha = None
+    col_causa = None
+    col_impacto = None
+    col_observaciones = None
 
     for index, line in enumerate(lines):
         if "|" not in line:
@@ -1657,51 +1668,52 @@ def _parse_tabular_findings(
         ]
 
         if header_idx is None:
-            for col_idx, norm_col in enumerate(
-                norm_cols
-            ):
-                if any(
-                    kw in norm_col
-                    for kw in [
-                        "hallazgo",
-                        "observacion",
-                        "desviacion",
-                        "descripcion",
-                        "situacion",
-                    ]
-                ):
-                    col_hallazgo = col_idx
+            for col_idx, norm_col in enumerate(norm_cols):
+                is_code = any(k in norm_col for k in ["id", "codigo", "cod", "n°", "num", "ref"])
 
-                if any(
-                    kw in norm_col
-                    for kw in [
-                        "propuesta",
-                        "recomendacion",
-                        "mejora",
-                    ]
-                ):
-                    col_propuesta = col_idx
+                if any(kw in norm_col for kw in ["hallazgo", "observacion", "observación", "desviacion", "desviación", "descripcion", "descripción", "situacion", "situación", "debilidad"]):
+                    if is_code and ("id" in norm_col or "codigo" in norm_col or norm_col.startswith("n") or norm_col.startswith("ref")):
+                        if col_hallazgo_code is None:
+                            col_hallazgo_code = col_idx
+                    else:
+                        if col_hallazgo is None or any(k in norm_col for k in ["situacion", "situación", "descripcion", "descripción", "detalle", "observacion", "observación"]):
+                            col_hallazgo = col_idx
 
-                if any(
-                    kw in norm_col
-                    for kw in [
-                        "area",
-                        "proceso",
-                        "sector",
-                        "gerencia",
-                    ]
-                ):
-                    col_area = col_idx
+                if any(kw in norm_col for kw in ["propuesta", "recomendacion", "recomendación", "mejora", "sugerencia", "accion correctiva"]):
+                    if is_code and ("id" in norm_col or "codigo" in norm_col or norm_col.startswith("n") or norm_col.startswith("ref")):
+                        if col_propuesta_code is None:
+                            col_propuesta_code = col_idx
+                    else:
+                        if col_propuesta is None or any(k in norm_col for k in ["mejora", "recomendacion", "recomendación", "propuesta"]):
+                            col_propuesta = col_idx
 
-                if any(
-                    kw in norm_col
-                    for kw in [
-                        "riesgo",
-                        "severidad",
-                        "criticidad",
-                    ]
-                ):
-                    col_riesgo = col_idx
+                if any(kw in norm_col for kw in ["area", "área", "proceso", "sector", "gerencia", "unidad", "departamento"]):
+                    if col_area is None:
+                        col_area = col_idx
+
+                if any(kw in norm_col for kw in ["riesgo", "severidad", "criticidad", "nivel"]):
+                    if col_riesgo is None:
+                        col_riesgo = col_idx
+
+                if any(kw in norm_col for kw in ["responsable", "dueno", "dueño", "asignado", "lider", "líder", "ejecutor", "owner"]):
+                    if col_responsable is None:
+                        col_responsable = col_idx
+
+                if any(kw in norm_col for kw in ["fecha", "plazo", "vencimiento", "compromiso", "limite", "límite"]):
+                    if col_fecha is None:
+                        col_fecha = col_idx
+
+                if any(kw in norm_col for kw in ["causa", "origen", "motivo"]):
+                    if col_causa is None:
+                        col_causa = col_idx
+
+                if any(kw in norm_col for kw in ["impacto", "consecuencia", "efecto"]):
+                    if col_impacto is None:
+                        col_impacto = col_idx
+
+                if any(kw in norm_col for kw in ["observaciones", "comentarios", "notas"]):
+                    if col_observaciones is None:
+                        col_observaciones = col_idx
 
             if col_hallazgo is not None:
                 header_idx = index
@@ -1712,64 +1724,30 @@ def _parse_tabular_findings(
             and col_hallazgo is not None
             and len(cols) > col_hallazgo
         ):
-            hallazgo_text = (
-                cols[col_hallazgo]
-            )
+            hallazgo_text = cols[col_hallazgo]
 
-            if len(
-                hallazgo_text
-            ) < 5:
+            if len(hallazgo_text) < 3:
                 continue
 
-            proposal_text = ""
+            if normalize_text(hallazgo_text) in ("hallazgo", "hallazgos", "situacion", "situacion observada", "descripcion del hallazgo"):
+                continue
 
-            if (
-                col_propuesta
-                is not None
-                and len(cols)
-                > col_propuesta
-            ):
-                proposal_text = (
-                    cols[col_propuesta]
-                )
+            h_code = cols[col_hallazgo_code] if col_hallazgo_code is not None and len(cols) > col_hallazgo_code else ""
+            proposal_text = cols[col_propuesta] if col_propuesta is not None and len(cols) > col_propuesta else ""
+            p_code = cols[col_propuesta_code] if col_propuesta_code is not None and len(cols) > col_propuesta_code else ""
+            area = cols[col_area] if col_area is not None and len(cols) > col_area and cols[col_area] else default_area
+            risk_val = cols[col_riesgo] if col_riesgo is not None and len(cols) > col_riesgo else ""
+            action_owner = cols[col_responsable] if col_responsable is not None and len(cols) > col_responsable and cols[col_responsable] else "Pendiente de definir"
+            target_date = cols[col_fecha] if col_fecha is not None and len(cols) > col_fecha else ""
+            causa = cols[col_causa] if col_causa is not None and len(cols) > col_causa else ""
+            impacto = cols[col_impacto] if col_impacto is not None and len(cols) > col_impacto else ""
+            observaciones = cols[col_observaciones] if col_observaciones is not None and len(cols) > col_observaciones else ""
 
-            area = default_area
+            severity = _detect_severity(risk_val) if risk_val else "Medio"
 
-            if (
-                col_area
-                is not None
-                and len(cols)
-                > col_area
-            ):
-                area = (
-                    cols[col_area]
-                    or default_area
-                )
-
-            severity = "Medio"
-
-            if (
-                col_riesgo
-                is not None
-                and len(cols)
-                > col_riesgo
-            ):
-                severity = (
-                    _detect_severity(
-                        cols[col_riesgo]
-                    )
-                )
-
-            source_block = (
-                hallazgo_text
-            )
-
+            source_block = hallazgo_text
             if proposal_text:
-                source_block += (
-                    "\nPropuesta / recomendación "
-                    "original:\n"
-                    + proposal_text
-                )
+                source_block += "\nPropuesta / recomendación original:\n" + proposal_text
 
             ai_result = run_double_ai_review(
                 source_text=source_block,
@@ -1800,107 +1778,69 @@ def _parse_tabular_findings(
             finding_num = len(findings) + 1
             print(f"[Situación H{finding_num}] Origen: {situation_source} | Longitud: {len(situation)}")
 
+            proposals_structured = []
+            if proposal_text:
+                proposals_structured.append({
+                    "code": p_code,
+                    "title": proposal_text,
+                    "proposal_text": proposal_text,
+                    "severity": severity,
+                    "responsible_area": area,
+                    "action_owner": action_owner,
+                    "target_date": target_date
+                })
+
             if ai_result:
-                proposals = [
-                    clean_text(
-                        proposal.proposal_text
-                    )
-                    for proposal
-                    in ai_result.proposals
-                    if clean_text(
-                        proposal.proposal_text
-                    )
+                proposals_ai = [
+                    clean_text(proposal.proposal_text)
+                    for proposal in ai_result.proposals
+                    if clean_text(proposal.proposal_text)
                 ]
 
                 findings.append({
-                    "title": (
-                        clean_text(
-                            ai_result.title
-                        )
-                        or hallazgo_text[:100]
-                    ),
+                    "code": h_code,
+                    "title": clean_text(ai_result.title) or hallazgo_text[:100],
                     "source_number": finding_num,
                     "situation": situation,
                     "situation_source": situation_source,
-                    "proposal": (
-                        proposals[0]
-                        if proposals
-                        else proposal_text
-                    ),
-                    "proposals_ai": (
-                        proposals
-                    ),
-                    "risk": (
-                        clean_text(
-                            ai_result.risk
-                        )
-                    ),
-                    "severity": (
-                        ai_result.severity
-                        if ai_result.severity
-                        in (
-                            "Alto",
-                            "Medio",
-                            "Bajo"
-                        )
-                        else severity
-                    ),
-                    "responsible_area": (
-                        clean_text(
-                            ai_result
-                            .responsible_area
-                        )
-                        or area
-                    ),
-                    "evidence": (
-                        clean_text(
-                            ai_result.evidence
-                        )
-                    ),
-                    "cause": (
-                        clean_text(
-                            ai_result.cause
-                        )
-                    ),
-                    "affected_process_or_control":
-                        clean_text(
-                            ai_result
-                            .affected_process_or_control
-                        ),
-                    "impact": (
-                        clean_text(
-                            ai_result.impact
-                        )
-                    ),
-                    "ai_confidence": (
-                        ai_result.confidence
-                    ),
+                    "proposal": proposals_ai[0] if proposals_ai else proposal_text,
+                    "proposals_ai": proposals_ai,
+                    "proposals_structured": proposals_structured,
+                    "risk": clean_text(ai_result.risk) or risk_val,
+                    "severity": ai_result.severity if ai_result.severity in ("Alto", "Medio", "Bajo") else severity,
+                    "responsible_area": clean_text(ai_result.responsible_area) or area,
+                    "action_owner": action_owner,
+                    "target_date": target_date,
+                    "evidence": clean_text(ai_result.evidence),
+                    "cause": clean_text(ai_result.cause) or causa,
+                    "affected_process_or_control": clean_text(ai_result.affected_process_or_control),
+                    "impact": clean_text(ai_result.impact) or impacto,
+                    "observations": observaciones,
+                    "ai_confidence": ai_result.confidence,
                     "ai_validated": True,
                     "ai_status": ai_status,
                     "source_text": source_block,
                 })
-
             else:
                 findings.append({
-                    "title": (
-                        hallazgo_text[:100]
-                    ),
+                    "code": h_code,
+                    "title": hallazgo_text[:100],
                     "source_number": finding_num,
                     "situation": situation,
                     "situation_source": situation_source,
                     "proposal": proposal_text,
-                    "proposals_ai": (
-                        [proposal_text]
-                        if proposal_text
-                        else []
-                    ),
-                    "risk": "",
+                    "proposals_ai": [proposal_text] if proposal_text else [],
+                    "proposals_structured": proposals_structured,
+                    "risk": risk_val,
                     "severity": severity,
                     "responsible_area": area,
+                    "action_owner": action_owner,
+                    "target_date": target_date,
                     "evidence": "",
-                    "cause": "",
+                    "cause": causa,
                     "affected_process_or_control": "",
-                    "impact": "",
+                    "impact": impacto,
+                    "observations": observaciones,
                     "ai_confidence": 0,
                     "ai_validated": False,
                     "ai_status": ai_status,
@@ -2190,11 +2130,17 @@ def parse_audit_report(
     unlinked_count = sum(1 for p in parsed_proposals_list if p["link_status"] == "unlinked")
     print(f"[Parser] Hallazgos: {len(relational_findings)} | Propuestas: {len(parsed_proposals_list)} | Propuestas sin vincular: {unlinked_count}")
 
+    report_area = explicit_area
+    if relational_findings and (not explicit_area or explicit_area == "Operaciones"):
+        first_area = relational_findings[0].get("responsible_area")
+        if first_area and first_area != "Operaciones":
+            report_area = first_area
+
     return {
         "report": {
             "title": report_title,
-            "process": explicit_area or "Control Interno",
-            "area": explicit_area,
+            "process": report_area or "Control Interno",
+            "area": report_area,
             "period": "2026",
             "auditor": explicit_auditor,
             "summary": f"Informe {filename} procesado con {len(relational_findings)} hallazgos y {len(parsed_proposals_list)} propuestas.",
