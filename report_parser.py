@@ -440,6 +440,9 @@ PROPOSAL_KEYWORDS = [
 
 
 def _is_non_finding_header(norm_line):
+    if "solapa:" in norm_line or norm_line.startswith("==="):
+        return False
+
     for kw in NON_FINDING_KEYWORDS:
         pattern = (
             r"(?:^|\d+[\.\s]+)"
@@ -527,7 +530,7 @@ def _looks_like_finding_start(
             return False
 
 def _is_proposals_section_header(line, norm_line):
-    if "|" in line or "[table_row]" in norm_line or "[table" in norm_line:
+    if "|" in line or "[table_row]" in norm_line or "[table" in norm_line or "solapa:" in norm_line or norm_line.startswith("==="):
         return False
 
     clean_l = re.sub(r"\[[A-Z0-9_]+\]", "", line).strip()
@@ -1653,7 +1656,7 @@ def _parse_tabular_findings(
     col_observaciones = None
 
     for index, line in enumerate(lines):
-        if "|" not in line:
+        if "|" not in line or line.strip().startswith("==="):
             continue
 
         cols = [
@@ -1670,13 +1673,17 @@ def _parse_tabular_findings(
         if header_idx is None:
             for col_idx, norm_col in enumerate(norm_cols):
                 is_code = any(k in norm_col for k in ["id", "codigo", "cod", "n°", "num", "ref"])
+                is_obs_col = any(k in norm_col for k in ["observaciones", "comentarios", "notas"])
 
-                if any(kw in norm_col for kw in ["hallazgo", "observacion", "observación", "desviacion", "desviación", "descripcion", "descripción", "situacion", "situación", "debilidad"]):
+                if is_obs_col:
+                    if col_observaciones is None:
+                        col_observaciones = col_idx
+                elif any(kw in norm_col for kw in ["hallazgo", "observacion", "observación", "desviacion", "desviación", "descripcion", "descripción", "situacion", "situación", "debilidad"]):
                     if is_code and ("id" in norm_col or "codigo" in norm_col or norm_col.startswith("n") or norm_col.startswith("ref")):
                         if col_hallazgo_code is None:
                             col_hallazgo_code = col_idx
                     else:
-                        if col_hallazgo is None or any(k in norm_col for k in ["situacion", "situación", "descripcion", "descripción", "detalle", "observacion", "observación"]):
+                        if col_hallazgo is None or any(k in norm_col for k in ["situacion", "situación", "descripcion", "descripción", "detalle", "hallazgo"]):
                             col_hallazgo = col_idx
 
                 if any(kw in norm_col for kw in ["propuesta", "recomendacion", "recomendación", "mejora", "sugerencia", "accion correctiva"]):
@@ -1710,10 +1717,6 @@ def _parse_tabular_findings(
                 if any(kw in norm_col for kw in ["impacto", "consecuencia", "efecto"]):
                     if col_impacto is None:
                         col_impacto = col_idx
-
-                if any(kw in norm_col for kw in ["observaciones", "comentarios", "notas"]):
-                    if col_observaciones is None:
-                        col_observaciones = col_idx
 
             if col_hallazgo is not None:
                 header_idx = index
