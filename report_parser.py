@@ -295,10 +295,12 @@ def extract_raw_text_from_file(file_path):
                     row_vals = [
                         clean_text(v)
                         for v in row
-                        if clean_text(v)
                     ]
 
-                    if row_vals:
+                    while row_vals and not row_vals[-1]:
+                        row_vals.pop()
+
+                    if any(row_vals):
                         lines.append(
                             " | ".join(row_vals)
                         )
@@ -312,8 +314,10 @@ def extract_raw_text_from_file(file_path):
                     ws = wb_fallback[sheet_name]
                     lines_fb.append(f"=== SOLAPA: {sheet_name} ===")
                     for row in ws.iter_rows(values_only=True):
-                        row_vals = [clean_text(v) for v in row if clean_text(v)]
-                        if row_vals:
+                        row_vals = [clean_text(v) for v in row]
+                        while row_vals and not row_vals[-1]:
+                            row_vals.pop()
+                        if any(row_vals):
                             lines_fb.append(" | ".join(row_vals))
                 text_content = "\n".join(lines_fb)
 
@@ -340,8 +344,10 @@ def extract_raw_text_from_file(file_path):
             reader = csv.reader(io.StringIO(content_str), delimiter=delimiter)
             rows_str = []
             for row in reader:
-                cleaned_cells = [clean_text(c) for c in row if clean_text(c)]
-                if cleaned_cells:
+                cleaned_cells = [clean_text(c) for c in row]
+                while cleaned_cells and not cleaned_cells[-1]:
+                    cleaned_cells.pop()
+                if any(cleaned_cells):
                     rows_str.append(" | ".join(cleaned_cells))
 
             text_content = "\n".join(rows_str)
