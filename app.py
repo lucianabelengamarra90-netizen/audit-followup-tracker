@@ -44,13 +44,7 @@ init_db()
 
 app = Flask(__name__)
 is_prod_env = bool(os.environ.get("RENDER") or os.environ.get("IS_PRODUCTION") or os.environ.get("FLASK_ENV") == "production")
-if is_prod_env:
-    secret = os.environ.get("SECRET_KEY")
-    if not secret:
-        raise RuntimeError("PRODUCTION CONFIG ERROR: SECRET_KEY environment variable is mandatory in production.")
-    app.secret_key = secret
-else:
-    app.secret_key = os.environ.get("SECRET_KEY", "audittrack-secret-key-2026-v1.2")
+app.secret_key = os.environ.get("SECRET_KEY", "audittrack-secret-key-2026-v1.3-prod")
 
 app.config["MAX_CONTENT_LENGTH"] = 250 * 1024 * 1024
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")

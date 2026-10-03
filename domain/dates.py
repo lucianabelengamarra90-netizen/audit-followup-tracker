@@ -1,8 +1,12 @@
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from typing import Optional
-from zoneinfo import ZoneInfo
 
-ARGENTINA_TZ = ZoneInfo("America/Buenos_Aires")
+try:
+    from zoneinfo import ZoneInfo
+    ARGENTINA_TZ = ZoneInfo("America/Buenos_Aires")
+    _test = datetime.now(ARGENTINA_TZ)
+except Exception:
+    ARGENTINA_TZ = timezone(timedelta(hours=-3))
 
 def get_argentina_now() -> datetime:
     """Retorna la fecha y hora actual en la zona horaria America/Buenos_Aires."""

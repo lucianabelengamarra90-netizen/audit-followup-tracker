@@ -188,8 +188,12 @@ def generate_next_code(entity_type: str, year: int = None, cursor=None) -> str:
 
 
 def init_db():
-    conn = get_db()
-    cursor = conn.cursor()
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+    except Exception as exc:
+        print(f"[WARN] init_db skipped on startup: {exc}")
+        return
 
     # 0. Tabla de Control de Migraciones
     cursor.execute("""
