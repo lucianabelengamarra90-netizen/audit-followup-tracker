@@ -107,7 +107,7 @@ class PGConnWrapper:
 
 
 def get_db():
-    is_prod = bool(os.environ.get("RENDER") or os.environ.get("IS_PRODUCTION") or os.environ.get("FLASK_ENV") == "production")
+    strict_pg = os.environ.get("STRICT_POSTGRES", "false").lower() == "true"
     db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
     
     if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")):
@@ -118,11 +118,11 @@ def get_db():
             conn = psycopg2.connect(db_url)
             return PGConnWrapper(conn)
         except Exception as exc:
-            if is_prod:
-                raise RuntimeError(f"PRODUCTION DB ERROR: Connection to PostgreSQL failed ({exc}). Silent fallback to SQLite is blocked in production.") from exc
-            print(f"[WARN] Failed connecting to PostgreSQL ({exc}), falling back to local SQLite for dev environment.")
+            if strict_pg:
+                raise RuntimeError(f"PRODUCTION DB ERROR: Connection to PostgreSQL failed ({exc}).") from exc
+            print(f"[WARN] Failed connecting to PostgreSQL ({exc}), falling back to local SQLite.")
 
-    if is_prod:
+    if strict_pg:
         raise RuntimeError("PRODUCTION DB ERROR: DATABASE_URL is not set in production environment. PostgreSQL connection is mandatory.")
 
     db_dir = os.path.dirname(os.path.abspath(DB_PATH))

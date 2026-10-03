@@ -68,10 +68,10 @@ class AuthAndExecutiveKPITests(unittest.TestCase):
 
     def test_production_db_fails_if_no_database_url(self):
         import database
-        original_env = os.environ.get("RENDER")
+        original_env = os.environ.get("STRICT_POSTGRES")
         original_db_url = os.environ.get("DATABASE_URL")
         try:
-            os.environ["RENDER"] = "true"
+            os.environ["STRICT_POSTGRES"] = "true"
             if "DATABASE_URL" in os.environ:
                 del os.environ["DATABASE_URL"]
             with self.assertRaises(RuntimeError) as ctx:
@@ -79,9 +79,9 @@ class AuthAndExecutiveKPITests(unittest.TestCase):
             self.assertIn("DATABASE_URL is not set", str(ctx.exception))
         finally:
             if original_env is not None:
-                os.environ["RENDER"] = original_env
+                os.environ["STRICT_POSTGRES"] = original_env
             else:
-                os.environ.pop("RENDER", None)
+                os.environ.pop("STRICT_POSTGRES", None)
             if original_db_url is not None:
                 os.environ["DATABASE_URL"] = original_db_url
 
