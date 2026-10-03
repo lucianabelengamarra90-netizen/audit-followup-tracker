@@ -1458,6 +1458,14 @@ function renderExecutiveKpis(kpis) {
     if (el("execValHighRisk")) el("execValHighRisk").textContent = kpis.high_risk_open ? kpis.high_risk_open.count : 0;
     if (el("execSubHighRisk")) el("execSubHighRisk").textContent = kpis.high_risk_open ? kpis.high_risk_open.subtitle : "";
 
+    // Card A2: Riesgo Medio Abierto
+    if (el("execValMediumRisk")) el("execValMediumRisk").textContent = kpis.medium_risk_open ? kpis.medium_risk_open.count : 0;
+    if (el("execSubMediumRisk")) el("execSubMediumRisk").textContent = kpis.medium_risk_open ? kpis.medium_risk_open.subtitle : "";
+
+    // Card A3: Riesgo Bajo Abierto
+    if (el("execValLowRisk")) el("execValLowRisk").textContent = kpis.low_risk_open ? kpis.low_risk_open.count : 0;
+    if (el("execSubLowRisk")) el("execSubLowRisk").textContent = kpis.low_risk_open ? kpis.low_risk_open.subtitle : "";
+
     // Card B: Compromisos Vencidos
     if (el("execValOverdue")) el("execValOverdue").textContent = kpis.overdue_commitments ? kpis.overdue_commitments.count : 0;
     if (el("execSubOverdue")) el("execSubOverdue").textContent = kpis.overdue_commitments ? kpis.overdue_commitments.subtitle : "";

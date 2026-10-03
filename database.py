@@ -1492,7 +1492,7 @@ def get_executive_kpis(filters=None):
 
         # 1. Riesgo Alto Abierto
         w_high = list(params)
-        where_high = where_str + (" AND " if where_str else " WHERE ") + "LOWER(f.severity) = 'alto' AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')"
+        where_high = where_str + (" AND " if where_str else " WHERE ") + "LOWER(f.severity) IN ('alto', 'alta', 'high', 'crítico', 'critico') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')"
         cursor.execute(f"""
             SELECT COUNT(DISTINCT f.id), COUNT(DISTINCT f.report_id)
             FROM findings f
@@ -1504,6 +1504,30 @@ def get_executive_kpis(filters=None):
         r_high = cursor.fetchone()
         high_risk_cnt = r_high[0] or 0
         high_risk_reports = r_high[1] or 0
+
+        # 1b. Riesgo Medio Abierto
+        where_med = where_str + (" AND " if where_str else " WHERE ") + "LOWER(f.severity) IN ('medio', 'media', 'medium') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')"
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT f.id)
+            FROM findings f
+            JOIN reports r ON f.report_id = r.id
+            LEFT JOIN proposals p ON p.finding_id = f.id
+            LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+            {where_med}
+        """, w_high)
+        medium_risk_cnt = cursor.fetchone()[0] or 0
+
+        # 1c. Riesgo Bajo Abierto
+        where_low = where_str + (" AND " if where_str else " WHERE ") + "LOWER(f.severity) IN ('bajo', 'baja', 'low') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')"
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT f.id)
+            FROM findings f
+            JOIN reports r ON f.report_id = r.id
+            LEFT JOIN proposals p ON p.finding_id = f.id
+            LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+            {where_low}
+        """, w_high)
+        low_risk_cnt = cursor.fetchone()[0] or 0
 
         # 2. Compromisos Vencidos (Activos vs Suspendidos)
         where_overdue = where_str + (" AND " if where_str else " WHERE ") + """
@@ -1766,6 +1790,14 @@ def get_executive_kpis(filters=None):
                 "count": high_risk_cnt,
                 "subtitle": f"{high_risk_cnt} hallazgos de riesgo alto abiertos"
             },
+            "medium_risk_open": {
+                "count": medium_risk_cnt,
+                "subtitle": f"{medium_risk_cnt} hallazgos de riesgo medio abiertos"
+            },
+            "low_risk_open": {
+                "count": low_risk_cnt,
+                "subtitle": f"{low_risk_cnt} hallazgos de riesgo bajo abiertos"
+            },
             "overdue_commitments": {
                 "count": overdue_plans_cnt,
                 "subtitle": f"{overdue_plans_cnt} planes activos vencidos ({suspended_overdue_cnt} suspendidos)"
@@ -1901,7 +1933,7 @@ def get_executive_drilldown(metric_key, filters=None):
 
         rows = []
         if metric_key == "high_risk_open":
-            where_h = where_str + (" AND " if where_str else " WHERE ") + "LOWER(f.severity) = 'alto' AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')"
+            where_h = where_str + (" AND " if where_str else " WHERE ") + "LOWER(f.severity) IN ('alto', 'alta', 'high', 'crítico', 'critico') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')"
             cursor.execute(f"""
                 SELECT DISTINCT f.id, f.code, f.title, f.severity, f.responsible_area, f.status, r.title as report_title
                 FROM findings f
@@ -1909,6 +1941,52 @@ def get_executive_drilldown(metric_key, filters=None):
                 LEFT JOIN proposals p ON p.finding_id = f.id
                 LEFT JOIN action_plans pa ON pa.proposal_id = p.id
                 {where_h}
+                ORDER BY f.code ASC
+            """, params)
+            for r in cursor.fetchall():
+                rows.append({
+                    "id": r["id"],
+                    "code": r["code"],
+                    "title": r["title"],
+                    "risk_level": r["severity"],
+                    "severity": r["severity"],
+                    "area": r["responsible_area"] or "Sin área",
+                    "status": r["status"],
+                    "report_title": r["report_title"]
+                })
+
+        elif metric_key == "medium_risk_open":
+            where_m = where_str + (" AND " if where_str else " WHERE ") + "LOWER(f.severity) IN ('medio', 'media', 'medium') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')"
+            cursor.execute(f"""
+                SELECT DISTINCT f.id, f.code, f.title, f.severity, f.responsible_area, f.status, r.title as report_title
+                FROM findings f
+                JOIN reports r ON f.report_id = r.id
+                LEFT JOIN proposals p ON p.finding_id = f.id
+                LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+                {where_m}
+                ORDER BY f.code ASC
+            """, params)
+            for r in cursor.fetchall():
+                rows.append({
+                    "id": r["id"],
+                    "code": r["code"],
+                    "title": r["title"],
+                    "risk_level": r["severity"],
+                    "severity": r["severity"],
+                    "area": r["responsible_area"] or "Sin área",
+                    "status": r["status"],
+                    "report_title": r["report_title"]
+                })
+
+        elif metric_key == "low_risk_open":
+            where_l = where_str + (" AND " if where_str else " WHERE ") + "LOWER(f.severity) IN ('bajo', 'baja', 'low') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')"
+            cursor.execute(f"""
+                SELECT DISTINCT f.id, f.code, f.title, f.severity, f.responsible_area, f.status, r.title as report_title
+                FROM findings f
+                JOIN reports r ON f.report_id = r.id
+                LEFT JOIN proposals p ON p.finding_id = f.id
+                LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+                {where_l}
                 ORDER BY f.code ASC
             """, params)
             for r in cursor.fetchall():

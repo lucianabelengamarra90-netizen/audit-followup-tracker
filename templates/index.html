@@ -79,7 +79,7 @@
                 </button>
                 <button class="topnav-tab" data-tab="tablero-ejecutivo" onclick="switchTab('tablero-ejecutivo')">
                     <span class="topnav-icon">📊</span>
-                    <span>Tablero Ejecutivo</span>
+                    <span>Tablero de KPIs</span>
                 </button>
                 <!-- Pestaña Configuración desactivada -->
                 <button class="topnav-tab" data-tab="informes" onclick="switchTab('informes')">
@@ -398,13 +398,27 @@
                     </div>
                 </div>
 
-                <!-- 5 TARJETAS EJECUTIVAS KPIS (3 Prioridades + 2 Resultados) -->
-                <div class="kpi-grid" style="grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                <!-- 7 TARJETAS KPIS (Criticidad Riesgos + Estado de Compromisos) -->
+                <div class="kpi-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 24px;">
                     <!-- A. Riesgo Alto Abierto -->
-                    <div class="kpi-card" style="border-left: 4px solid #DC2626; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('high_risk_open', 'Riesgo Alto Abierto')" title="Click para ver el detalle verificable de hallazgos de riesgo alto">
+                    <div class="kpi-card" style="border-left: 4px solid #DC2626; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('high_risk_open', 'Riesgo Alto Abierto')" title="Click para ver el detalle de hallazgos de riesgo alto">
                         <div class="kpi-label" style="color: #991B1B; font-weight: 700;">Riesgo Alto Abierto</div>
                         <div class="kpi-value" style="color: #DC2626;" id="execValHighRisk">0</div>
                         <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execSubHighRisk">0 hallazgos abiertos</div>
+                    </div>
+
+                    <!-- A2. Riesgo Medio Abierto -->
+                    <div class="kpi-card" style="border-left: 4px solid #F59E0B; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('medium_risk_open', 'Riesgo Medio Abierto')" title="Click para ver el detalle de hallazgos de riesgo medio">
+                        <div class="kpi-label" style="color: #B45309; font-weight: 700;">Riesgo Medio Abierto</div>
+                        <div class="kpi-value" style="color: #D97706;" id="execValMediumRisk">0</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execSubMediumRisk">0 hallazgos abiertos</div>
+                    </div>
+
+                    <!-- A3. Riesgo Bajo Abierto -->
+                    <div class="kpi-card" style="border-left: 4px solid #10B981; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('low_risk_open', 'Riesgo Bajo Abierto')" title="Click para ver el detalle de hallazgos de riesgo bajo">
+                        <div class="kpi-label" style="color: #047857; font-weight: 700;">Riesgo Bajo Abierto</div>
+                        <div class="kpi-value" style="color: #059669;" id="execValLowRisk">0</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execSubLowRisk">0 hallazgos abiertos</div>
                     </div>
 
                     <!-- B. Compromisos Vencidos -->
