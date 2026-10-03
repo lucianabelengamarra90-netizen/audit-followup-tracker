@@ -107,13 +107,23 @@ class PGConnWrapper:
 
 
 def get_db():
+    is_prod = bool(os.environ.get("RENDER") or os.environ.get("IS_PRODUCTION") or os.environ.get("FLASK_ENV") == "production")
     db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+    
     if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")):
         if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
-        import psycopg2
-        conn = psycopg2.connect(db_url)
-        return PGConnWrapper(conn)
+        try:
+            import psycopg2
+            conn = psycopg2.connect(db_url)
+            return PGConnWrapper(conn)
+        except Exception as exc:
+            if is_prod:
+                raise RuntimeError(f"PRODUCTION DB ERROR: Connection to PostgreSQL failed ({exc}). Silent fallback to SQLite is blocked in production.") from exc
+            print(f"[WARN] Failed connecting to PostgreSQL ({exc}), falling back to local SQLite for dev environment.")
+
+    if is_prod:
+        raise RuntimeError("PRODUCTION DB ERROR: DATABASE_URL is not set in production environment. PostgreSQL connection is mandatory.")
 
     db_dir = os.path.dirname(os.path.abspath(DB_PATH))
     if db_dir and not os.path.exists(db_dir):
@@ -263,11 +273,19 @@ def init_db():
             action_owner TEXT,
             target_date TEXT,
             status TEXT DEFAULT 'En proceso',
+            validated_at TIMESTAMP,
+            validated_by TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (finding_id) REFERENCES findings (id) ON DELETE CASCADE
         )
     """)
+
+    cursor.execute("PRAGMA table_info(proposals)")
+    prop_cols = [r['name'] for r in cursor.fetchall()]
+    if prop_cols and 'validated_at' not in prop_cols:
+        cursor.execute("ALTER TABLE proposals ADD COLUMN validated_at TIMESTAMP")
+        cursor.execute("ALTER TABLE proposals ADD COLUMN validated_by TEXT")
 
     # 4. Planes de Acción
     cursor.execute("""
@@ -284,11 +302,19 @@ def init_db():
             notes TEXT,
             evidence_file TEXT,
             closed_date TEXT,
+            validated_at TIMESTAMP,
+            validated_by TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (proposal_id) REFERENCES proposals (id) ON DELETE CASCADE
         )
     """)
+
+    cursor.execute("PRAGMA table_info(action_plans)")
+    plan_cols = [r['name'] for r in cursor.fetchall()]
+    if plan_cols and 'validated_at' not in plan_cols:
+        cursor.execute("ALTER TABLE action_plans ADD COLUMN validated_at TIMESTAMP")
+        cursor.execute("ALTER TABLE action_plans ADD COLUMN validated_by TEXT")
 
     # 5. Historial de Cambios & Trazabilidad
     cursor.execute("""
@@ -1396,120 +1422,149 @@ def get_executive_kpis(filters=None):
     """
     Calcula las 5 Tarjetas Ejecutivas de Indicadores con fórmulas finitas exactas:
     1. Riesgo Alto Abierto: Hallazgos únicos con severidad Alto no finalizados.
-    2. Compromisos Vencidos: Planes activos En proceso con fecha compromiso vencida.
-    3. Implementación Validada: % de propuestas cerradas con validación registrada sobre total propuestas.
+    2. Compromisos Vencidos: Planes activos En proceso con fecha compromiso vencida (separa suspendidos).
+    3. Implementación Validada: % de propuestas validadas formalmente (validated_by). Si no hay firma, reporta propuestas finalizadas.
     4. Cierre en Plazo: % de planes cerrados en o antes de su fecha compromiso (indica explícitamente excluidos por falta de fechas).
-    5. Pendiente de Validación: Planes al 100% de avance que requieren validación formal.
+    5. Pendiente de Validación: Planes al 100% de avance que requieren validación formal auditora.
     """
     init_db()
     conn = get_db()
     cursor = conn.cursor()
 
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    try:
+        today_str = datetime.now().strftime("%Y-%m-%d")
 
-    # 1. Riesgo Alto Abierto
-    cursor.execute("""
-        SELECT COUNT(DISTINCT f.id), COUNT(DISTINCT f.report_id)
-        FROM findings f
-        WHERE LOWER(f.severity) = 'alto'
-          AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')
-    """)
-    r_high = cursor.fetchone()
-    high_risk_cnt = r_high[0] or 0
-    high_risk_reports = r_high[1] or 0
+        # 1. Riesgo Alto Abierto
+        cursor.execute("""
+            SELECT COUNT(DISTINCT f.id), COUNT(DISTINCT f.report_id)
+            FROM findings f
+            WHERE LOWER(f.severity) = 'alto'
+              AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')
+        """)
+        r_high = cursor.fetchone()
+        high_risk_cnt = r_high[0] or 0
+        high_risk_reports = r_high[1] or 0
 
-    # 2. Compromisos Vencidos
-    cursor.execute("""
-        SELECT COUNT(pa.id), COUNT(DISTINCT p.finding_id)
-        FROM action_plans pa
-        JOIN proposals p ON pa.proposal_id = p.id
-        WHERE pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ?
-          AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')
-    """, (today_str,))
-    r_overdue = cursor.fetchone()
-    overdue_plans_cnt = r_overdue[0] or 0
-    overdue_findings_cnt = r_overdue[1] or 0
+        # 2. Compromisos Vencidos (Activos vs Suspendidos)
+        cursor.execute("""
+            SELECT COUNT(pa.id), COUNT(DISTINCT p.finding_id)
+            FROM action_plans pa
+            JOIN proposals p ON pa.proposal_id = p.id
+            WHERE pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ?
+              AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado', 'en suspensión', 'en suspension', 'stand-by')
+        """, (today_str,))
+        r_overdue = cursor.fetchone()
+        overdue_plans_cnt = r_overdue[0] or 0
+        overdue_findings_cnt = r_overdue[1] or 0
 
-    # 3. Implementación Validada
-    cursor.execute("SELECT COUNT(*) FROM proposals")
-    total_proposals = cursor.fetchone()[0] or 0
+        cursor.execute("""
+            SELECT COUNT(pa.id)
+            FROM action_plans pa
+            WHERE pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ?
+              AND LOWER(pa.status) IN ('en suspensión', 'en suspension', 'stand-by')
+        """, (today_str,))
+        suspended_overdue_cnt = cursor.fetchone()[0] or 0
 
-    cursor.execute("""
-        SELECT COUNT(*) FROM proposals
-        WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado', 'validado')
-    """)
-    validated_proposals = cursor.fetchone()[0] or 0
-    validated_pct = round((validated_proposals / total_proposals) * 100, 1) if total_proposals > 0 else 0.0
+        # 3. Implementación Validada vs Finalizada sin validación
+        cursor.execute("SELECT COUNT(*) FROM proposals")
+        total_proposals = cursor.fetchone()[0] or 0
 
-    # 4. Cierre en Plazo
-    cursor.execute("""
-        SELECT COUNT(*) FROM action_plans
-        WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
-          AND closed_date IS NOT NULL AND closed_date != ''
-          AND target_date IS NOT NULL AND target_date != ''
-          AND closed_date <= target_date
-    """)
-    on_time_closed_cnt = cursor.fetchone()[0] or 0
+        cursor.execute("""
+            SELECT COUNT(*) FROM proposals
+            WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado', 'validado')
+              AND validated_by IS NOT NULL AND validated_by != ''
+        """)
+        strictly_validated_proposals = cursor.fetchone()[0] or 0
 
-    cursor.execute("""
-        SELECT COUNT(*) FROM action_plans
-        WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
-          AND closed_date IS NOT NULL AND closed_date != ''
-          AND target_date IS NOT NULL AND target_date != ''
-    """)
-    total_closed_with_both_dates = cursor.fetchone()[0] or 0
+        cursor.execute("""
+            SELECT COUNT(*) FROM proposals
+            WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado', 'validado')
+        """)
+        finalized_proposals = cursor.fetchone()[0] or 0
 
-    cursor.execute("""
-        SELECT COUNT(*) FROM action_plans
-        WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
-          AND (closed_date IS NULL OR closed_date = '' OR target_date IS NULL OR target_date = '')
-    """)
-    excluded_missing_dates_cnt = cursor.fetchone()[0] or 0
+        if strictly_validated_proposals > 0:
+            val_label = "Implementación Validada"
+            val_cnt = strictly_validated_proposals
+            val_pct = round((val_cnt / total_proposals) * 100, 1) if total_proposals > 0 else 0.0
+            val_context = f"{val_cnt} de {total_proposals} propuestas validadas"
+        else:
+            val_label = "Propuestas Finalizadas"
+            val_cnt = finalized_proposals
+            val_pct = round((val_cnt / total_proposals) * 100, 1) if total_proposals > 0 else 0.0
+            val_context = f"{val_cnt} de {total_proposals} propuestas finalizadas (sin registro de validación formal)"
 
-    on_time_closed_pct = round((on_time_closed_cnt / total_closed_with_both_dates) * 100, 1) if total_closed_with_both_dates > 0 else 0.0
+        # 4. Cierre en Plazo
+        cursor.execute("""
+            SELECT COUNT(*) FROM action_plans
+            WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
+              AND closed_date IS NOT NULL AND closed_date != ''
+              AND target_date IS NOT NULL AND target_date != ''
+              AND closed_date <= target_date
+        """)
+        on_time_closed_cnt = cursor.fetchone()[0] or 0
 
-    # 5. Pendiente de Validación
-    cursor.execute("""
-        SELECT COUNT(*) FROM action_plans
-        WHERE (progress_pct = 100 OR LOWER(status) = 'pendiente de validación')
-          AND LOWER(status) NOT IN ('finalizado', 'validado', 'cerrado')
-    """)
-    pending_validation_cnt = cursor.fetchone()[0] or 0
+        cursor.execute("""
+            SELECT COUNT(*) FROM action_plans
+            WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
+              AND closed_date IS NOT NULL AND closed_date != ''
+              AND target_date IS NOT NULL AND target_date != ''
+        """)
+        total_closed_with_both_dates = cursor.fetchone()[0] or 0
 
-    return {
-        "high_risk_open": {
-            "count": high_risk_cnt,
-            "affected_reports": high_risk_reports,
-            "label": "Riesgo Alto Abierto",
-            "context": f"{high_risk_cnt} hallazgos críticos abiertos en {high_risk_reports} informes"
-        },
-        "overdue_commitments": {
-            "count": overdue_plans_cnt,
-            "affected_findings": overdue_findings_cnt,
-            "label": "Compromisos Vencidos",
-            "context": f"{overdue_plans_cnt} planes vencidos en {overdue_findings_cnt} hallazgos"
-        },
-        "validated_implementation": {
-            "count": validated_proposals,
-            "total": total_proposals,
-            "percentage": f"{validated_pct}%" if total_proposals > 0 else "Sin datos",
-            "label": "Implementación Validada",
-            "context": f"{validated_proposals} de {total_proposals} propuestas validadas"
-        },
-        "on_time_closure": {
-            "count": on_time_closed_cnt,
-            "total_evaluable": total_closed_with_both_dates,
-            "excluded_missing_dates": excluded_missing_dates_cnt,
-            "percentage": f"{on_time_closed_pct}%" if total_closed_with_both_dates > 0 else "Sin datos",
-            "label": "Cierre en Plazo",
-            "context": f"{on_time_closed_cnt} de {total_closed_with_both_dates} cierres evaluables ({excluded_missing_dates_cnt} excluidos sin fecha)"
-        },
-        "pending_validation": {
-            "count": pending_validation_cnt,
-            "label": "Pendiente de Validación",
-            "context": f"{pending_validation_cnt} compromisos al 100% que aguardan validación"
+        cursor.execute("""
+            SELECT COUNT(*) FROM action_plans
+            WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
+              AND (closed_date IS NULL OR closed_date = '' OR target_date IS NULL OR target_date = '')
+        """)
+        excluded_missing_dates_cnt = cursor.fetchone()[0] or 0
+
+        on_time_closed_pct = round((on_time_closed_cnt / total_closed_with_both_dates) * 100, 1) if total_closed_with_both_dates > 0 else 0.0
+
+        # 5. Pendiente de Validación
+        cursor.execute("""
+            SELECT COUNT(*) FROM action_plans
+            WHERE (progress_pct = 100 OR LOWER(status) = 'pendiente de validación')
+              AND LOWER(status) NOT IN ('finalizado', 'validado', 'cerrado')
+        """)
+        pending_validation_cnt = cursor.fetchone()[0] or 0
+
+        return {
+            "high_risk_open": {
+                "count": high_risk_cnt,
+                "affected_reports": high_risk_reports,
+                "label": "Riesgo Alto Abierto",
+                "context": f"{high_risk_cnt} hallazgos críticos abiertos en {high_risk_reports} informes"
+            },
+            "overdue_commitments": {
+                "count": overdue_plans_cnt,
+                "affected_findings": overdue_findings_cnt,
+                "suspended_count": suspended_overdue_cnt,
+                "label": "Compromisos Vencidos",
+                "context": f"{overdue_plans_cnt} planes activos vencidos en {overdue_findings_cnt} hallazgos ({suspended_overdue_cnt} suspendidos)"
+            },
+            "validated_implementation": {
+                "count": val_cnt,
+                "total": total_proposals,
+                "percentage": f"{val_pct}%" if total_proposals > 0 else "Sin datos",
+                "label": val_label,
+                "context": val_context
+            },
+            "on_time_closure": {
+                "count": on_time_closed_cnt,
+                "total_evaluable": total_closed_with_both_dates,
+                "excluded_missing_dates": excluded_missing_dates_cnt,
+                "percentage": f"{on_time_closed_pct}%" if total_closed_with_both_dates > 0 else "Sin datos",
+                "label": "Cierre en Plazo",
+                "context": f"{on_time_closed_cnt} de {total_closed_with_both_dates} cierres evaluables ({excluded_missing_dates_cnt} excluidos sin fecha)"
+            },
+            "pending_validation": {
+                "count": pending_validation_cnt,
+                "label": "Pendiente de Validación",
+                "context": f"{pending_validation_cnt} compromisos al 100% que aguardan validación"
+            }
         }
-    }
+    finally:
+        conn.close()
 
 
 def get_kpi_indicators():
@@ -1706,3 +1761,58 @@ def get_active_alerts():
         "due_soon": due_soon_alerts,
         "attention": attention_alerts
     }
+
+
+def validate_proposal(proposal_id: str, user_name: str = "Luciana Gamarra") -> bool:
+    init_db()
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        now_str = datetime.now().isoformat()
+        cursor.execute("""
+            UPDATE proposals
+            SET status = 'Finalizado', validated_at = ?, validated_by = ?, last_updated = ?
+            WHERE id = ? OR code = ?
+        """, (now_str, user_name, now_str, proposal_id, proposal_id))
+        updated = cursor.rowcount > 0
+        if updated:
+            cursor.execute("""
+                UPDATE action_plans
+                SET status = 'Finalizado', progress_pct = 100, closed_date = ?, validated_at = ?, validated_by = ?, last_updated = ?
+                WHERE proposal_id = (SELECT id FROM proposals WHERE id = ? OR code = ? LIMIT 1)
+            """, (date.today().strftime("%Y-%m-%d"), now_str, user_name, now_str, proposal_id, proposal_id))
+            add_history_log("proposal", proposal_id, user_name, f"Validación formal registrada por {user_name}", cursor=cursor)
+            cursor.execute("SELECT finding_id FROM proposals WHERE id = ? OR code = ?", (proposal_id, proposal_id))
+            f_row = cursor.fetchone()
+            if f_row and f_row[0]:
+                _evaluate_finding_cascade(cursor, f_row[0])
+        conn.commit()
+        return updated
+    finally:
+        conn.close()
+
+
+def validate_action_plan(plan_id: str, user_name: str = "Luciana Gamarra") -> bool:
+    init_db()
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        now_str = datetime.now().isoformat()
+        today_str = date.today().strftime("%Y-%m-%d")
+        cursor.execute("""
+            UPDATE action_plans
+            SET status = 'Finalizado', progress_pct = 100, closed_date = ?, validated_at = ?, validated_by = ?, last_updated = ?
+            WHERE id = ? OR code = ?
+        """, (today_str, now_str, user_name, now_str, plan_id, plan_id))
+        updated = cursor.rowcount > 0
+        if updated:
+            cursor.execute("SELECT proposal_id FROM action_plans WHERE id = ? OR code = ? LIMIT 1", (plan_id, plan_id))
+            row = cursor.fetchone()
+            if row:
+                prop_id = row[0]
+                _evaluate_proposal_cascade(cursor, prop_id)
+            add_history_log("action_plan", plan_id, user_name, f"Validación formal registrada por {user_name}", cursor=cursor)
+        conn.commit()
+        return updated
+    finally:
+        conn.close()

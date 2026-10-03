@@ -26,6 +26,7 @@ class AuditTrackRelationalTests(unittest.TestCase):
         database.init_db()
         self.app = app.test_client()
         self.app.testing = True
+        self.app.post("/login", json={"username": "admin", "password": "audit2026admin"})
 
     def tearDown(self):
         if hasattr(self, "tmp_path") and os.path.exists(self.tmp_path):

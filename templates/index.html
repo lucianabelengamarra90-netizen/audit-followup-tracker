@@ -415,7 +415,7 @@
                 <div class="view-header">
                     <div>
                         <h2>Tablero Ejecutivo de Indicadores de Auditoría</h2>
-                        <p>Visión gerencial de desempeño, conciliación de 5 KPIs finitos y gestión por área responsable.</p>
+                        <p>Riesgos abiertos, compromisos y avance de implementación</p>
                     </div>
                 </div>
 
@@ -457,7 +457,7 @@
                     <div class="card">
                         <h3 style="margin-bottom: 12px;">Desglose por Área Responsable</h3>
                         <div id="areaBreakdownList" style="max-height: 380px; overflow-y: auto;">
-                            <!-- Lista dinámica de áreas -->
+                            <!-- Lista dinámica de áreas con barras de progreso -->
                         </div>
                     </div>
 
@@ -470,11 +470,12 @@
                             <table class="audittrack-table">
                                 <thead>
                                     <tr>
-                                        <th>Código / Hallazgo</th>
-                                        <th>Área</th>
-                                        <th>Riesgo</th>
-                                        <th>Responsable</th>
-                                        <th>Estado</th>
+                                        <th>Informe / Hallazgo</th>
+                                        <th>Compromiso (Propuesta)</th>
+                                        <th>Área / Responsable</th>
+                                        <th>Fecha Compromiso</th>
+                                        <th>Días Vencido</th>
+                                        <th>Acción Pendiente / Estado</th>
                                     </tr>
                                 </thead>
                                 <tbody id="decisionTableBody">
@@ -774,6 +775,35 @@
             <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 10px;">
                 <button type="button" class="btn btn-outlined" onclick="closePreviewValidationModal()">Descartar</button>
                 <button type="button" class="btn btn-primary" onclick="confirmSaveValidatedReport()">Aprobar e Ingestar en AuditTrack</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: LOGIN / INICIAR SESIÓN -->
+<div id="loginModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" style="max-width: 420px;">
+        <div class="modal-header">
+            <h3>🔒 Iniciar Sesión en AuditTrack</h3>
+            <button type="button" class="modal-close" onclick="closeLoginModal()">×</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:12px; color:#64748B; margin-bottom:12px;">Se requiere autenticación para acceder a los datos y funciones de AuditTrack.</p>
+            
+            <div id="loginErrorMessage" style="display:none; background:#FEF2F2; border:1px solid #FCA5A5; color:#991B1B; padding:8px 12px; border-radius:6px; font-size:12px; margin-bottom:12px;"></div>
+
+            <div class="form-group">
+                <label>Usuario</label>
+                <input type="text" id="loginUsernameInput" placeholder="Ej. luciana (o admin, editor, lector)" value="admin">
+            </div>
+
+            <div class="form-group">
+                <label>Contraseña</label>
+                <input type="password" id="loginPasswordInput" placeholder="Contraseña" value="audit2026admin">
+            </div>
+
+            <div style="margin-top:16px;">
+                <button type="button" class="btn btn-primary" style="width:100%; justify-content:center;" onclick="submitLoginModal()">Ingresar</button>
             </div>
         </div>
     </div>

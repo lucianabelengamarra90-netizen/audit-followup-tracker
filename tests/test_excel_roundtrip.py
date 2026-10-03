@@ -20,6 +20,7 @@ class ExcelRoundTripTestCase(unittest.TestCase):
         database.DB_PATH = self.db_path
         app.config["TESTING"] = True
         self.client = app.test_client()
+        self.client.post("/login", json={"username": "admin", "password": "audit2026admin"})
         database.init_db()
 
     def tearDown(self):

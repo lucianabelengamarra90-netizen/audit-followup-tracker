@@ -9,6 +9,7 @@ from openpyxl.utils import get_column_letter
 
 from database import (
     init_db,
+    get_db,
     save_relational_report_structure,
     get_all_reports,
     get_report_detail,
@@ -29,7 +30,9 @@ from database import (
     add_history_log,
     get_active_alerts,
     get_proposal_by_id_or_code,
-    get_executive_kpis
+    get_executive_kpis,
+    validate_proposal,
+    validate_action_plan
 )
 from domain.auth import (
     get_current_user, login_user, logout_user, require_auth, require_role,
@@ -40,7 +43,15 @@ from report_parser import parse_audit_report, clean_text
 init_db()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "audittrack-secret-key-2026-v11")
+is_prod_env = bool(os.environ.get("RENDER") or os.environ.get("IS_PRODUCTION") or os.environ.get("FLASK_ENV") == "production")
+if is_prod_env:
+    secret = os.environ.get("SECRET_KEY")
+    if not secret:
+        raise RuntimeError("PRODUCTION CONFIG ERROR: SECRET_KEY environment variable is mandatory in production.")
+    app.secret_key = secret
+else:
+    app.secret_key = os.environ.get("SECRET_KEY", "audittrack-secret-key-2026-v1.2")
+
 app.config["MAX_CONTENT_LENGTH"] = 250 * 1024 * 1024
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -94,21 +105,52 @@ def index():
 def health():
     db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
     db_engine = "postgresql" if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")) else "sqlite"
+    
+    db_status = "unknown"
+    row_counts = {}
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        db_status = "connected"
+
+        cursor.execute("SELECT COUNT(*) FROM reports")
+        r_cnt = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM findings")
+        f_cnt = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM proposals")
+        p_cnt = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM action_plans")
+        pa_cnt = cursor.fetchone()[0] or 0
+
+        row_counts = {
+            "reports": r_cnt,
+            "findings": f_cnt,
+            "proposals": p_cnt,
+            "action_plans": pa_cnt
+        }
+        conn.close()
+    except Exception as exc:
+        db_status = f"error: {str(exc)}"
+
+    status_code = 200 if db_status == "connected" else 503
     return jsonify({
-        "status": "ok",
+        "status": "ok" if db_status == "connected" else "degraded",
         "app": "AuditTrack Relacional",
-        "version": "v1.1.0",
+        "version": "v1.2.0",
         "base_tag": "v1.0.0-base-2026-10-02",
-        "commit": "cea1a03",
         "db_engine": db_engine,
+        "db_status": db_status,
+        "counts": row_counts,
         "ai_enabled": False,
         "timestamp": datetime.now().isoformat()
-    })
+    }), status_code
 
 
 @app.route("/api/user")
 def api_user():
-    return jsonify({"success": True, "user": get_current_user()})
+    user = get_current_user()
+    return jsonify({"success": bool(user), "user": user})
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -132,9 +174,9 @@ def logout():
     return jsonify({"success": True, "message": "Sesión cerrada correctamente."})
 
 
-
-
 @app.route("/upload-report", methods=["POST"])
+@require_auth
+@require_role(ROLE_EDITOR, ROLE_VALIDATOR)
 def upload_report():
     if "file" not in request.files:
         return jsonify({"error": "No se seleccionó ningún archivo de informe."}), 400
@@ -184,6 +226,8 @@ def upload_report():
 
 
 @app.route("/parse-preview", methods=["POST"])
+@require_auth
+@require_role(ROLE_EDITOR, ROLE_VALIDATOR)
 def parse_preview():
     if "file" not in request.files:
         return jsonify({"error": "No se seleccionó ningún archivo de informe."}), 400
@@ -228,6 +272,8 @@ def parse_preview():
 
 
 @app.route("/save-validated-report", methods=["POST"])
+@require_auth
+@require_role(ROLE_EDITOR, ROLE_VALIDATOR)
 def save_validated_report():
     data = request.get_json(silent=True) or {}
     report_info = data.get("report", {})
@@ -249,16 +295,20 @@ def save_validated_report():
         return jsonify({"error": f"No se pudo guardar el informe: {str(exc)}"}), 500
 
 
-
 @app.route("/reports", methods=["GET"])
+@require_auth
 def list_reports():
     reports = get_all_reports()
     return jsonify({"reports": reports, "count": len(reports)})
 
 
 @app.route("/reports/<report_id>", methods=["GET", "DELETE"])
+@require_auth
 def report_detail_route(report_id):
     if request.method == "DELETE":
+        user = get_current_user()
+        if not user or user.get("role") != ROLE_VALIDATOR:
+            return jsonify({"error": "Permisos insuficientes. Se requiere el rol Validador para eliminar informes."}), 403
         deleted = delete_report(report_id)
         if deleted:
             return jsonify({"message": "Informe eliminado correctamente."})
@@ -271,6 +321,7 @@ def report_detail_route(report_id):
 
 
 @app.route("/findings", methods=["GET"])
+@require_auth
 def list_findings():
     filters = {
         "status": request.args.get("status"),
@@ -283,8 +334,12 @@ def list_findings():
 
 
 @app.route("/findings/<finding_id>", methods=["GET", "DELETE"])
+@require_auth
 def finding_detail_route(finding_id):
     if request.method == "DELETE":
+        user = get_current_user()
+        if not user or user.get("role") != ROLE_VALIDATOR:
+            return jsonify({"error": "Permisos insuficientes. Se requiere el rol Validador para eliminar hallazgos."}), 403
         deleted = delete_finding(finding_id)
         if deleted:
             return jsonify({"message": "Hallazgo eliminado."})
@@ -297,9 +352,12 @@ def finding_detail_route(finding_id):
 
 
 @app.route("/findings/<finding_id>/update", methods=["POST"])
+@require_auth
+@require_role(ROLE_EDITOR, ROLE_VALIDATOR)
 def update_finding_route(finding_id):
     data = request.get_json(silent=True) or {}
-    user_name = data.pop("user_name", "Auditoría Interna")
+    user = get_current_user()
+    user_name = user.get("name") if user else "Auditoría Interna"
     updated = update_finding(finding_id, data, user_name)
     if updated:
         return jsonify({"message": "Hallazgo actualizado correctamente."})
@@ -307,13 +365,16 @@ def update_finding_route(finding_id):
 
 
 @app.route("/findings/<finding_id>/add-proposal", methods=["POST"])
+@require_auth
+@require_role(ROLE_EDITOR, ROLE_VALIDATOR)
 def add_proposal_to_finding_route(finding_id):
     data = request.get_json(silent=True) or {}
     proposal_text = data.get("proposal_text")
     if not proposal_text:
         return jsonify({"error": "La propuesta de mejora no puede estar vacía."}), 400
 
-    user_name = data.get("user_name", "Auditoría Interna")
+    user = get_current_user()
+    user_name = user.get("name") if user else "Auditoría Interna"
     prop_id, p_code = create_proposal_for_finding(finding_id, proposal_text, user_name)
     if prop_id:
         return jsonify({"message": f"Propuesta {p_code} creada exitosamente.", "id": prop_id, "code": p_code})
@@ -321,9 +382,12 @@ def add_proposal_to_finding_route(finding_id):
 
 
 @app.route("/proposals/<proposal_id>/update", methods=["POST"])
+@require_auth
+@require_role(ROLE_EDITOR, ROLE_VALIDATOR)
 def update_proposal_route(proposal_id):
     data = request.get_json(silent=True) or {}
-    user_name = data.pop("user_name", "Auditoría Interna")
+    user = get_current_user()
+    user_name = user.get("name") if user else "Auditoría Interna"
     updated = update_proposal(proposal_id, data, user_name)
     if updated:
         return jsonify({"message": "Propuesta actualizada correctamente."})
@@ -331,6 +395,7 @@ def update_proposal_route(proposal_id):
 
 
 @app.route("/proposals", methods=["GET"])
+@require_auth
 def list_proposals():
     filters = {
         "status": request.args.get("status"),
@@ -341,8 +406,13 @@ def list_proposals():
 
 
 @app.route("/action-plans", methods=["GET", "POST"])
+@require_auth
 def action_plans_route():
     if request.method == "POST":
+        user = get_current_user()
+        if not user or user.get("role") not in (ROLE_EDITOR, ROLE_VALIDATOR):
+            return jsonify({"error": "Permisos insuficientes. Se requiere rol Editor o Validador para crear planes."}), 403
+
         data = request.get_json(silent=True) or {}
         finding_id = data.get("finding_id")
         proposal_id = data.get("proposal_id")
@@ -354,7 +424,7 @@ def action_plans_route():
             finding_id = None
 
         action_text = data.get("action_text") or data.get("title")
-        action_owner = data.get("action_owner") or "Auditoría Interna"
+        action_owner = data.get("action_owner") or (user.get("name") if user else "Auditoría Interna")
         target_date = data.get("target_date") or "2026-10-31"
         status = data.get("status") or "En proceso"
         progress_pct = int(data.get("progress_pct") or 0)
@@ -402,6 +472,8 @@ def action_plans_route():
 
 
 @app.route("/action-plans/<plan_id>", methods=["POST"])
+@require_auth
+@require_role(ROLE_EDITOR, ROLE_VALIDATOR)
 def update_action_plan_route(plan_id):
     data = request.get_json(silent=True) or {}
     status = data.get("status")
@@ -706,7 +778,26 @@ def download_template():
     )
 
 
+def parse_excel_pct(val):
+    if val is None:
+        return 0
+    if isinstance(val, (int, float)):
+        if 0.0 < val <= 1.0:
+            return int(round(val * 100))
+        return max(0, min(100, int(val)))
+    s = str(val).replace("%", "").strip()
+    try:
+        f = float(s)
+        if 0.0 < f <= 1.0:
+            return int(round(f * 100))
+        return max(0, min(100, int(f)))
+    except Exception:
+        return 0
+
+
 @app.route("/import-excel", methods=["POST"])
+@require_auth
+@require_role(ROLE_EDITOR, ROLE_VALIDATOR)
 def import_excel():
     if "file" not in request.files:
         return jsonify({"error": "No se envió ningún archivo"}), 400
@@ -716,18 +807,23 @@ def import_excel():
         return jsonify({"error": "Formato inválido. Debe ser un archivo Excel (.xlsx)"}), 400
 
     try:
-        wb = load_workbook(filename=BytesIO(file.read()), data_only=True)
-        ws = wb.active
+        content_bytes = file.read()
+        wb = load_workbook(filename=BytesIO(content_bytes), data_only=True)
+        
+        ws1 = wb["Hallazgos y Propuestas"] if "Hallazgos y Propuestas" in wb.sheetnames else wb.active
+        ws3 = wb["Planes de Acción"] if "Planes de Acción" in wb.sheetnames else None
 
-        rows = list(ws.iter_rows(values_only=True))
-        if len(rows) < 2:
+        rows1 = list(ws1.iter_rows(values_only=True))
+        if len(rows1) < 2:
             return jsonify({"error": "El archivo Excel está vacío o no contiene filas de datos"}), 400
 
         report_filename = file.filename
         report_title = f"Importación Excel - {os.path.splitext(report_filename)[0]}"
 
-        findings_to_insert = []
-        for idx, row in enumerate(rows[1:], start=1):
+        findings_map = {}
+        findings_order = []
+
+        for idx, row in enumerate(rows1[1:], start=1):
             if not row or not any(row):
                 continue
 
@@ -740,13 +836,9 @@ def import_excel():
             owner = str(row[6] or "").strip()
             target_date = str(row[7] or "").strip()
             status = str(row[8] or "En proceso").strip()
-            pct_raw = str(row[9] or "0").replace("%", "").strip()
-            try:
-                pct = int(float(pct_raw))
-            except Exception:
-                pct = 0
-            actions = str(row[10] or "").strip()
-            obs = str(row[11] or "").strip()
+            pct = parse_excel_pct(row[9] if len(row) > 9 else 0)
+            actions = str(row[10] or "").strip() if len(row) > 10 else ""
+            obs = str(row[11] or "").strip() if len(row) > 11 else ""
 
             if not h_code and not situation and not prop_text:
                 continue
@@ -768,42 +860,103 @@ def import_excel():
             elif "bajo" in risk.lower():
                 clean_risk = "Bajo"
 
-            finding_item = {
-                "code": h_code,
-                "title": situation[:100] if situation else f"Hallazgo {h_code}",
-                "situation": situation or "Sin detalle",
-                "risk": clean_risk,
-                "severity": clean_risk,
-                "responsible_area": area or "Operaciones",
-                "action_owner": owner or "Auditoría",
-                "status": clean_status,
-                "observations": obs,
-                "proposals": [
-                    {
-                        "code": p_code,
-                        "title": prop_text[:100] if prop_text else f"Propuesta {p_code}",
-                        "proposal_text": prop_text or "Sin detalle de propuesta",
-                        "severity": clean_risk,
-                        "responsible_area": area or "Operaciones",
-                        "action_owner": owner or "Auditoría",
-                        "target_date": target_date,
-                        "status": clean_status,
-                        "action_plans": [
-                            {
-                                "code": f"PA-{idx:03d}",
-                                "title": actions or prop_text[:100] or "Plan de Acción",
-                                "action_text": actions or prop_text or "Plan de Acción",
-                                "action_owner": owner or "Auditoría",
-                                "target_date": target_date,
-                                "status": clean_status,
-                                "progress_pct": pct,
-                                "notes": obs
+            if h_code not in findings_map:
+                finding_item = {
+                    "code": h_code,
+                    "title": situation[:100] if situation else f"Hallazgo {h_code}",
+                    "situation": situation or "Sin detalle",
+                    "risk": clean_risk,
+                    "severity": clean_risk,
+                    "responsible_area": area or "Operaciones",
+                    "action_owner": owner or "Auditoría",
+                    "status": clean_status,
+                    "observations": obs,
+                    "proposals": []
+                }
+                findings_map[h_code] = finding_item
+                findings_order.append(h_code)
+
+            finding_item = findings_map[h_code]
+
+            existing_prop = next((p for p in finding_item["proposals"] if p["code"] == p_code), None)
+            if not existing_prop:
+                prop_item = {
+                    "code": p_code,
+                    "title": prop_text[:100] if prop_text else f"Propuesta {p_code}",
+                    "proposal_text": prop_text or "Sin detalle de propuesta",
+                    "severity": clean_risk,
+                    "responsible_area": area or "Operaciones",
+                    "action_owner": owner or "Auditoría",
+                    "target_date": target_date,
+                    "status": clean_status,
+                    "action_plans": []
+                }
+                finding_item["proposals"].append(prop_item)
+                existing_prop = prop_item
+
+            if not ws3 and (actions or pct > 0):
+                pa_code = f"PA-IMP-{idx:03d}"
+                plan_item = {
+                    "code": pa_code,
+                    "title": actions or prop_text[:100] or "Plan de Acción",
+                    "action_text": actions or prop_text or "Plan de Acción",
+                    "action_owner": owner or "Auditoría",
+                    "target_date": target_date,
+                    "status": clean_status,
+                    "progress_pct": pct,
+                    "notes": obs
+                }
+                existing_prop["action_plans"].append(plan_item)
+
+        if ws3:
+            rows3 = list(ws3.iter_rows(values_only=True))
+            if len(rows3) >= 2:
+                for idx, r3 in enumerate(rows3[1:], start=1):
+                    if not r3 or not any(r3):
+                        continue
+                    pa_code = str(r3[0] or "").strip()
+                    pa_text = str(r3[1] or "").strip()
+                    p_code_link = str(r3[2] or "").strip()
+                    h_code_link = str(r3[3] or "").strip()
+                    pa_owner = str(r3[5] or "").strip()
+                    pa_target = str(r3[6] or "").strip()
+                    pa_pct = parse_excel_pct(r3[7] if len(r3) > 7 else 0)
+                    pa_status = str(r3[8] or "En proceso").strip() if len(r3) > 8 else "En proceso"
+                    pa_notes = str(r3[9] or "").strip() if len(r3) > 9 else ""
+
+                    if not pa_text and not pa_code:
+                        continue
+
+                    clean_pa_status = "En proceso"
+                    if "suspensión" in pa_status.lower() or "suspension" in pa_status.lower():
+                        clean_pa_status = "En suspensión"
+                    elif any(w in pa_status.lower() for w in ["finalizado", "completada", "completado", "cerrado"]):
+                        clean_pa_status = "Finalizado"
+
+                    matched_prop = None
+                    for f in findings_map.values():
+                        for p in f["proposals"]:
+                            if p["code"] == p_code_link or (h_code_link and f["code"] == h_code_link):
+                                matched_prop = p
+                                break
+                        if matched_prop:
+                            break
+
+                    if matched_prop:
+                        if not any(plan["code"] == pa_code for plan in matched_prop["action_plans"] if pa_code):
+                            plan_item = {
+                                "code": pa_code or f"PA-IMP3-{idx:03d}",
+                                "title": pa_text[:100] if pa_text else f"Plan {pa_code}",
+                                "action_text": pa_text or "Plan de Acción",
+                                "action_owner": pa_owner or matched_prop["action_owner"],
+                                "target_date": pa_target or matched_prop["target_date"],
+                                "status": clean_pa_status,
+                                "progress_pct": pa_pct,
+                                "notes": pa_notes
                             }
-                        ] if (actions or pct > 0) else []
-                    }
-                ]
-            }
-            findings_to_insert.append(finding_item)
+                            matched_prop["action_plans"].append(plan_item)
+
+        findings_to_insert = [findings_map[h] for h in findings_order]
 
         if not findings_to_insert:
             return jsonify({"error": "No se encontraron filas válidas en la planilla Excel"}), 400
@@ -811,20 +964,45 @@ def import_excel():
         report_data = {
             "title": report_title,
             "filename": report_filename,
-            "summary": f"Importación directa desde planilla Excel ({len(findings_to_insert)} hallazgos)."
+            "summary": f"Importación relacional desde planilla Excel ({len(findings_to_insert)} hallazgos)."
         }
 
-        save_relational_report_structure(report_data, findings_to_insert, report_filename)
+        report_id = save_relational_report_structure(report_data, findings_to_insert, report_filename)
 
         return jsonify({
             "success": True,
-            "message": f"Se importaron exitosamente {len(findings_to_insert)} hallazgos y propuestas desde Excel.",
+            "message": f"Se importaron exitosamente {len(findings_to_insert)} hallazgos agrupados con sus propuestas y planes desde Excel.",
+            "report_id": report_id,
             "imported_count": len(findings_to_insert)
         })
 
     except Exception as exc:
         print(f"Error procesando importación Excel: {exc}")
         return jsonify({"error": f"No se pudo procesar la planilla Excel: {str(exc)}"}), 500
+
+
+@app.route("/proposals/<proposal_id>/validate", methods=["POST"])
+@require_auth
+@require_role(ROLE_VALIDATOR)
+def validate_proposal_route(proposal_id):
+    user = get_current_user()
+    user_name = user.get("name") if user else "Auditoría Interna"
+    success = validate_proposal(proposal_id, user_name=user_name)
+    if success:
+        return jsonify({"message": "Propuesta validada formalmente."})
+    return jsonify({"error": "Propuesta no encontrada."}), 404
+
+
+@app.route("/action-plans/<plan_id>/validate", methods=["POST"])
+@require_auth
+@require_role(ROLE_VALIDATOR)
+def validate_action_plan_route(plan_id):
+    user = get_current_user()
+    user_name = user.get("name") if user else "Auditoría Interna"
+    success = validate_action_plan(plan_id, user_name=user_name)
+    if success:
+        return jsonify({"message": "Plan de Acción validado formalmente."})
+    return jsonify({"error": "Plan de Acción no encontrado."}), 404
 
 
 if __name__ == "__main__":

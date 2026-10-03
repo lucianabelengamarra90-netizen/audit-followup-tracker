@@ -2,6 +2,61 @@
 // AUDITTRACK - FRONTEND CONTROLLER (ESTRUCTURA RELACIONAL INTEGRADA)
 // ============================================================
 
+// Fetch interceptor for 401 Unauthorized handling
+const originalFetch = window.fetch;
+window.fetch = async function(...args) {
+    const response = await originalFetch(...args);
+    if (response.status === 401) {
+        const urlStr = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
+        if (!urlStr.includes('/login') && !urlStr.includes('/api/user')) {
+            showLoginModal();
+        }
+    }
+    return response;
+};
+
+function showLoginModal() {
+    const modal = el("loginModal");
+    if (modal) modal.style.display = "flex";
+}
+
+function closeLoginModal() {
+    const modal = el("loginModal");
+    if (modal) modal.style.display = "none";
+}
+
+async function submitLoginModal() {
+    const user = el("loginUsernameInput")?.value || "";
+    const pwd = el("loginPasswordInput")?.value || "";
+    const errBox = el("loginErrorMessage");
+    if (errBox) errBox.style.display = "none";
+
+    try {
+        const res = await originalFetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: user, password: pwd })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            closeLoginModal();
+            showToast(`Sesión iniciada como ${data.user.name}`, "success");
+            await initUserSession();
+            await loadAllData();
+        } else {
+            if (errBox) {
+                errBox.textContent = data.error || "Credenciales inválidas";
+                errBox.style.display = "block";
+            }
+        }
+    } catch (e) {
+        if (errBox) {
+            errBox.textContent = "Error de conexión al iniciar sesión";
+            errBox.style.display = "block";
+        }
+    }
+}
+
 let currentFindings = [];
 let currentProposals = [];
 let currentActionPlans = [];
@@ -1479,11 +1534,15 @@ function renderAreaBreakdownList() {
     (currentFindings || []).forEach(f => {
         const area = f.responsible_area || "Operaciones";
         if (!areaMap[area]) {
-            areaMap[area] = { total: 0, high: 0, open: 0 };
+            areaMap[area] = { total: 0, high: 0, open: 0, closed: 0 };
         }
         areaMap[area].total += 1;
         if ((f.severity || "").toLowerCase() === "alto") areaMap[area].high += 1;
-        if ((f.status || "").toLowerCase() !== "finalizado") areaMap[area].open += 1;
+        if ((f.status || "").toLowerCase() === "finalizado") {
+            areaMap[area].closed += 1;
+        } else {
+            areaMap[area].open += 1;
+        }
     });
 
     const areas = Object.keys(areaMap).sort((a, b) => areaMap[b].total - areaMap[a].total);
@@ -1495,20 +1554,43 @@ function renderAreaBreakdownList() {
 
     container.innerHTML = areas.map(area => {
         const info = areaMap[area];
+        const pct = info.total > 0 ? Math.round((info.closed / info.total) * 100) : 0;
         return `
-            <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid #E2E8F0;">
-                <div>
+            <div style="padding:10px 12px; border-bottom:1px solid #E2E8F0;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
                     <strong style="color:#0F172A; font-size:13px;">${escapeHtml(area)}</strong>
-                    <div style="font-size:11px; color:#64748B; margin-top:2px;">
+                    <span style="font-size:11px; font-weight:700; color:#0055D4;">${pct}% cerrado (${info.closed}/${info.total})</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px;">
+                    <div style="font-size:11px; color:#64748B;">
                         ${info.open} abiertos | <span style="color:#DC2626; font-weight:600;">${info.high} Riesgo Alto</span>
                     </div>
                 </div>
-                <div style="background:#F1F5F9; font-size:12px; font-weight:700; color:#0F172A; padding:4px 10px; border-radius:12px;">
-                    ${info.total} hallazgos
+                <div style="background:#E2E8F0; border-radius:4px; height:6px; margin-top:6px; overflow:hidden;">
+                    <div style="background:#0055D4; width:${pct}%; height:100%;"></div>
                 </div>
             </div>
         `;
     }).join("");
+}
+
+function getDaysOverdue(dateStr) {
+    if (!dateStr) return 0;
+    let d = null;
+    const str = dateStr.toString().trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
+        const parts = str.slice(0, 10).split("-");
+        d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    } else if (/^\d{1,2}\/\d{1,2}\/\d{4}/.test(str)) {
+        const parts = str.slice(0, 10).split("/");
+        d = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+    }
+    if (!d || isNaN(d.getTime())) return 0;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (d >= today) return 0;
+    const diffMs = today.getTime() - d.getTime();
+    return Math.floor(diffMs / (1000 * 60 * 60 * 24));
 }
 
 function renderDecisionTable(filterKey = null) {
@@ -1516,44 +1598,137 @@ function renderDecisionTable(filterKey = null) {
     const titleEl = el("decisionTableTitle");
     if (!tbody) return;
 
-    let items = currentFindings || [];
+    // Expand findings and proposals into flat decision items
+    let rows = [];
+    (currentFindings || []).forEach(f => {
+        const props = (f.proposals && f.proposals.length > 0) ? f.proposals : [null];
+        props.forEach(p => {
+            const firstAction = (p && p.action_plans && p.action_plans.length > 0) ? p.action_plans[0] : null;
+            const owner = (p && p.action_owner) || (firstAction && firstAction.action_owner) || f.action_owner || "Sin asignar";
+            const targetDate = (p && p.target_date) || (firstAction && firstAction.target_date) || f.target_date || "";
+            const status = (p && p.status) || f.status || "En proceso";
+            const daysOverdue = getDaysOverdue(targetDate);
+            const isPendingVal = status === "Pendiente de validación" || ((p && p.progress_pct === 100 || (firstAction && firstAction.progress_pct === 100)) && status !== "Finalizado");
+
+            rows.push({
+                finding_id: f.id,
+                finding_code: f.code,
+                finding_title: f.title || f.situation,
+                report_title: f.report_title || f.source_filename || "Informe",
+                proposal_id: p ? p.id : null,
+                proposal_code: p ? p.code : "-",
+                proposal_text: p ? (p.proposal_text || p.title) : "Sin propuesta",
+                area: f.responsible_area || "Operaciones",
+                severity: f.severity || "Medio",
+                owner: owner,
+                target_date: targetDate,
+                status: status,
+                days_overdue: daysOverdue,
+                is_pending_val: isPendingVal
+            });
+        });
+    });
 
     if (filterKey === "high_risk") {
-        items = items.filter(f => (f.severity || "").toLowerCase() === "alto" && (f.status || "").toLowerCase() !== "finalizado");
+        rows = rows.filter(r => (r.severity || "").toLowerCase() === "alto" && (r.status || "").toLowerCase() !== "finalizado");
         if (titleEl) titleEl.textContent = "Tabla de Decisiones: Hallazgos de Riesgo Alto Abiertos";
     } else if (filterKey === "overdue") {
-        items = items.filter(f => {
-            const status = (f.status || "").toLowerCase();
-            return status === "vencido" || isDateOverdue(f.target_date);
-        });
+        rows = rows.filter(r => r.days_overdue > 0 && (r.status || "").toLowerCase() !== "finalizado");
         if (titleEl) titleEl.textContent = "Tabla de Decisiones: Compromisos Vencidos";
     } else if (filterKey === "validated") {
-        items = items.filter(f => ["finalizado", "completado", "validado"].includes((f.status || "").toLowerCase()));
+        rows = rows.filter(r => ["finalizado", "completado", "validado"].includes((r.status || "").toLowerCase()));
         if (titleEl) titleEl.textContent = "Tabla de Decisiones: Implementaciones Validadas";
     } else if (filterKey === "pending_val") {
-        items = items.filter(f => (f.progress_pct === 100 || (f.status || "").toLowerCase() === "pendiente de validación") && (f.status || "").toLowerCase() !== "finalizado");
+        rows = rows.filter(r => r.is_pending_val);
         if (titleEl) titleEl.textContent = "Tabla de Decisiones: Pendientes de Validación";
+    } else if (filterKey === "on_time") {
+        rows = rows.filter(r => ["finalizado", "completado", "validado"].includes((r.status || "").toLowerCase()) && r.days_overdue === 0);
+        if (titleEl) titleEl.textContent = "Tabla de Decisiones: Cierres en Plazo";
     } else {
         if (titleEl) titleEl.textContent = "Tabla de Decisiones Ejecutivas (Todos)";
     }
 
-    if (items.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:#64748B;">No se encontraron registros para este filtro.</td></tr>`;
+    if (rows.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:20px; color:#64748B;">No se encontraron registros para este filtro.</td></tr>`;
         return;
     }
 
-    tbody.innerHTML = items.map(item => `
-        <tr>
-            <td>
-                <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${item.code}'); return false;">${escapeHtml(item.code)}</a>
-                <div style="font-size:11px; color:#475569; max-width:280px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">${escapeHtml(item.title || item.situation)}</div>
-            </td>
-            <td>${escapeHtml(item.responsible_area || "Operaciones")}</td>
-            <td><span class="pill pill-${(item.severity || 'medio').toLowerCase()}">${escapeHtml(item.severity)}</span></td>
-            <td><strong>${escapeHtml(item.action_owner || "Auditoría")}</strong></td>
-            <td><span class="pill pill-${(item.status || 'en proceso').toLowerCase().replace(' ', '-')}">${escapeHtml(item.status || "En proceso")}</span></td>
-        </tr>
-    `).join("");
+    const canValidate = ["Validador", "Admin"].includes(window.currentUserRole);
+
+    tbody.innerHTML = rows.map(r => {
+        let actionCol = `<span class="pill pill-${(r.status || 'en proceso').toLowerCase().replace(/\s+/g, '-')}">${escapeHtml(r.status || "En proceso")}</span>`;
+
+        if (r.is_pending_val && canValidate && r.proposal_id) {
+            actionCol += `<div style="margin-top:4px;"><button class="btn btn-primary" style="padding:2px 8px; font-size:10px;" onclick="validateProposal('${r.proposal_id}')">✓ Validar</button></div>`;
+        }
+
+        return `
+            <tr>
+                <td>
+                    <span style="font-size:10px; color:#64748B; display:block;">${escapeHtml(r.report_title)}</span>
+                    <a href="#" style="color:#0055D4; font-weight:700;" onclick="openFindingDrawer('${r.finding_id}'); return false;">${escapeHtml(r.finding_code)}</a>
+                    <div style="font-size:11px; color:#475569; max-width:200px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="${escapeHtml(r.finding_title)}">${escapeHtml(r.finding_title)}</div>
+                </td>
+                <td>
+                    <strong style="color:#16A34A; font-size:12px;">${escapeHtml(r.proposal_code)}</strong>
+                    <div style="font-size:11px; color:#334155; max-width:240px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="${escapeHtml(r.proposal_text)}">${escapeHtml(r.proposal_text)}</div>
+                </td>
+                <td>
+                    <strong style="font-size:12px; color:#0F172A;">${escapeHtml(r.area)}</strong>
+                    <div style="font-size:11px; color:#64748B;">👤 ${escapeHtml(r.owner)}</div>
+                </td>
+                <td>${escapeHtml(r.target_date || '-')}</td>
+                <td>
+                    <strong style="color: ${r.days_overdue > 0 ? '#DC2626' : '#16A34A'};">
+                        ${r.days_overdue > 0 ? `⚠️ ${r.days_overdue} días` : 'Al día'}
+                    </strong>
+                </td>
+                <td>${actionCol}</td>
+            </tr>
+        `;
+    }).join("");
+}
+
+async function validateProposal(proposalId) {
+    try {
+        const res = await fetch(`/api/proposals/${proposalId}/validate`, {
+            method: "POST"
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            showToast(data.message || "Propuesta validada exitosamente", "success");
+            await loadAllData();
+            if (el("tab-indicadores")?.classList.contains("active")) {
+                await loadKpiIndicatorsTab();
+            }
+        } else {
+            showToast(data.error || "Error al validar propuesta", "error");
+        }
+    } catch (e) {
+        console.error("Error al validar propuesta:", e);
+        showToast("Error de conexión al validar propuesta", "error");
+    }
+}
+
+async function validateActionPlan(planId) {
+    try {
+        const res = await fetch(`/api/action-plans/${planId}/validate`, {
+            method: "POST"
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            showToast(data.message || "Plan de acción validado exitosamente", "success");
+            await loadAllData();
+            if (el("tab-indicadores")?.classList.contains("active")) {
+                await loadKpiIndicatorsTab();
+            }
+        } else {
+            showToast(data.error || "Error al validar plan de acción", "error");
+        }
+    } catch (e) {
+        console.error("Error al validar plan de acción:", e);
+        showToast("Error de conexión al validar plan de acción", "error");
+    }
 }
 
 function filterDecisionTable(filterKey) {

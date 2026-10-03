@@ -34,6 +34,7 @@ class ParserRegressionTests(unittest.TestCase):
         database.init_db()
         self.app = app.test_client()
         self.app.testing = True
+        self.app.post("/login", json={"username": "admin", "password": "audit2026admin"})
         os.environ["OPENAI_API_KEY"] = ""
 
     def tearDown(self):

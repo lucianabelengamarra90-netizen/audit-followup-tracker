@@ -13,22 +13,33 @@ class AuthAndExecutiveKPITests(unittest.TestCase):
         self.app = app.test_client()
         self.app.testing = True
 
+    def login_as_admin(self):
+        return self.app.post("/login", json={"username": "admin", "password": "audit2026admin"})
+
     def test_health_endpoint(self):
         res = self.app.get("/health")
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
-        self.assertEqual(data["version"], "v1.1.0")
+        self.assertEqual(data["status"], "ok")
+        self.assertEqual(data["version"], "v1.2.0")
         self.assertEqual(data["base_tag"], "v1.0.0-base-2026-10-02")
-        self.assertEqual(data["commit"], "cea1a03")
         self.assertFalse(data["ai_enabled"])
 
+    def test_unauthenticated_api_returns_401(self):
+        res = self.app.get("/findings")
+        self.assertEqual(res.status_code, 401)
+        data = res.get_json()
+        self.assertIn("error", data)
+        self.assertEqual(data["error"], "Acceso no autorizado. Inicie sesión.")
+
     def test_user_session_and_login(self):
-        # Default user
+        # Default unauthenticated user session
+        self.app.post("/logout")
         res = self.app.get("/api/user")
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
-        self.assertTrue(data["success"])
-        self.assertIn("role", data["user"])
+        self.assertFalse(data["success"])
+        self.assertIsNone(data["user"])
 
         # Login as reader
         login_res = self.app.post("/login", json={"username": "lector", "password": "audit2026reader"})
@@ -43,6 +54,7 @@ class AuthAndExecutiveKPITests(unittest.TestCase):
         self.assertEqual(login_data["user"]["role"], ROLE_VALIDATOR)
 
     def test_executive_kpis_endpoint(self):
+        self.login_as_admin()
         res = self.app.get("/api/kpi-executive")
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
@@ -53,6 +65,25 @@ class AuthAndExecutiveKPITests(unittest.TestCase):
         self.assertIn("validated_implementation", kpis)
         self.assertIn("on_time_closure", kpis)
         self.assertIn("pending_validation", kpis)
+
+    def test_production_db_fails_if_no_database_url(self):
+        import database
+        original_env = os.environ.get("RENDER")
+        original_db_url = os.environ.get("DATABASE_URL")
+        try:
+            os.environ["RENDER"] = "true"
+            if "DATABASE_URL" in os.environ:
+                del os.environ["DATABASE_URL"]
+            with self.assertRaises(RuntimeError) as ctx:
+                database.get_db()
+            self.assertIn("DATABASE_URL is not set", str(ctx.exception))
+        finally:
+            if original_env is not None:
+                os.environ["RENDER"] = original_env
+            else:
+                os.environ.pop("RENDER", None)
+            if original_db_url is not None:
+                os.environ["DATABASE_URL"] = original_db_url
 
 if __name__ == "__main__":
     unittest.main()
