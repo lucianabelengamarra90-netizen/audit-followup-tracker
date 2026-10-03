@@ -1387,6 +1387,7 @@ async function loadExecutiveDashboard() {
         renderExecutiveKpis(execData.kpis);
         renderExecutiveAreaChart(execData.charts ? execData.charts.by_area : []);
         renderExecutiveAgingChart(execData.charts ? execData.charts.aging : {});
+        renderExecutiveEffectivenessChart(execData.kpis);
         renderExecutiveAgendaTable(execData.agenda || []);
     } catch (err) {
         console.error("Error cargando Tablero Ejecutivo:", err);
@@ -1508,7 +1509,8 @@ function renderExecutiveKpis(kpis) {
 }
 
 function renderExecutiveAreaChart(areaData) {
-    const ctx = el("execChartArea")?.getContext("2d");
+    const canvas = el("execChartArea");
+    const ctx = canvas?.getContext("2d");
     if (!ctx) return;
     if (chartInstances.execArea) chartInstances.execArea.destroy();
 
@@ -1516,22 +1518,37 @@ function renderExecutiveAreaChart(areaData) {
     const highRiskData = (areaData || []).map(item => item.high_risk_open);
     const overdueData = (areaData || []).map(item => item.overdue);
 
+    // Dynamic gradients for bars
+    let highRiskGrad = ctx.createLinearGradient(0, 0, 300, 0);
+    highRiskGrad.addColorStop(0, "#EF4444");
+    highRiskGrad.addColorStop(1, "#991B1B");
+
+    let overdueGrad = ctx.createLinearGradient(0, 0, 300, 0);
+    overdueGrad.addColorStop(0, "#F97316");
+    overdueGrad.addColorStop(1, "#C2410C");
+
     chartInstances.execArea = new Chart(ctx, {
         type: "bar",
         data: {
-            labels: labels.length ? labels : ["Sin datos"],
+            labels: labels.length ? labels : ["Sin áreas registradas"],
             datasets: [
                 {
                     label: "Riesgo Alto Abierto",
                     data: highRiskData.length ? highRiskData : [0],
-                    backgroundColor: "#DC2626",
-                    borderRadius: 4
+                    backgroundColor: highRiskGrad,
+                    borderRadius: 6,
+                    borderSkipped: false,
+                    barPercentage: 0.7,
+                    categoryPercentage: 0.8
                 },
                 {
                     label: "Compromisos Vencidos",
                     data: overdueData.length ? overdueData : [0],
-                    backgroundColor: "#EA580C",
-                    borderRadius: 4
+                    backgroundColor: overdueGrad,
+                    borderRadius: 6,
+                    borderSkipped: false,
+                    barPercentage: 0.7,
+                    categoryPercentage: 0.8
                 }
             ]
         },
@@ -1540,48 +1557,174 @@ function renderExecutiveAreaChart(areaData) {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: { position: "top" },
-                tooltip: { mode: "index", intersect: false }
+                legend: {
+                    position: "top",
+                    align: "end",
+                    labels: {
+                        boxWidth: 12,
+                        boxHeight: 12,
+                        usePointStyle: true,
+                        pointStyle: "circle",
+                        font: { family: "Inter, sans-serif", size: 11, weight: "600" },
+                        color: "#475569"
+                    }
+                },
+                tooltip: {
+                    backgroundColor: "#0F172A",
+                    titleFont: { family: "Inter, sans-serif", size: 12, weight: "700" },
+                    bodyFont: { family: "Inter, sans-serif", size: 11 },
+                    padding: 10,
+                    cornerRadius: 8,
+                    displayColors: true
+                }
             },
             scales: {
-                x: { beginAtZero: true, ticks: { precision: 0 } }
+                x: {
+                    beginAtZero: true,
+                    grid: { color: "#F1F5F9" },
+                    ticks: { precision: 0, font: { family: "Inter, sans-serif", size: 11 }, color: "#64748B" }
+                },
+                y: {
+                    grid: { display: false },
+                    ticks: { font: { family: "Inter, sans-serif", size: 11, weight: "600" }, color: "#334155" }
+                }
             }
         }
     });
 }
 
 function renderExecutiveAgingChart(agingData) {
-    const ctx = el("execChartAging")?.getContext("2d");
+    const canvas = el("execChartAging");
+    const ctx = canvas?.getContext("2d");
     if (!ctx) return;
     if (chartInstances.execAging) chartInstances.execAging.destroy();
 
     const dataVals = [
-        agingData ? agingData["1_30"] : 0,
-        agingData ? agingData["31_60"] : 0,
-        agingData ? agingData[">60"] : 0
+        agingData ? agingData["1_30"] || 0 : 0,
+        agingData ? agingData["31_60"] || 0 : 0,
+        agingData ? agingData[">60"] || 0 : 0
     ];
 
+    const totalOverdue = dataVals.reduce((a, b) => a + b, 0);
+
+    // Update center badge count
+    if (el("execAgingCenterCount")) {
+        el("execAgingCenterCount").textContent = totalOverdue;
+    }
+
     chartInstances.execAging = new Chart(ctx, {
-        type: "bar",
+        type: "doughnut",
         data: {
             labels: ["1-30 días", "31-60 días", "> 60 días"],
             datasets: [
                 {
-                    label: "Planes Vencidos",
-                    data: dataVals,
-                    backgroundColor: ["#FBBF24", "#F97316", "#DC2626"],
-                    borderRadius: 4
+                    data: totalOverdue > 0 ? dataVals : [0, 0, 1],
+                    backgroundColor: totalOverdue > 0 ? ["#F59E0B", "#F97316", "#DC2626"] : ["#E2E8F0", "#E2E8F0", "#E2E8F0"],
+                    borderWidth: 3,
+                    borderColor: "#FFFFFF",
+                    hoverOffset: 6
                 }
             ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            cutout: "75%",
             plugins: {
-                legend: { display: false }
-            },
-            scales: {
-                y: { beginAtZero: true, ticks: { precision: 0 } }
+                legend: {
+                    position: "bottom",
+                    labels: {
+                        boxWidth: 10,
+                        usePointStyle: true,
+                        pointStyle: "circle",
+                        font: { family: "Inter, sans-serif", size: 11, weight: "600" },
+                        color: "#475569",
+                        padding: 14
+                    }
+                },
+                tooltip: {
+                    backgroundColor: "#0F172A",
+                    titleFont: { family: "Inter, sans-serif", size: 12, weight: "700" },
+                    bodyFont: { family: "Inter, sans-serif", size: 11 },
+                    padding: 10,
+                    cornerRadius: 8,
+                    callbacks: {
+                        label: function(context) {
+                            if (totalOverdue === 0) return " Sin compromisos vencidos";
+                            const val = context.raw || 0;
+                            const pct = totalOverdue > 0 ? Math.round((val / totalOverdue) * 100) : 0;
+                            return ` ${context.label}: ${val} planes (${pct}%)`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function renderExecutiveEffectivenessChart(kpis) {
+    const canvas = el("execChartEffectiveness");
+    const ctx = canvas?.getContext("2d");
+    if (!ctx) return;
+    if (chartInstances.execEffectiveness) chartInstances.execEffectiveness.destroy();
+
+    const validatedObj = kpis ? kpis.validated_implementation : null;
+    const rateVal = validatedObj && validatedObj.rate !== null && validatedObj.rate !== undefined ? validatedObj.rate : null;
+    const countVal = validatedObj ? validatedObj.count || 0 : 0;
+    const totalVal = validatedObj ? validatedObj.total || 0 : 0;
+    const pendingCount = Math.max(0, totalVal - countVal);
+
+    if (el("execEffectivenessCenterRate")) {
+        el("execEffectivenessCenterRate").textContent = rateVal !== null ? `${rateVal}%` : "0%";
+    }
+
+    const hasData = totalVal > 0;
+
+    chartInstances.execEffectiveness = new Chart(ctx, {
+        type: "doughnut",
+        data: {
+            labels: ["Validado", "Pendiente / En Proceso"],
+            datasets: [
+                {
+                    data: hasData ? [countVal, pendingCount] : [0, 1],
+                    backgroundColor: hasData ? ["#10B981", "#3B82F6"] : ["#E2E8F0", "#E2E8F0"],
+                    borderWidth: 3,
+                    borderColor: "#FFFFFF",
+                    hoverOffset: 6
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: "75%",
+            plugins: {
+                legend: {
+                    position: "bottom",
+                    labels: {
+                        boxWidth: 10,
+                        usePointStyle: true,
+                        pointStyle: "circle",
+                        font: { family: "Inter, sans-serif", size: 11, weight: "600" },
+                        color: "#475569",
+                        padding: 14
+                    }
+                },
+                tooltip: {
+                    backgroundColor: "#0F172A",
+                    titleFont: { family: "Inter, sans-serif", size: 12, weight: "700" },
+                    bodyFont: { family: "Inter, sans-serif", size: 11 },
+                    padding: 10,
+                    cornerRadius: 8,
+                    callbacks: {
+                        label: function(context) {
+                            if (!hasData) return " Sin propuestas para evaluar";
+                            const val = context.raw || 0;
+                            const pct = totalVal > 0 ? Math.round((val / totalVal) * 100) : 0;
+                            return ` ${context.label}: ${val} (${pct}%)`;
+                        }
+                    }
+                }
             }
         }
     });
