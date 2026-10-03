@@ -1,6 +1,16 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
+from zoneinfo import ZoneInfo
 
+ARGENTINA_TZ = ZoneInfo("America/Buenos_Aires")
+
+def get_argentina_now() -> datetime:
+    """Retorna la fecha y hora actual en la zona horaria America/Buenos_Aires."""
+    return datetime.now(ARGENTINA_TZ)
+
+def get_argentina_today() -> date:
+    """Retorna la fecha actual (solo fecha) en America/Buenos_Aires."""
+    return get_argentina_now().date()
 
 def parse_date_to_iso(date_input: Optional[str]) -> Optional[str]:
     """
@@ -56,13 +66,13 @@ def format_display_date(iso_date_str: Optional[str]) -> str:
 
 
 def is_date_past(iso_date_str: Optional[str], today: Optional[datetime] = None) -> bool:
-    """Evalúa si una fecha en formato ISO es estrictamente menor al día de hoy."""
+    """Evalúa si una fecha en formato ISO es estrictamente menor a hoy en America/Buenos_Aires."""
     iso = parse_date_to_iso(iso_date_str)
     if not iso:
         return False
         
     try:
-        t_date = (today or datetime.now()).date()
+        t_date = (today.date() if today else get_argentina_today())
         d_date = datetime.strptime(iso, "%Y-%m-%d").date()
         return d_date < t_date
     except Exception:

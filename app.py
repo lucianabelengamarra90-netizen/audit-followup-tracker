@@ -137,7 +137,7 @@ def health():
     return jsonify({
         "status": "ok" if db_status == "connected" else "degraded",
         "app": "AuditTrack Relacional",
-        "version": "v1.2.0",
+        "version": "v1.3.0",
         "base_tag": "v1.0.0-base-2026-10-02",
         "db_engine": db_engine,
         "db_status": db_status,
@@ -492,6 +492,7 @@ def update_action_plan_route(plan_id):
 
 
 @app.route("/dashboard-stats")
+@require_auth
 def dashboard_stats_route():
     stats = get_dashboard_stats()
     return jsonify(stats)
@@ -499,12 +500,14 @@ def dashboard_stats_route():
 
 @app.route("/kpi-indicators")
 @app.route("/api/kpi-executive")
+@require_auth
 def kpi_indicators_route():
     kpis = get_executive_kpis()
     return jsonify({"indicators": kpis, "kpis": kpis})
 
 
 @app.route("/api/notifications")
+@require_auth
 def api_notifications():
     alerts = get_active_alerts()
     return jsonify(alerts)
@@ -536,6 +539,7 @@ def compute_effective_status(status_raw, target_date_str):
 
 
 @app.route("/export-excel", methods=["POST", "GET"])
+@require_auth
 def export_excel():
     findings = get_all_findings()
     proposals = get_all_proposals()
@@ -707,6 +711,7 @@ def export_excel():
 
 
 @app.route("/download-template")
+@require_auth
 def download_template():
     wb = Workbook()
     ws = wb.active
@@ -782,15 +787,25 @@ def parse_excel_pct(val):
     if val is None:
         return 0
     if isinstance(val, (int, float)):
-        if 0.0 < val <= 1.0:
+        if isinstance(val, float) and 0.0 < val <= 1.0:
             return int(round(val * 100))
-        return max(0, min(100, int(val)))
-    s = str(val).replace("%", "").strip()
+        return max(0, min(100, int(round(val))))
+
+    raw_str = str(val).strip()
+    if not raw_str:
+        return 0
+
+    has_percent = "%" in raw_str
+    clean_str = raw_str.replace("%", "").strip()
+
     try:
-        f = float(s)
-        if 0.0 < f <= 1.0:
-            return int(round(f * 100))
-        return max(0, min(100, int(f)))
+        f = float(clean_str)
+        if has_percent:
+            return max(0, min(100, int(round(f))))
+        else:
+            if 0.0 < f < 1.0:
+                return int(round(f * 100))
+            return max(0, min(100, int(round(f))))
     except Exception:
         return 0
 
@@ -981,28 +996,30 @@ def import_excel():
         return jsonify({"error": f"No se pudo procesar la planilla Excel: {str(exc)}"}), 500
 
 
+@app.route("/api/proposals/<proposal_id>/validate", methods=["POST"])
 @app.route("/proposals/<proposal_id>/validate", methods=["POST"])
 @require_auth
 @require_role(ROLE_VALIDATOR)
 def validate_proposal_route(proposal_id):
     user = get_current_user()
     user_name = user.get("name") if user else "Auditoría Interna"
-    success = validate_proposal(proposal_id, user_name=user_name)
+    success, msg = validate_proposal(proposal_id, user_name=user_name)
     if success:
-        return jsonify({"message": "Propuesta validada formalmente."})
-    return jsonify({"error": "Propuesta no encontrada."}), 404
+        return jsonify({"success": True, "message": msg, "id": proposal_id})
+    return jsonify({"success": False, "error": msg}), 400
 
 
+@app.route("/api/action-plans/<plan_id>/validate", methods=["POST"])
 @app.route("/action-plans/<plan_id>/validate", methods=["POST"])
 @require_auth
 @require_role(ROLE_VALIDATOR)
 def validate_action_plan_route(plan_id):
     user = get_current_user()
     user_name = user.get("name") if user else "Auditoría Interna"
-    success = validate_action_plan(plan_id, user_name=user_name)
+    success, msg = validate_action_plan(plan_id, user_name=user_name)
     if success:
-        return jsonify({"message": "Plan de Acción validado formalmente."})
-    return jsonify({"error": "Plan de Acción no encontrado."}), 404
+        return jsonify({"success": True, "message": msg, "id": plan_id})
+    return jsonify({"success": False, "error": msg}), 400
 
 
 if __name__ == "__main__":

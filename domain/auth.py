@@ -44,7 +44,7 @@ def require_auth(f):
                 or request.headers.get("X-Requested-With") == "XMLHttpRequest"
                 or request.is_json
                 or request.method in ("POST", "PUT", "DELETE", "PATCH")
-                or request.path in ["/upload-report", "/parse-preview", "/save-validated-report", "/import-excel", "/export-excel", "/findings", "/proposals", "/action-plans", "/reports", "/kpi-indicators", "/dashboard-stats"]
+                or request.path in ["/upload-report", "/parse-preview", "/save-validated-report", "/import-excel", "/export-excel", "/findings", "/proposals", "/action-plans", "/reports", "/kpi-indicators", "/dashboard-stats", "/download-template"]
             ):
                 return jsonify({"success": False, "error": "Acceso no autorizado. Inicie sesión."}), 401
             return redirect("/login")

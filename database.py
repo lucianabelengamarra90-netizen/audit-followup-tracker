@@ -1146,7 +1146,9 @@ def _evaluate_proposal_cascade(cursor, proposal_id):
     all_plans_final = all(s == "Finalizado" for s in child_plans)
     new_p_status = "Finalizado" if all_plans_final else "En proceso"
 
-    if new_p_status != p_curr_status:
+    if new_p_status == "En proceso":
+        cursor.execute("UPDATE proposals SET status = ?, validated_at = NULL, validated_by = NULL, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (new_p_status, proposal_id))
+    elif new_p_status != p_curr_status:
         cursor.execute("UPDATE proposals SET status = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (new_p_status, proposal_id))
 
     if finding_id:
@@ -1181,7 +1183,9 @@ def _evaluate_finding_cascade(cursor, finding_id):
     all_props_final = all(s == "Finalizado" for s in child_props)
     new_f_status = "Finalizado" if all_props_final else "En proceso"
 
-    if new_f_status != f_curr_status:
+    if new_f_status == "En proceso":
+        cursor.execute("UPDATE findings SET status = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (new_f_status, finding_id))
+    elif new_f_status != f_curr_status:
         cursor.execute("UPDATE findings SET status = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?", (new_f_status, finding_id))
 
 
@@ -1222,10 +1226,10 @@ def update_action_plan(plan_id, status=None, progress_pct=None, notes=None, targ
 
         if target_pct == 100:
             if req_status != "En suspensión":
-                if (status is not None and normalize_status(status) == "Finalizado") or confirm_finalize:
+                if confirm_finalize:
                     final_status = "Finalizado"
                 else:
-                    final_status = "En proceso"
+                    final_status = "Pendiente de validación"
                     if "Pendiente de validación" not in (notes or curr_notes):
                         val_tag = " (Pendiente de validación)"
                         notes = (notes + val_tag) if notes is not None else (curr_notes + val_tag if curr_notes else "Pendiente de validación")
@@ -1245,6 +1249,8 @@ def update_action_plan(plan_id, status=None, progress_pct=None, notes=None, targ
             params.append(datetime.now().strftime("%Y-%m-%d"))
         else:
             fields.append("closed_date = NULL")
+            fields.append("validated_at = NULL")
+            fields.append("validated_by = NULL")
 
         fields.append("progress_pct = ?")
         params.append(target_pct)
@@ -1763,56 +1769,93 @@ def get_active_alerts():
     }
 
 
-def validate_proposal(proposal_id: str, user_name: str = "Luciana Gamarra") -> bool:
+def validate_proposal(proposal_id: str, user_name: str = "Luciana Gamarra"):
     init_db()
     conn = get_db()
     cursor = conn.cursor()
     try:
+        cursor.execute("SELECT id, finding_id, status FROM proposals WHERE id = ? OR code = ?", (proposal_id, proposal_id))
+        p_row = cursor.fetchone()
+        if not p_row:
+            return False, "Propuesta de mejora no encontrada."
+
+        actual_id = p_row[0]
+        finding_id = p_row[1]
+
+        cursor.execute("""
+            SELECT COUNT(*), 
+                   SUM(CASE WHEN progress_pct < 100 OR LOWER(status) IN ('en proceso', 'en suspensión', 'en suspension', 'stand-by') THEN 1 ELSE 0 END)
+            FROM action_plans
+            WHERE proposal_id = ?
+        """, (actual_id,))
+        plans_stat = cursor.fetchone()
+        plan_count = plans_stat[0] or 0
+        incomplete_plans = plans_stat[1] or 0
+
+        if plan_count > 0 and incomplete_plans > 0:
+            return False, "No se puede validar una propuesta que tiene planes incompletos o en suspensión."
+
         now_str = datetime.now().isoformat()
+        today_str = date.today().strftime("%Y-%m-%d")
+
         cursor.execute("""
             UPDATE proposals
             SET status = 'Finalizado', validated_at = ?, validated_by = ?, last_updated = ?
-            WHERE id = ? OR code = ?
-        """, (now_str, user_name, now_str, proposal_id, proposal_id))
-        updated = cursor.rowcount > 0
-        if updated:
+            WHERE id = ?
+        """, (now_str, user_name, now_str, actual_id))
+
+        if plan_count > 0:
             cursor.execute("""
                 UPDATE action_plans
                 SET status = 'Finalizado', progress_pct = 100, closed_date = ?, validated_at = ?, validated_by = ?, last_updated = ?
-                WHERE proposal_id = (SELECT id FROM proposals WHERE id = ? OR code = ? LIMIT 1)
-            """, (date.today().strftime("%Y-%m-%d"), now_str, user_name, now_str, proposal_id, proposal_id))
-            add_history_log("proposal", proposal_id, user_name, f"Validación formal registrada por {user_name}", cursor=cursor)
-            cursor.execute("SELECT finding_id FROM proposals WHERE id = ? OR code = ?", (proposal_id, proposal_id))
-            f_row = cursor.fetchone()
-            if f_row and f_row[0]:
-                _evaluate_finding_cascade(cursor, f_row[0])
+                WHERE proposal_id = ?
+            """, (today_str, now_str, user_name, now_str, actual_id))
+
+        add_history_log("proposal", actual_id, user_name, f"Validación formal registrada por {user_name}", cursor=cursor)
+
+        if finding_id:
+            _evaluate_finding_cascade(cursor, finding_id)
+
         conn.commit()
-        return updated
+        return True, "Propuesta validada exitosamente."
+    except Exception as e:
+        conn.rollback()
+        raise e
     finally:
         conn.close()
 
 
-def validate_action_plan(plan_id: str, user_name: str = "Luciana Gamarra") -> bool:
+def validate_action_plan(plan_id: str, user_name: str = "Luciana Gamarra"):
     init_db()
     conn = get_db()
     cursor = conn.cursor()
     try:
+        cursor.execute("SELECT id, proposal_id FROM action_plans WHERE id = ? OR code = ?", (plan_id, plan_id))
+        pa_row = cursor.fetchone()
+        if not pa_row:
+            return False, "Plan de acción no encontrado."
+
+        actual_id = pa_row[0]
+        prop_id = pa_row[1]
+
         now_str = datetime.now().isoformat()
         today_str = date.today().strftime("%Y-%m-%d")
+
         cursor.execute("""
             UPDATE action_plans
             SET status = 'Finalizado', progress_pct = 100, closed_date = ?, validated_at = ?, validated_by = ?, last_updated = ?
-            WHERE id = ? OR code = ?
-        """, (today_str, now_str, user_name, now_str, plan_id, plan_id))
-        updated = cursor.rowcount > 0
-        if updated:
-            cursor.execute("SELECT proposal_id FROM action_plans WHERE id = ? OR code = ? LIMIT 1", (plan_id, plan_id))
-            row = cursor.fetchone()
-            if row:
-                prop_id = row[0]
-                _evaluate_proposal_cascade(cursor, prop_id)
-            add_history_log("action_plan", plan_id, user_name, f"Validación formal registrada por {user_name}", cursor=cursor)
+            WHERE id = ?
+        """, (today_str, now_str, user_name, now_str, actual_id))
+
+        add_history_log("action_plan", actual_id, user_name, f"Validación formal registrada por {user_name}", cursor=cursor)
+
+        if prop_id:
+            _evaluate_proposal_cascade(cursor, prop_id)
+
         conn.commit()
-        return updated
+        return True, "Plan de acción validado exitosamente."
+    except Exception as e:
+        conn.rollback()
+        raise e
     finally:
         conn.close()

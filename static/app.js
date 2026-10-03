@@ -1598,33 +1598,39 @@ function renderDecisionTable(filterKey = null) {
     const titleEl = el("decisionTableTitle");
     if (!tbody) return;
 
-    // Expand findings and proposals into flat decision items
+    // Expand findings, proposals, and action plans into flat decision items
     let rows = [];
     (currentFindings || []).forEach(f => {
         const props = (f.proposals && f.proposals.length > 0) ? f.proposals : [null];
         props.forEach(p => {
-            const firstAction = (p && p.action_plans && p.action_plans.length > 0) ? p.action_plans[0] : null;
-            const owner = (p && p.action_owner) || (firstAction && firstAction.action_owner) || f.action_owner || "Sin asignar";
-            const targetDate = (p && p.target_date) || (firstAction && firstAction.target_date) || f.target_date || "";
-            const status = (p && p.status) || f.status || "En proceso";
-            const daysOverdue = getDaysOverdue(targetDate);
-            const isPendingVal = status === "Pendiente de validación" || ((p && p.progress_pct === 100 || (firstAction && firstAction.progress_pct === 100)) && status !== "Finalizado");
+            const plans = (p && p.action_plans && p.action_plans.length > 0) ? p.action_plans : [null];
+            plans.forEach(pa => {
+                const owner = (pa && pa.action_owner) || (p && p.action_owner) || f.action_owner || "Sin asignar";
+                const targetDate = (pa && pa.target_date) || (p && p.target_date) || f.target_date || "";
+                const status = (pa && pa.status) || (p && p.status) || f.status || "En proceso";
+                const progressPct = pa ? pa.progress_pct : (p ? (p.progress_pct || 0) : 0);
+                const daysOverdue = getDaysOverdue(targetDate);
+                const isPendingVal = status === "Pendiente de validación" || (progressPct === 100 && status !== "Finalizado");
 
-            rows.push({
-                finding_id: f.id,
-                finding_code: f.code,
-                finding_title: f.title || f.situation,
-                report_title: f.report_title || f.source_filename || "Informe",
-                proposal_id: p ? p.id : null,
-                proposal_code: p ? p.code : "-",
-                proposal_text: p ? (p.proposal_text || p.title) : "Sin propuesta",
-                area: f.responsible_area || "Operaciones",
-                severity: f.severity || "Medio",
-                owner: owner,
-                target_date: targetDate,
-                status: status,
-                days_overdue: daysOverdue,
-                is_pending_val: isPendingVal
+                rows.push({
+                    finding_id: f.id,
+                    finding_code: f.code,
+                    finding_title: f.title || f.situation,
+                    report_title: f.report_title || f.source_filename || "Informe",
+                    proposal_id: p ? p.id : null,
+                    proposal_code: p ? p.code : "-",
+                    proposal_text: p ? (p.proposal_text || p.title) : "Sin propuesta",
+                    plan_id: pa ? pa.id : null,
+                    plan_code: pa ? pa.code : null,
+                    plan_text: pa ? (pa.action_text || pa.title) : null,
+                    area: f.responsible_area || "Operaciones",
+                    severity: f.severity || "Medio",
+                    owner: owner,
+                    target_date: targetDate,
+                    status: status,
+                    days_overdue: daysOverdue,
+                    is_pending_val: isPendingVal
+                });
             });
         });
     });
