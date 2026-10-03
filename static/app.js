@@ -279,6 +279,10 @@ async function exportExcelReport() {
 // ============================================================
 
 function switchTab(tabName) {
+    if (tabName === "tableros" || tabName === "indicadores") {
+        tabName = "tablero-ejecutivo";
+    }
+
     document.querySelectorAll(".topnav-tab").forEach(btn => {
         btn.classList.toggle("active", btn.dataset.tab === tabName);
     });
@@ -291,8 +295,7 @@ function switchTab(tabName) {
     if (tabName === "hallazgos") renderAuditTrackTable(currentFindings);
     if (tabName === "propuestas") renderProposalsTab();
     if (tabName === "planes") renderActionPlansTab();
-    if (tabName === "tableros") loadDashboardTab();
-    if (tabName === "indicadores") loadKpiIndicatorsTab();
+    if (tabName === "tablero-ejecutivo") loadExecutiveDashboard();
 }
 
 // ============================================================
@@ -314,11 +317,15 @@ async function loadAllData() {
         if (resR.ok) currentReports = (await resR.json()).reports || [];
 
         populateFilterDropdowns();
+        populateExecutiveFilterDropdowns();
         renderAuditTrackTable(currentFindings);
         renderProposalsTab();
         renderActionPlansTab();
         updateSidebarMetrics();
         loadNotifications();
+        if (document.getElementById("tab-tablero-ejecutivo")?.classList.contains("active")) {
+            loadExecutiveDashboard();
+        }
     } catch (err) {
         console.error("Error cargando estructura relacional de AuditTrack:", err);
     }
@@ -1337,6 +1344,330 @@ async function submitUpdatePlanModal() {
     } catch (e) {
         showToast("Error de conexión al actualizar plan", "error");
     }
+}
+
+// ============================================================
+// TABLERO EJECUTIVO UNIFICADO (v1.4.0)
+// ============================================================
+
+let execFilters = {
+    report_id: "",
+    area: "",
+    period: ""
+};
+let execData = null;
+
+async function loadExecutiveDashboard() {
+    try {
+        populateExecutiveFilterDropdowns();
+
+        const params = new URLSearchParams();
+        if (execFilters.report_id) params.append("report_id", execFilters.report_id);
+        if (execFilters.area) params.append("area", execFilters.area);
+        if (execFilters.period) params.append("period", execFilters.period);
+
+        const url = `/api/kpi-executive${params.toString() ? "?" + params.toString() : ""}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+            showToast("Error cargando Tablero Ejecutivo", "error");
+            return;
+        }
+        execData = await res.json();
+
+        renderExecutiveScopeBar(execData.scope);
+        renderExecutiveKpis(execData.kpis);
+        renderExecutiveAreaChart(execData.charts ? execData.charts.by_area : []);
+        renderExecutiveAgingChart(execData.charts ? execData.charts.aging : {});
+        renderExecutiveAgendaTable(execData.agenda || []);
+    } catch (err) {
+        console.error("Error cargando Tablero Ejecutivo:", err);
+        showToast("Error de conexión al cargar Tablero Ejecutivo", "error");
+    }
+}
+
+function populateExecutiveFilterDropdowns() {
+    const reportSel = el("execFilterReport");
+    const areaSel = el("execFilterArea");
+    const periodSel = el("execFilterPeriod");
+
+    if (reportSel && (reportSel.options.length <= 1 || reportSel.options[0].text !== "Todos los Informes")) {
+        let html = '<option value="">Todos los Informes</option>';
+        (currentReports || []).forEach(r => {
+            html += `<option value="${r.id}">${escapeHtml(r.code || '')} - ${escapeHtml(r.title || '')}</option>`;
+        });
+        reportSel.innerHTML = html;
+        reportSel.value = execFilters.report_id;
+    }
+
+    if (areaSel && (areaSel.options.length <= 1 || areaSel.options[0].text !== "Todas las Áreas Responsables")) {
+        const areas = new Set();
+        (currentFindings || []).forEach(f => { if (f.area) areas.add(f.area); });
+        (currentProposals || []).forEach(p => { if (p.responsible_area) areas.add(p.responsible_area); });
+
+        let html = '<option value="">Todas las Áreas Responsables</option>';
+        Array.from(areas).sort().forEach(a => {
+            html += `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`;
+        });
+        areaSel.innerHTML = html;
+        areaSel.value = execFilters.area;
+    }
+
+    if (periodSel && (periodSel.options.length <= 1 || periodSel.options[0].text !== "Todos los Períodos")) {
+        const periods = new Set();
+        (currentReports || []).forEach(r => { if (r.period) periods.add(r.period); });
+
+        let html = '<option value="">Todos los Períodos</option>';
+        Array.from(periods).sort().forEach(p => {
+            html += `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`;
+        });
+        periodSel.innerHTML = html;
+        periodSel.value = execFilters.period;
+    }
+}
+
+function onExecutiveFilterChange() {
+    execFilters.report_id = el("execFilterReport")?.value || "";
+    execFilters.area = el("execFilterArea")?.value || "";
+    execFilters.period = el("execFilterPeriod")?.value || "";
+    loadExecutiveDashboard();
+}
+
+function resetExecutiveFilters() {
+    execFilters = { report_id: "", area: "", period: "" };
+    if (el("execFilterReport")) el("execFilterReport").value = "";
+    if (el("execFilterArea")) el("execFilterArea").value = "";
+    if (el("execFilterPeriod")) el("execFilterPeriod").value = "";
+    loadExecutiveDashboard();
+}
+
+function renderExecutiveScopeBar(scope) {
+    if (!scope) return;
+    if (el("execScopeReports")) el("execScopeReports").textContent = scope.reports || 0;
+    if (el("execScopeFindings")) el("execScopeFindings").textContent = scope.findings || 0;
+    if (el("execScopeProposals")) el("execScopeProposals").textContent = scope.proposals || 0;
+    if (el("execScopePlans")) el("execScopePlans").textContent = scope.plans || 0;
+}
+
+function renderExecutiveKpis(kpis) {
+    if (!kpis) return;
+
+    // Card A: Riesgo Alto Abierto
+    if (el("execValHighRisk")) el("execValHighRisk").textContent = kpis.high_risk_open ? kpis.high_risk_open.count : 0;
+    if (el("execSubHighRisk")) el("execSubHighRisk").textContent = kpis.high_risk_open ? kpis.high_risk_open.subtitle : "";
+
+    // Card B: Compromisos Vencidos
+    if (el("execValOverdue")) el("execValOverdue").textContent = kpis.overdue_commitments ? kpis.overdue_commitments.count : 0;
+    if (el("execSubOverdue")) el("execSubOverdue").textContent = kpis.overdue_commitments ? kpis.overdue_commitments.subtitle : "";
+
+    // Card C: Pendientes de Validación
+    if (el("execValPendingValidation")) el("execValPendingValidation").textContent = kpis.pending_validation ? kpis.pending_validation.count : 0;
+    if (el("execSubPendingValidation")) el("execSubPendingValidation").textContent = kpis.pending_validation ? kpis.pending_validation.subtitle : "";
+
+    // Card D: Implementación Validada
+    if (el("execValValidatedRate")) {
+        const rate = kpis.validated_implementation ? kpis.validated_implementation.rate : null;
+        el("execValValidatedRate").textContent = rate !== null ? `${rate}%` : "Sin datos suficientes";
+    }
+    if (el("execSubValidatedRate")) el("execSubValidatedRate").textContent = kpis.validated_implementation ? kpis.validated_implementation.subtitle : "";
+
+    // Card E: Cierre en Plazo
+    if (el("execValOnTimeRate")) {
+        const rate = kpis.on_time_closing ? kpis.on_time_closing.rate : null;
+        el("execValOnTimeRate").textContent = rate !== null ? `${rate}%` : "Sin datos suficientes";
+    }
+    if (el("execSubOnTimeRate")) el("execSubOnTimeRate").textContent = kpis.on_time_closing ? kpis.on_time_closing.subtitle : "";
+}
+
+function renderExecutiveAreaChart(areaData) {
+    const ctx = el("execChartArea")?.getContext("2d");
+    if (!ctx) return;
+    if (chartInstances.execArea) chartInstances.execArea.destroy();
+
+    const labels = (areaData || []).map(item => item.area);
+    const highRiskData = (areaData || []).map(item => item.high_risk_open);
+    const overdueData = (areaData || []).map(item => item.overdue);
+
+    chartInstances.execArea = new Chart(ctx, {
+        type: "bar",
+        data: {
+            labels: labels.length ? labels : ["Sin datos"],
+            datasets: [
+                {
+                    label: "Riesgo Alto Abierto",
+                    data: highRiskData.length ? highRiskData : [0],
+                    backgroundColor: "#DC2626",
+                    borderRadius: 4
+                },
+                {
+                    label: "Compromisos Vencidos",
+                    data: overdueData.length ? overdueData : [0],
+                    backgroundColor: "#EA580C",
+                    borderRadius: 4
+                }
+            ]
+        },
+        options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: "top" },
+                tooltip: { mode: "index", intersect: false }
+            },
+            scales: {
+                x: { beginAtZero: true, ticks: { precision: 0 } }
+            }
+        }
+    });
+}
+
+function renderExecutiveAgingChart(agingData) {
+    const ctx = el("execChartAging")?.getContext("2d");
+    if (!ctx) return;
+    if (chartInstances.execAging) chartInstances.execAging.destroy();
+
+    const dataVals = [
+        agingData ? agingData["1_30"] : 0,
+        agingData ? agingData["31_60"] : 0,
+        agingData ? agingData[">60"] : 0
+    ];
+
+    chartInstances.execAging = new Chart(ctx, {
+        type: "bar",
+        data: {
+            labels: ["1-30 días", "31-60 días", "> 60 días"],
+            datasets: [
+                {
+                    label: "Planes Vencidos",
+                    data: dataVals,
+                    backgroundColor: ["#FBBF24", "#F97316", "#DC2626"],
+                    borderRadius: 4
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: { beginAtZero: true, ticks: { precision: 0 } }
+            }
+        }
+    });
+}
+
+function renderExecutiveAgendaTable(agendaItems) {
+    const tbody = el("execAgendaTableBody");
+    if (!tbody) return;
+
+    if (!agendaItems || agendaItems.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="text-center py-4 text-slate-500">
+                    <i class="fas fa-check-circle text-green-500 mr-2"></i>No hay compromisos vencidos ni pendientes de validación requeridos.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    let html = "";
+    agendaItems.forEach(item => {
+        const severityClass = item.risk_level === 'Alto' 
+            ? 'bg-red-100 text-red-800 font-bold' 
+            : item.risk_level === 'Medio' 
+                ? 'bg-amber-100 text-amber-800' 
+                : 'bg-green-100 text-green-800';
+
+        const statusClass = item.status === 'Pendiente de validación'
+            ? 'bg-purple-100 text-purple-800'
+            : item.overdue_days > 0
+                ? 'bg-red-100 text-red-800 font-semibold'
+                : 'bg-blue-100 text-blue-800';
+
+        html += `
+            <tr class="hover:bg-slate-50 border-b border-slate-100">
+                <td class="px-3 py-2 text-xs font-mono font-bold text-slate-800">${escapeHtml(item.plan_code || item.proposal_code || '-')}</td>
+                <td class="px-3 py-2 text-xs font-medium text-slate-900 truncate max-w-xs" title="${escapeHtml(item.description)}">${escapeHtml(item.description)}</td>
+                <td class="px-3 py-2 text-xs text-slate-700">${escapeHtml(item.responsible_area || '-')}</td>
+                <td class="px-3 py-2 text-xs text-center"><span class="px-2 py-0.5 rounded text-xs ${severityClass}">${escapeHtml(item.risk_level)}</span></td>
+                <td class="px-3 py-2 text-xs text-center font-mono ${item.overdue_days > 0 ? 'text-red-600 font-bold' : 'text-slate-600'}">${item.overdue_days > 0 ? '+' + item.overdue_days + 'd' : '0d'}</td>
+                <td class="px-3 py-2 text-xs text-center"><span class="px-2 py-0.5 rounded text-xs ${statusClass}">${escapeHtml(item.status)}</span></td>
+                <td class="px-3 py-2 text-xs text-slate-800 font-medium bg-amber-50/50">${escapeHtml(item.next_action)}</td>
+            </tr>
+        `;
+    });
+    tbody.innerHTML = html;
+}
+
+async function openExecutiveDrilldown(metricKey, title) {
+    const modal = el("execDrilldownModal");
+    if (!modal) return;
+
+    if (el("execDrilldownTitle")) el("execDrilldownTitle").textContent = title || "Detalle Auditoría";
+    if (el("execDrilldownMetricTitle")) el("execDrilldownMetricTitle").textContent = title || "";
+    if (el("execDrilldownTableBody")) {
+        el("execDrilldownTableBody").innerHTML = '<tr><td colspan="7" class="text-center py-4"><i class="fas fa-spinner fa-spin mr-2"></i>Cargando detalle...</td></tr>';
+    }
+
+    modal.style.display = "flex";
+
+    try {
+        const params = new URLSearchParams();
+        params.append("metric", metricKey);
+        if (execFilters.report_id) params.append("report_id", execFilters.report_id);
+        if (execFilters.area) params.append("area", execFilters.area);
+        if (execFilters.period) params.append("period", execFilters.period);
+
+        const res = await fetch(`/api/kpi-executive/drilldown?${params.toString()}`);
+        if (!res.ok) {
+            if (el("execDrilldownTableBody")) {
+                el("execDrilldownTableBody").innerHTML = '<tr><td colspan="7" class="text-center py-4 text-red-500">Error al obtener el detalle del servidor.</td></tr>';
+            }
+            return;
+        }
+
+        const data = await res.json();
+        renderExecutiveDrilldownTable(data.records);
+    } catch (err) {
+        console.error("Error abriendo drilldown:", err);
+        if (el("execDrilldownTableBody")) {
+            el("execDrilldownTableBody").innerHTML = '<tr><td colspan="7" class="text-center py-4 text-red-500">Error de conexión al cargar detalle.</td></tr>';
+        }
+    }
+}
+
+function closeExecutiveDrilldown() {
+    const modal = el("execDrilldownModal");
+    if (modal) modal.style.display = "none";
+}
+
+function renderExecutiveDrilldownTable(records) {
+    const tbody = el("execDrilldownTableBody");
+    if (!tbody) return;
+
+    if (!records || records.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-slate-500">No se encontraron registros para esta métrica con los filtros aplicados.</td></tr>';
+        return;
+    }
+
+    let html = "";
+    records.forEach(r => {
+        html += `
+            <tr class="hover:bg-slate-50 border-b border-slate-100">
+                <td class="px-3 py-2 text-xs font-mono font-bold text-slate-800">${escapeHtml(r.code || '-')}</td>
+                <td class="px-3 py-2 text-xs text-slate-900">${escapeHtml(r.title || r.description || '-')}</td>
+                <td class="px-3 py-2 text-xs text-slate-700">${escapeHtml(r.report_title || r.area || '-')}</td>
+                <td class="px-3 py-2 text-xs text-center"><span class="px-2 py-0.5 rounded ${r.risk_level === 'Alto' ? 'bg-red-100 text-red-800 font-bold' : 'bg-slate-100 text-slate-700'}">${escapeHtml(r.risk_level || '-')}</span></td>
+                <td class="px-3 py-2 text-xs text-center">${escapeHtml(r.status || '-')}</td>
+                <td class="px-3 py-2 text-xs text-center font-mono">${escapeHtml(r.target_date || r.closed_date || '-')}</td>
+                <td class="px-3 py-2 text-xs text-slate-600">${escapeHtml(r.note || '-')}</td>
+            </tr>
+        `;
+    });
+    tbody.innerHTML = html;
 }
 
 // ============================================================

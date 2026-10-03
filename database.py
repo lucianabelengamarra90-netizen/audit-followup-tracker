@@ -5,7 +5,7 @@ import re
 import sys
 from datetime import datetime, date, timedelta
 from domain.statuses import normalize_status, is_final_status, compute_effective_status
-from domain.dates import parse_date_to_iso, format_display_date, is_date_past
+from domain.dates import parse_date_to_iso, format_display_date, is_date_past, get_argentina_today
 
 DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit_tracker.db"))
 
@@ -1429,156 +1429,635 @@ def get_dashboard_stats():
 
 
 def get_executive_kpis(filters=None):
-    """
-    Calcula las 5 Tarjetas Ejecutivas de Indicadores con fórmulas finitas exactas:
-    1. Riesgo Alto Abierto: Hallazgos únicos con severidad Alto no finalizados.
-    2. Compromisos Vencidos: Planes activos En proceso con fecha compromiso vencida (separa suspendidos).
-    3. Implementación Validada: % de propuestas validadas formalmente (validated_by). Si no hay firma, reporta propuestas finalizadas.
-    4. Cierre en Plazo: % de planes cerrados en o antes de su fecha compromiso (indica explícitamente excluidos por falta de fechas).
-    5. Pendiente de Validación: Planes al 100% de avance que requieren validación formal auditora.
-    """
+    filters = filters or {}
+    report_filter = filters.get("report_id") or filters.get("report")
+    area_filter = filters.get("area")
+    period_filter = filters.get("period")
+
     init_db()
     conn = get_db()
     cursor = conn.cursor()
 
     try:
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_date = get_argentina_today()
+        today_str = today_date.strftime("%Y-%m-%d")
+
+        # 0. Dropdown options for filters
+        cursor.execute("SELECT DISTINCT id, code, title FROM reports ORDER BY title")
+        report_options = [{"id": r["id"], "code": r["code"], "title": r["title"]} for r in cursor.fetchall()]
+
+        cursor.execute("""
+            SELECT DISTINCT responsible_area FROM findings WHERE responsible_area IS NOT NULL AND responsible_area != ''
+            UNION
+            SELECT DISTINCT responsible_area FROM proposals WHERE responsible_area IS NOT NULL AND responsible_area != ''
+            ORDER BY 1
+        """)
+        area_options = [r[0] for r in cursor.fetchall() if r[0]]
+
+        cursor.execute("SELECT DISTINCT period FROM reports WHERE period IS NOT NULL AND period != '' ORDER BY period DESC")
+        period_options = [r[0] for r in cursor.fetchall() if r[0]]
+
+        # Base filter clauses
+        w_clauses = []
+        params = []
+        if report_filter:
+            w_clauses.append("(r.id = ? OR r.code = ?)")
+            params.extend([report_filter, report_filter])
+        if area_filter:
+            w_clauses.append("(f.responsible_area = ? OR p.responsible_area = ?)")
+            params.extend([area_filter, area_filter])
+        if period_filter:
+            w_clauses.append("(r.period = ? OR r.period LIKE ?)")
+            params.extend([period_filter, f"%{period_filter}%"])
+
+        where_str = (" WHERE " + " AND ".join(w_clauses)) if w_clauses else ""
+
+        # Scope Counts
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT r.id), COUNT(DISTINCT f.id), COUNT(DISTINCT p.id), COUNT(DISTINCT pa.id)
+            FROM reports r
+            LEFT JOIN findings f ON f.report_id = r.id
+            LEFT JOIN proposals p ON p.finding_id = f.id
+            LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+            {where_str}
+        """, params)
+        sc = cursor.fetchone()
+        scope_counts = {
+            "reports": sc[0] or 0,
+            "findings": sc[1] or 0,
+            "proposals": sc[2] or 0,
+            "plans": sc[3] or 0,
+            "action_plans": sc[3] or 0
+        }
 
         # 1. Riesgo Alto Abierto
-        cursor.execute("""
+        w_high = list(params)
+        where_high = where_str + (" AND " if where_str else " WHERE ") + "LOWER(f.severity) = 'alto' AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')"
+        cursor.execute(f"""
             SELECT COUNT(DISTINCT f.id), COUNT(DISTINCT f.report_id)
             FROM findings f
-            WHERE LOWER(f.severity) = 'alto'
-              AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')
-        """)
+            JOIN reports r ON f.report_id = r.id
+            LEFT JOIN proposals p ON p.finding_id = f.id
+            LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+            {where_high}
+        """, w_high)
         r_high = cursor.fetchone()
         high_risk_cnt = r_high[0] or 0
         high_risk_reports = r_high[1] or 0
 
         # 2. Compromisos Vencidos (Activos vs Suspendidos)
-        cursor.execute("""
-            SELECT COUNT(pa.id), COUNT(DISTINCT p.finding_id)
+        where_overdue = where_str + (" AND " if where_str else " WHERE ") + """
+            pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ?
+            AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado', 'en suspensión', 'en suspension', 'stand-by')
+        """
+        w_overdue = list(params) + [today_str]
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT pa.id), COUNT(DISTINCT p.finding_id)
             FROM action_plans pa
             JOIN proposals p ON pa.proposal_id = p.id
-            WHERE pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ?
-              AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado', 'en suspensión', 'en suspension', 'stand-by')
-        """, (today_str,))
-        r_overdue = cursor.fetchone()
-        overdue_plans_cnt = r_overdue[0] or 0
-        overdue_findings_cnt = r_overdue[1] or 0
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            {where_overdue}
+        """, w_overdue)
+        r_ov = cursor.fetchone()
+        overdue_plans_cnt = r_ov[0] or 0
+        overdue_findings_cnt = r_ov[1] or 0
 
-        cursor.execute("""
-            SELECT COUNT(pa.id)
+        where_susp = where_str + (" AND " if where_str else " WHERE ") + """
+            pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ?
+            AND LOWER(pa.status) IN ('en suspensión', 'en suspension', 'stand-by')
+        """
+        w_susp = list(params) + [today_str]
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT pa.id)
             FROM action_plans pa
-            WHERE pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ?
-              AND LOWER(pa.status) IN ('en suspensión', 'en suspension', 'stand-by')
-        """, (today_str,))
+            JOIN proposals p ON pa.proposal_id = p.id
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            {where_susp}
+        """, w_susp)
         suspended_overdue_cnt = cursor.fetchone()[0] or 0
 
-        # 3. Implementación Validada vs Finalizada sin validación
-        cursor.execute("SELECT COUNT(*) FROM proposals")
+        # 3. Implementación Validada
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT p.id)
+            FROM proposals p
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+            {where_str}
+        """, params)
         total_proposals = cursor.fetchone()[0] or 0
 
-        cursor.execute("""
-            SELECT COUNT(*) FROM proposals
-            WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado', 'validado')
-              AND validated_by IS NOT NULL AND validated_by != ''
-        """)
-        strictly_validated_proposals = cursor.fetchone()[0] or 0
+        where_val = where_str + (" AND " if where_str else " WHERE ") + """
+            LOWER(p.status) IN ('finalizado', 'completado', 'cerrado', 'validado')
+            AND p.validated_by IS NOT NULL AND p.validated_by != ''
+        """
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT p.id)
+            FROM proposals p
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+            {where_val}
+        """, params)
+        validated_proposals_cnt = cursor.fetchone()[0] or 0
 
-        cursor.execute("""
-            SELECT COUNT(*) FROM proposals
-            WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado', 'validado')
-        """)
-        finalized_proposals = cursor.fetchone()[0] or 0
-
-        if strictly_validated_proposals > 0:
-            val_label = "Implementación Validada"
-            val_cnt = strictly_validated_proposals
-            val_pct = round((val_cnt / total_proposals) * 100, 1) if total_proposals > 0 else 0.0
-            val_context = f"{val_cnt} de {total_proposals} propuestas validadas"
+        if total_proposals > 0:
+            val_pct = round((validated_proposals_cnt / total_proposals) * 100, 1)
+            val_pct_str = f"{val_pct}%"
+            val_context = f"{validated_proposals_cnt} de {total_proposals} propuestas"
+            val_has_data = True
         else:
-            val_label = "Propuestas Finalizadas"
-            val_cnt = finalized_proposals
-            val_pct = round((val_cnt / total_proposals) * 100, 1) if total_proposals > 0 else 0.0
-            val_context = f"{val_cnt} de {total_proposals} propuestas finalizadas (sin registro de validación formal)"
+            val_pct_str = "Sin datos suficientes"
+            val_context = "0 propuestas en el alcance seleccionado"
+            val_has_data = False
 
         # 4. Cierre en Plazo
-        cursor.execute("""
-            SELECT COUNT(*) FROM action_plans
-            WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
-              AND closed_date IS NOT NULL AND closed_date != ''
-              AND target_date IS NOT NULL AND target_date != ''
-              AND closed_date <= target_date
-        """)
-        on_time_closed_cnt = cursor.fetchone()[0] or 0
+        where_closed_ontime = where_str + (" AND " if where_str else " WHERE ") + """
+            LOWER(pa.status) IN ('finalizado', 'completado', 'cerrado')
+            AND pa.closed_date IS NOT NULL AND pa.closed_date != ''
+            AND pa.target_date IS NOT NULL AND pa.target_date != ''
+            AND pa.closed_date <= pa.target_date
+        """
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT pa.id)
+            FROM action_plans pa
+            JOIN proposals p ON pa.proposal_id = p.id
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            {where_closed_ontime}
+        """, params)
+        on_time_cnt = cursor.fetchone()[0] or 0
 
-        cursor.execute("""
-            SELECT COUNT(*) FROM action_plans
-            WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
-              AND closed_date IS NOT NULL AND closed_date != ''
-              AND target_date IS NOT NULL AND target_date != ''
-        """)
-        total_closed_with_both_dates = cursor.fetchone()[0] or 0
+        where_closed_eval = where_str + (" AND " if where_str else " WHERE ") + """
+            LOWER(pa.status) IN ('finalizado', 'completado', 'cerrado')
+            AND pa.closed_date IS NOT NULL AND pa.closed_date != ''
+            AND pa.target_date IS NOT NULL AND pa.target_date != ''
+        """
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT pa.id)
+            FROM action_plans pa
+            JOIN proposals p ON pa.proposal_id = p.id
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            {where_closed_eval}
+        """, params)
+        evaluable_cnt = cursor.fetchone()[0] or 0
 
-        cursor.execute("""
-            SELECT COUNT(*) FROM action_plans
-            WHERE LOWER(status) IN ('finalizado', 'completado', 'cerrado')
-              AND (closed_date IS NULL OR closed_date = '' OR target_date IS NULL OR target_date = '')
-        """)
-        excluded_missing_dates_cnt = cursor.fetchone()[0] or 0
+        where_closed_excl = where_str + (" AND " if where_str else " WHERE ") + """
+            LOWER(pa.status) IN ('finalizado', 'completado', 'cerrado')
+            AND (pa.closed_date IS NULL OR pa.closed_date = '' OR pa.target_date IS NULL OR pa.target_date = '')
+        """
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT pa.id)
+            FROM action_plans pa
+            JOIN proposals p ON pa.proposal_id = p.id
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            {where_closed_excl}
+        """, params)
+        excluded_cnt = cursor.fetchone()[0] or 0
 
-        on_time_closed_pct = round((on_time_closed_cnt / total_closed_with_both_dates) * 100, 1) if total_closed_with_both_dates > 0 else 0.0
+        if evaluable_cnt > 0:
+            ontime_pct = round((on_time_cnt / evaluable_cnt) * 100, 1)
+            ontime_pct_str = f"{ontime_pct}%"
+            ontime_context = f"{on_time_cnt} de {evaluable_cnt} cierres evaluables ({excluded_cnt} excluidos sin fecha)"
+            ontime_has_data = True
+        else:
+            ontime_pct_str = "Sin datos suficientes"
+            ontime_context = f"Sin cierres evaluables ({excluded_cnt} excluidos sin fecha)"
+            ontime_has_data = False
 
         # 5. Pendiente de Validación
-        cursor.execute("""
-            SELECT COUNT(*) FROM action_plans
-            WHERE (progress_pct = 100 OR LOWER(status) = 'pendiente de validación')
-              AND LOWER(status) NOT IN ('finalizado', 'validado', 'cerrado')
-        """)
-        pending_validation_cnt = cursor.fetchone()[0] or 0
+        where_pending = where_str + (" AND " if where_str else " WHERE ") + """
+            (pa.progress_pct = 100 OR LOWER(pa.status) = 'pendiente de validación')
+            AND LOWER(pa.status) NOT IN ('finalizado', 'validado', 'cerrado')
+        """
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT pa.id)
+            FROM action_plans pa
+            JOIN proposals p ON pa.proposal_id = p.id
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            {where_pending}
+        """, params)
+        pending_val_cnt = cursor.fetchone()[0] or 0
 
-        return {
+        # Chart 1: Comparación por Área
+        cursor.execute(f"""
+            SELECT COALESCE(NULLIF(f.responsible_area, ''), NULLIF(p.responsible_area, ''), 'Sin área') as area_name,
+                   COUNT(DISTINCT CASE WHEN LOWER(f.severity) = 'alto' AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as high_risk_cnt,
+                   COUNT(DISTINCT CASE WHEN pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ? AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'en suspensión', 'en suspension', 'stand-by') THEN pa.id END) as overdue_cnt
+            FROM reports r
+            JOIN findings f ON f.report_id = r.id
+            LEFT JOIN proposals p ON p.finding_id = f.id
+            LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+            {where_str}
+            GROUP BY area_name
+            HAVING high_risk_cnt > 0 OR overdue_cnt > 0
+            ORDER BY overdue_cnt DESC, high_risk_cnt DESC
+        """, [today_str] + params)
+        area_rows = cursor.fetchall()
+        chart_area = {
+            "labels": [r["area_name"] for r in area_rows],
+            "high_risk": [r["high_risk_cnt"] for r in area_rows],
+            "overdue": [r["overdue_cnt"] for r in area_rows]
+        }
+
+        # Chart 2: Antigüedad de Vencimientos
+        cursor.execute(f"""
+            SELECT pa.target_date
+            FROM action_plans pa
+            JOIN proposals p ON pa.proposal_id = p.id
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            {where_overdue}
+        """, w_overdue)
+        aging_counts = {"1-30 días": 0, "31-60 días": 0, "Más de 60 días": 0}
+        for row in cursor.fetchall():
+            t_str = row["target_date"]
+            try:
+                t_dt = datetime.strptime(t_str[:10], "%Y-%m-%d").date()
+                delta = (today_date - t_dt).days
+                if delta <= 30:
+                    aging_counts["1-30 días"] += 1
+                elif delta <= 60:
+                    aging_counts["31-60 días"] += 1
+                else:
+                    aging_counts["Más de 60 días"] += 1
+            except Exception:
+                aging_counts["1-30 días"] += 1
+
+        chart_aging = {
+            "labels": list(aging_counts.keys()),
+            "data": list(aging_counts.values())
+        }
+
+        # Follow-up Agenda
+        cursor.execute(f"""
+            SELECT pa.id as plan_id, pa.code as plan_code, pa.title as plan_title, pa.action_text, pa.target_date, pa.status as plan_status, pa.progress_pct, pa.action_owner, p.responsible_area as plan_area,
+                   p.id as proposal_id, p.code as proposal_code, p.title as proposal_title, p.severity as proposal_severity,
+                   f.id as finding_id, f.code as finding_code, f.title as finding_title, f.severity as finding_severity, f.responsible_area as finding_area,
+                   r.code as report_code, r.title as report_title
+            FROM action_plans pa
+            JOIN proposals p ON pa.proposal_id = p.id
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            WHERE (
+               (pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ? AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'en suspensión', 'en suspension', 'stand-by'))
+               OR (pa.progress_pct = 100 OR LOWER(pa.status) = 'pendiente de validación') AND LOWER(pa.status) NOT IN ('finalizado', 'validado', 'cerrado')
+            )
+            {" AND " + " AND ".join(w_clauses) if w_clauses else ""}
+        """, [today_str] + params)
+
+        agenda_items = []
+        for r in cursor.fetchall():
+            t_str = r["target_date"]
+            days_ov = 0
+            if t_str:
+                try:
+                    t_dt = datetime.strptime(t_str[:10], "%Y-%m-%d").date()
+                    if t_dt < today_date:
+                        days_ov = (today_date - t_dt).days
+                except Exception:
+                    pass
+
+            p_pct = r["progress_pct"] or 0
+            p_stat = r["plan_status"]
+            sev = r["finding_severity"] or r["proposal_severity"] or "Medio"
+
+            if p_pct == 100 or str(p_stat).lower() == "pendiente de validación":
+                next_act = "Validación formal por auditoría"
+            elif days_ov > 0:
+                next_act = "Seguimiento plan vencido con área"
+            else:
+                next_act = "Gestionar implementación"
+
+            agenda_items.append({
+                "plan_id": r["plan_id"],
+                "plan_code": r["plan_code"],
+                "proposal_code": r["proposal_code"],
+                "finding_code": r["finding_code"],
+                "finding_title": r["finding_title"],
+                "proposal_title": r["proposal_title"],
+                "report_title": r["report_title"],
+                "action_text": r["action_text"] or r["plan_title"],
+                "description": r["action_text"] or r["plan_title"] or r["proposal_title"],
+                "responsible_area": r["plan_area"] or r["finding_area"] or "Sin área",
+                "area": r["plan_area"] or r["finding_area"] or "Sin área",
+                "action_owner": r["action_owner"] or "Sin asignar",
+                "owner": r["action_owner"] or "Sin asignar",
+                "target_date": t_str or "Sin fecha",
+                "days_overdue": days_ov,
+                "overdue_days": days_ov,
+                "status": p_stat,
+                "progress_pct": p_pct,
+                "severity": sev,
+                "risk_level": sev,
+                "next_action": next_act
+            })
+
+        sev_rank = {"Alto": 1, "Medio": 2, "Bajo": 3}
+        agenda_items.sort(key=lambda x: (sev_rank.get(x["severity"], 2), -x["days_overdue"]))
+
+        formatted_kpis = {
             "high_risk_open": {
                 "count": high_risk_cnt,
-                "affected_reports": high_risk_reports,
-                "label": "Riesgo Alto Abierto",
-                "context": f"{high_risk_cnt} hallazgos críticos abiertos en {high_risk_reports} informes"
+                "subtitle": f"{high_risk_cnt} hallazgos de riesgo alto abiertos"
             },
             "overdue_commitments": {
                 "count": overdue_plans_cnt,
-                "affected_findings": overdue_findings_cnt,
-                "suspended_count": suspended_overdue_cnt,
-                "label": "Compromisos Vencidos",
-                "context": f"{overdue_plans_cnt} planes activos vencidos en {overdue_findings_cnt} hallazgos ({suspended_overdue_cnt} suspendidos)"
-            },
-            "validated_implementation": {
-                "count": val_cnt,
-                "total": total_proposals,
-                "percentage": f"{val_pct}%" if total_proposals > 0 else "Sin datos",
-                "label": val_label,
-                "context": val_context
-            },
-            "on_time_closure": {
-                "count": on_time_closed_cnt,
-                "total_evaluable": total_closed_with_both_dates,
-                "excluded_missing_dates": excluded_missing_dates_cnt,
-                "percentage": f"{on_time_closed_pct}%" if total_closed_with_both_dates > 0 else "Sin datos",
-                "label": "Cierre en Plazo",
-                "context": f"{on_time_closed_cnt} de {total_closed_with_both_dates} cierres evaluables ({excluded_missing_dates_cnt} excluidos sin fecha)"
+                "subtitle": f"{overdue_plans_cnt} planes activos vencidos ({suspended_overdue_cnt} suspendidos)"
             },
             "pending_validation": {
-                "count": pending_validation_cnt,
-                "label": "Pendiente de Validación",
-                "context": f"{pending_validation_cnt} compromisos al 100% que aguardan validación"
+                "count": pending_val_cnt,
+                "subtitle": f"{pending_val_cnt} compromisos al 100%"
+            },
+            "validated_implementation": {
+                "count": validated_proposals_cnt,
+                "total": total_proposals,
+                "rate": round(val_pct, 1) if val_has_data else None,
+                "percentage": val_pct_str,
+                "subtitle": val_context
+            },
+            "on_time_closing": {
+                "count": on_time_cnt,
+                "evaluable_total": evaluable_cnt,
+                "excluded_count": excluded_cnt,
+                "rate": round(ontime_pct, 1) if ontime_has_data else None,
+                "percentage": ontime_pct_str,
+                "subtitle": ontime_context
+            },
+            "on_time_closure": {
+                "count": on_time_cnt,
+                "evaluable_total": evaluable_cnt,
+                "excluded_count": excluded_cnt,
+                "rate": round(ontime_pct, 1) if ontime_has_data else None,
+                "percentage": ontime_pct_str,
+                "subtitle": ontime_context
             }
+        }
+
+        area_chart_list = []
+        for r in area_rows:
+            area_chart_list.append({
+                "area": r["area_name"],
+                "high_risk_open": r["high_risk_cnt"],
+                "overdue": r["overdue_cnt"]
+            })
+
+        formatted_charts = {
+            "by_area": area_chart_list,
+            "aging": {
+                "1_30": aging_counts.get("1-30 días", 0),
+                "31_60": aging_counts.get("31-60 días", 0),
+                ">60": aging_counts.get("Más de 60 días", 0)
+            },
+            "area_comparison": chart_area,
+            "aging_breakdown": chart_aging
+        }
+
+        return {
+            "cut_date": today_str,
+            "scope": scope_counts,
+            "filter_options": {
+                "reports": report_options,
+                "areas": area_options,
+                "periods": period_options
+            },
+            "kpis": formatted_kpis,
+            "cards": {
+                "high_risk_open": {
+                    "count": high_risk_cnt,
+                    "affected_reports": high_risk_reports,
+                    "label": "Riesgo Alto Abierto",
+                    "context": f"{high_risk_cnt} hallazgos de riesgo alto abiertos"
+                },
+                "overdue_commitments": {
+                    "count": overdue_plans_cnt,
+                    "affected_findings": overdue_findings_cnt,
+                    "suspended_count": suspended_overdue_cnt,
+                    "label": "Compromisos Vencidos",
+                    "context": f"{overdue_plans_cnt} planes activos vencidos ({suspended_overdue_cnt} suspendidos)"
+                },
+                "pending_validation": {
+                    "count": pending_val_cnt,
+                    "label": "Pendiente de Validación",
+                    "context": f"{pending_val_cnt} compromisos al 100%"
+                },
+                "validated_implementation": {
+                    "count": validated_proposals_cnt,
+                    "total": total_proposals,
+                    "percentage": val_pct_str,
+                    "has_data": val_has_data,
+                    "label": "Implementación Validada",
+                    "context": val_context
+                },
+                "on_time_closure": {
+                    "count": on_time_cnt,
+                    "evaluable_total": evaluable_cnt,
+                    "excluded_count": excluded_cnt,
+                    "percentage": ontime_pct_str,
+                    "has_data": ontime_has_data,
+                    "label": "Cierre en Plazo",
+                    "context": ontime_context
+                }
+            },
+            "charts": formatted_charts,
+            "agenda": agenda_items
         }
     finally:
         conn.close()
 
 
-def get_kpi_indicators():
-    return get_executive_kpis()
+def get_executive_drilldown(metric_key, filters=None):
+    filters = filters or {}
+    report_filter = filters.get("report_id") or filters.get("report")
+    area_filter = filters.get("area")
+    period_filter = filters.get("period")
+
+    init_db()
+    conn = get_db()
+    cursor = conn.cursor()
+
+    try:
+        today_date = get_argentina_today()
+        today_str = today_date.strftime("%Y-%m-%d")
+
+        w_clauses = []
+        params = []
+        if report_filter:
+            w_clauses.append("(r.id = ? OR r.code = ?)")
+            params.extend([report_filter, report_filter])
+        if area_filter:
+            w_clauses.append("(f.responsible_area = ? OR p.responsible_area = ?)")
+            params.extend([area_filter, area_filter])
+        if period_filter:
+            w_clauses.append("(r.period = ? OR r.period LIKE ?)")
+            params.extend([period_filter, f"%{period_filter}%"])
+
+        where_str = (" WHERE " + " AND ".join(w_clauses)) if w_clauses else ""
+
+        rows = []
+        if metric_key == "high_risk_open":
+            where_h = where_str + (" AND " if where_str else " WHERE ") + "LOWER(f.severity) = 'alto' AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado')"
+            cursor.execute(f"""
+                SELECT DISTINCT f.id, f.code, f.title, f.severity, f.responsible_area, f.status, r.title as report_title
+                FROM findings f
+                JOIN reports r ON f.report_id = r.id
+                LEFT JOIN proposals p ON p.finding_id = f.id
+                LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+                {where_h}
+                ORDER BY f.code ASC
+            """, params)
+            for r in cursor.fetchall():
+                rows.append({
+                    "id": r["id"],
+                    "code": r["code"],
+                    "title": r["title"],
+                    "risk_level": r["severity"],
+                    "severity": r["severity"],
+                    "area": r["responsible_area"] or "Sin área",
+                    "status": r["status"],
+                    "report_title": r["report_title"]
+                })
+
+        elif metric_key == "overdue_commitments":
+            where_ov = where_str + (" AND " if where_str else " WHERE ") + """
+                pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ?
+                AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'archivado', 'en suspensión', 'en suspension', 'stand-by')
+            """
+            cursor.execute(f"""
+                SELECT DISTINCT pa.id, pa.code, pa.title, pa.action_text, pa.target_date, pa.status, pa.progress_pct, pa.action_owner, p.responsible_area,
+                       f.code as finding_code, f.severity as finding_severity, r.title as report_title
+                FROM action_plans pa
+                JOIN proposals p ON pa.proposal_id = p.id
+                JOIN findings f ON p.finding_id = f.id
+                JOIN reports r ON f.report_id = r.id
+                {where_ov}
+                ORDER BY pa.target_date ASC
+            """, [today_str] + params)
+            for r in cursor.fetchall():
+                t_str = r["target_date"]
+                days_ov = 0
+                if t_str:
+                    try:
+                        t_dt = datetime.strptime(t_str[:10], "%Y-%m-%d").date()
+                        days_ov = (today_date - t_dt).days
+                    except Exception:
+                        pass
+                rows.append({
+                    "id": r["id"],
+                    "code": r["code"],
+                    "finding_code": r["finding_code"],
+                    "title": r["action_text"] or r["title"],
+                    "target_date": t_str,
+                    "days_overdue": days_ov,
+                    "status": r["status"],
+                    "risk_level": r["finding_severity"] or "Medio",
+                    "progress_pct": r["progress_pct"] or 0,
+                    "owner": r["action_owner"] or "Sin asignar",
+                    "area": r["responsible_area"] or "Sin área",
+                    "report_title": r["report_title"]
+                })
+
+        elif metric_key == "pending_validation":
+            where_pv = where_str + (" AND " if where_str else " WHERE ") + """
+                (pa.progress_pct = 100 OR LOWER(pa.status) = 'pendiente de validación')
+                AND LOWER(pa.status) NOT IN ('finalizado', 'validado', 'cerrado')
+            """
+            cursor.execute(f"""
+                SELECT DISTINCT pa.id, pa.code, pa.title, pa.action_text, pa.target_date, pa.status, pa.progress_pct, pa.action_owner, p.responsible_area,
+                       f.code as finding_code, f.severity as finding_severity, r.title as report_title
+                FROM action_plans pa
+                JOIN proposals p ON pa.proposal_id = p.id
+                JOIN findings f ON p.finding_id = f.id
+                JOIN reports r ON f.report_id = r.id
+                {where_pv}
+                ORDER BY pa.code ASC
+            """, params)
+            for r in cursor.fetchall():
+                rows.append({
+                    "id": r["id"],
+                    "code": r["code"],
+                    "finding_code": r["finding_code"],
+                    "title": r["action_text"] or r["title"],
+                    "target_date": r["target_date"] or "Sin fecha",
+                    "status": r["status"],
+                    "risk_level": r["finding_severity"] or "Medio",
+                    "progress_pct": r["progress_pct"] or 100,
+                    "owner": r["action_owner"] or "Sin asignar",
+                    "area": r["responsible_area"] or "Sin área",
+                    "report_title": r["report_title"]
+                })
+
+        elif metric_key == "validated_implementation":
+            cursor.execute(f"""
+                SELECT DISTINCT p.id, p.code, p.title, p.status, p.validated_at, p.validated_by, p.responsible_area, f.code as finding_code, f.severity as finding_severity, r.title as report_title
+                FROM proposals p
+                JOIN findings f ON p.finding_id = f.id
+                JOIN reports r ON f.report_id = r.id
+                LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+                {where_str}
+                ORDER BY p.code ASC
+            """, params)
+            for r in cursor.fetchall():
+                is_val = bool(r["validated_by"] and str(r["status"]).lower() in ('finalizado', 'completado', 'cerrado', 'validado'))
+                rows.append({
+                    "id": r["id"],
+                    "code": r["code"],
+                    "finding_code": r["finding_code"],
+                    "title": r["title"],
+                    "status": r["status"],
+                    "risk_level": r["finding_severity"] or "Medio",
+                    "is_validated": is_val,
+                    "validated_by": r["validated_by"] or "Sin validar",
+                    "validated_at": r["validated_at"] or "-",
+                    "area": r["responsible_area"] or "Sin área",
+                    "report_title": r["report_title"]
+                })
+
+        elif metric_key in ("on_time_closure", "on_time_closing"):
+            where_cl = where_str + (" AND " if where_str else " WHERE ") + "LOWER(pa.status) IN ('finalizado', 'completado', 'cerrado')"
+            cursor.execute(f"""
+                SELECT DISTINCT pa.id, pa.code, pa.title, pa.action_text, pa.target_date, pa.closed_date, pa.status, p.responsible_area,
+                       f.code as finding_code, f.severity as finding_severity, r.title as report_title
+                FROM action_plans pa
+                JOIN proposals p ON pa.proposal_id = p.id
+                JOIN findings f ON p.finding_id = f.id
+                JOIN reports r ON f.report_id = r.id
+                {where_cl}
+                ORDER BY pa.code ASC
+            """, params)
+            for r in cursor.fetchall():
+                t_str = r["target_date"]
+                c_str = r["closed_date"]
+                if t_str and c_str:
+                    compliance = "En plazo" if c_str <= t_str else "Fuera de plazo"
+                else:
+                    compliance = "Excluido (sin fecha)"
+                rows.append({
+                    "id": r["id"],
+                    "code": r["code"],
+                    "finding_code": r["finding_code"],
+                    "title": r["action_text"] or r["title"],
+                    "target_date": t_str or "Sin fecha",
+                    "closed_date": c_str or "Sin fecha",
+                    "compliance": compliance,
+                    "status": r["status"],
+                    "risk_level": r["finding_severity"] or "Medio",
+                    "area": r["responsible_area"] or "Sin área",
+                    "report_title": r["report_title"]
+                })
+
+        return rows
+    finally:
+        conn.close()
+
+
+def get_kpi_indicators(filters=None):
+    return get_executive_kpis(filters)
 
 
 def get_active_alerts():

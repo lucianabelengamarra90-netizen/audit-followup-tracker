@@ -21,7 +21,7 @@ class AuthAndExecutiveKPITests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
         self.assertEqual(data["status"], "ok")
-        self.assertEqual(data["version"], "v1.3.0")
+        self.assertEqual(data["version"], "v1.4.0")
         self.assertEqual(data["base_tag"], "v1.0.0-base-2026-10-02")
         self.assertFalse(data["ai_enabled"])
 

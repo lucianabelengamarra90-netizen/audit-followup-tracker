@@ -31,6 +31,7 @@ from database import (
     get_active_alerts,
     get_proposal_by_id_or_code,
     get_executive_kpis,
+    get_executive_drilldown,
     validate_proposal,
     validate_action_plan
 )
@@ -131,7 +132,7 @@ def health():
     return jsonify({
         "status": "ok" if db_status == "connected" else "degraded",
         "app": "AuditTrack Relacional",
-        "version": "v1.3.0",
+        "version": "v1.4.0",
         "base_tag": "v1.0.0-base-2026-10-02",
         "db_engine": db_engine,
         "db_status": db_status,
@@ -496,8 +497,26 @@ def dashboard_stats_route():
 @app.route("/api/kpi-executive")
 @require_auth
 def kpi_indicators_route():
-    kpis = get_executive_kpis()
-    return jsonify({"indicators": kpis, "kpis": kpis})
+    report_id = request.args.get("report_id") or request.args.get("report")
+    area = request.args.get("area")
+    period = request.args.get("period")
+    filters = {"report_id": report_id, "area": area, "period": period}
+    data = get_executive_kpis(filters)
+    res_dict = {"success": True, "indicators": data}
+    res_dict.update(data)
+    return jsonify(res_dict)
+
+
+@app.route("/api/kpi-executive/drilldown")
+@require_auth
+def kpi_executive_drilldown_route():
+    metric = request.args.get("metric", "")
+    report_id = request.args.get("report_id") or request.args.get("report")
+    area = request.args.get("area")
+    period = request.args.get("period")
+    filters = {"report_id": report_id, "area": area, "period": period}
+    rows = get_executive_drilldown(metric, filters)
+    return jsonify({"success": True, "metric": metric, "records": rows, "rows": rows})
 
 
 @app.route("/api/notifications")
