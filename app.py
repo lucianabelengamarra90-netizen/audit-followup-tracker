@@ -10,6 +10,7 @@ from openpyxl.utils import get_column_letter
 from database import (
     init_db,
     get_db,
+    is_postgres_conn,
     save_relational_report_structure,
     get_all_reports,
     get_report_detail,
@@ -98,13 +99,12 @@ def index():
 @app.route("/health")
 @app.route("/api/health")
 def health():
-    db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
-    db_engine = "postgresql" if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")) else "sqlite"
-    
     db_status = "unknown"
+    db_engine = "sqlite"
     row_counts = {}
     try:
         conn = get_db()
+        db_engine = "postgresql" if is_postgres_conn(conn) else "sqlite"
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
         db_status = "connected"
@@ -132,12 +132,13 @@ def health():
     return jsonify({
         "status": "ok" if db_status == "connected" else "degraded",
         "app": "AuditTrack Relacional",
-        "version": "v1.4.0",
+        "version": "v1.4.3",
         "base_tag": "v1.0.0-base-2026-10-02",
         "db_engine": db_engine,
         "db_status": db_status,
         "counts": row_counts,
         "ai_enabled": False,
+        "strict_postgres": os.environ.get("STRICT_POSTGRES", "false").lower() == "true",
         "timestamp": datetime.now().isoformat()
     }), status_code
 

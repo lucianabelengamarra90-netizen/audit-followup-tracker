@@ -106,6 +106,10 @@ class PGConnWrapper:
         return cur
 
 
+def is_postgres_conn(conn):
+    return isinstance(conn, PGConnWrapper)
+
+
 def get_db():
     strict_pg = os.environ.get("STRICT_POSTGRES", "false").lower() == "true"
     db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")

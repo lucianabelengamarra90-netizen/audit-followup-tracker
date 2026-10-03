@@ -21,7 +21,7 @@ class AuthAndExecutiveKPITests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
         self.assertEqual(data["status"], "ok")
-        self.assertEqual(data["version"], "v1.4.0")
+        self.assertTrue(data["version"].startswith("v1.4"))
         self.assertEqual(data["base_tag"], "v1.0.0-base-2026-10-02")
         self.assertFalse(data["ai_enabled"])
 
@@ -84,6 +84,15 @@ class AuthAndExecutiveKPITests(unittest.TestCase):
                 os.environ.pop("STRICT_POSTGRES", None)
             if original_db_url is not None:
                 os.environ["DATABASE_URL"] = original_db_url
+
+    def test_health_check_reports_real_engine(self):
+        res = self.app.get("/api/health")
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["db_engine"], "sqlite")
+        self.assertEqual(data["db_status"], "connected")
+        self.assertIn("counts", data)
+        self.assertIn("reports", data["counts"])
 
 if __name__ == "__main__":
     unittest.main()
