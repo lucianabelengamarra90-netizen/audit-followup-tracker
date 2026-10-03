@@ -77,13 +77,9 @@
                     <span class="topnav-icon">📋</span>
                     <span>Planes de Acción</span>
                 </button>
-                <button class="topnav-tab" data-tab="tableros" onclick="switchTab('tableros')">
+                <button class="topnav-tab" data-tab="tablero-ejecutivo" onclick="switchTab('tablero-ejecutivo')">
                     <span class="topnav-icon">📊</span>
-                    <span>Tableros</span>
-                </button>
-                <button class="topnav-tab" data-tab="indicadores" onclick="switchTab('indicadores')">
-                    <span class="topnav-icon">📈</span>
-                    <span>Indicadores</span>
+                    <span>Tablero Ejecutivo</span>
                 </button>
                 <!-- Pestaña Configuración desactivada -->
                 <button class="topnav-tab" data-tab="informes" onclick="switchTab('informes')">
@@ -391,13 +387,13 @@
 
                         <!-- Contador de Alcance Incluido -->
                         <div id="execScopeCounter" style="display: flex; gap: 12px; font-size: 12px; color: #334155; background: #FFFFFF; padding: 6px 14px; border-radius: 6px; border: 1px solid #E2E8F0;">
-                            <span>📁 Informes: <strong id="scopeReports">0</strong></span>
+                            <span>📁 Informes: <strong id="execScopeReports">0</strong></span>
                             <span>•</span>
-                            <span>⚠️ Hallazgos: <strong id="scopeFindings">0</strong></span>
+                            <span>⚠️ Hallazgos: <strong id="execScopeFindings">0</strong></span>
                             <span>•</span>
-                            <span>💡 Propuestas: <strong id="scopeProposals">0</strong></span>
+                            <span>💡 Propuestas: <strong id="execScopeProposals">0</strong></span>
                             <span>•</span>
-                            <span>📋 Planes: <strong id="scopePlans">0</strong></span>
+                            <span>📋 Planes: <strong id="execScopePlans">0</strong></span>
                         </div>
                     </div>
                 </div>
@@ -405,38 +401,38 @@
                 <!-- 5 TARJETAS EJECUTIVAS KPIS (3 Prioridades + 2 Resultados) -->
                 <div class="kpi-grid" style="grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-bottom: 24px;">
                     <!-- A. Riesgo Alto Abierto -->
-                    <div class="kpi-card" style="border-left: 4px solid #DC2626; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('high_risk_open')" title="Click para ver el detalle verificable de hallazgos de riesgo alto">
+                    <div class="kpi-card" style="border-left: 4px solid #DC2626; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('high_risk_open', 'Riesgo Alto Abierto')" title="Click para ver el detalle verificable de hallazgos de riesgo alto">
                         <div class="kpi-label" style="color: #991B1B; font-weight: 700;">Riesgo Alto Abierto</div>
                         <div class="kpi-value" style="color: #DC2626;" id="execValHighRisk">0</div>
-                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execContextHighRisk">0 hallazgos abiertos</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execSubHighRisk">0 hallazgos abiertos</div>
                     </div>
 
                     <!-- B. Compromisos Vencidos -->
-                    <div class="kpi-card" style="border-left: 4px solid #D97706; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('overdue_commitments')" title="Click para ver el detalle verificable de compromisos vencidos">
+                    <div class="kpi-card" style="border-left: 4px solid #D97706; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('overdue_commitments', 'Compromisos Vencidos')" title="Click para ver el detalle verificable de compromisos vencidos">
                         <div class="kpi-label" style="color: #92400E; font-weight: 700;">Compromisos Vencidos</div>
                         <div class="kpi-value" style="color: #D97706;" id="execValOverdue">0</div>
-                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execContextOverdue">0 planes activos vencidos</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execSubOverdue">0 planes activos vencidos</div>
                     </div>
 
                     <!-- C. Pendiente de Validación -->
-                    <div class="kpi-card" style="border-left: 4px solid #2563EB; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('pending_validation')" title="Click para ver el detalle verificable de compromisos pendientes de validación">
+                    <div class="kpi-card" style="border-left: 4px solid #2563EB; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('pending_validation', 'Pendientes de Validación')" title="Click para ver el detalle verificable de compromisos pendientes de validación">
                         <div class="kpi-label" style="color: #1E40AF; font-weight: 700;">Pendientes de Validación</div>
-                        <div class="kpi-value" style="color: #2563EB;" id="execValPendingVal">0</div>
-                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execContextPendingVal">0 compromisos al 100%</div>
+                        <div class="kpi-value" style="color: #2563EB;" id="execValPendingValidation">0</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execSubPendingValidation">0 compromisos al 100%</div>
                     </div>
 
                     <!-- D. Implementación Validada -->
-                    <div class="kpi-card" style="border-left: 4px solid #16A34A; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('validated_implementation')" title="Click para ver el detalle verificable de propuestas validadas">
+                    <div class="kpi-card" style="border-left: 4px solid #16A34A; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('validated_implementation', 'Implementación Validada')" title="Click para ver el detalle verificable de propuestas validadas">
                         <div class="kpi-label" style="color: #166534; font-weight: 700;">Implementación Validada</div>
-                        <div class="kpi-value" style="color: #16A34A;" id="execValValidated">Sin datos</div>
-                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execContextValidated">0 propuestas en el alcance</div>
+                        <div class="kpi-value" style="color: #16A34A;" id="execValValidatedRate">Sin datos</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execSubValidatedRate">0 propuestas en el alcance</div>
                     </div>
 
                     <!-- E. Cierre en Plazo -->
-                    <div class="kpi-card" style="border-left: 4px solid #0284C7; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('on_time_closure')" title="Click para ver el detalle verificable de cierres en plazo">
+                    <div class="kpi-card" style="border-left: 4px solid #0284C7; cursor: pointer; transition: transform 0.15s;" onclick="openExecutiveDrilldown('on_time_closing', 'Cierre en Plazo')" title="Click para ver el detalle verificable de cierres en plazo">
                         <div class="kpi-label" style="color: #075985; font-weight: 700;">Cierre en Plazo</div>
-                        <div class="kpi-value" style="color: #0284C7;" id="execValOnTime">Sin datos</div>
-                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execContextOnTime">0 cierres evaluables</div>
+                        <div class="kpi-value" style="color: #0284C7;" id="execValOnTimeRate">Sin datos</div>
+                        <div style="font-size: 11px; color: #64748B; margin-top: 4px;" id="execSubOnTimeRate">0 cierres evaluables</div>
                     </div>
                 </div>
 
@@ -445,13 +441,13 @@
                     <div class="card" style="padding: 16px;">
                         <h3 style="margin-bottom: 12px; font-size: 14px; color: #1E293B;">Comparación por Área (Riesgo Alto vs Vencidos)</h3>
                         <div style="position: relative; height: 260px;">
-                            <canvas id="chartAreaComparison"></canvas>
+                            <canvas id="execChartArea"></canvas>
                         </div>
                     </div>
                     <div class="card" style="padding: 16px;">
                         <h3 style="margin-bottom: 12px; font-size: 14px; color: #1E293B;">Antigüedad de Vencimientos</h3>
                         <div style="position: relative; height: 260px;">
-                            <canvas id="chartAgingBreakdown"></canvas>
+                            <canvas id="execChartAging"></canvas>
                         </div>
                     </div>
                 </div>

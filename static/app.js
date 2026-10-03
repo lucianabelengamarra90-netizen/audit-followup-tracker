@@ -1374,6 +1374,9 @@ async function loadExecutiveDashboard() {
         }
         execData = await res.json();
 
+        // Set cut date in header
+        if (el("execCutDateStr")) el("execCutDateStr").textContent = execData.cut_date || "--";
+
         renderExecutiveScopeBar(execData.scope);
         renderExecutiveKpis(execData.kpis);
         renderExecutiveAreaChart(execData.charts ? execData.charts.by_area : []);
@@ -2035,8 +2038,8 @@ async function validateProposal(proposalId) {
         if (res.ok && data.success) {
             showToast(data.message || "Propuesta validada exitosamente", "success");
             await loadAllData();
-            if (el("tab-indicadores")?.classList.contains("active")) {
-                await loadKpiIndicatorsTab();
+            if (el("tab-tablero-ejecutivo")?.classList.contains("active")) {
+                await loadExecutiveDashboard();
             }
         } else {
             showToast(data.error || "Error al validar propuesta", "error");
@@ -2056,8 +2059,8 @@ async function validateActionPlan(planId) {
         if (res.ok && data.success) {
             showToast(data.message || "Plan de acción validado exitosamente", "success");
             await loadAllData();
-            if (el("tab-indicadores")?.classList.contains("active")) {
-                await loadKpiIndicatorsTab();
+            if (el("tab-tablero-ejecutivo")?.classList.contains("active")) {
+                await loadExecutiveDashboard();
             }
         } else {
             showToast(data.error || "Error al validar plan de acción", "error");
