@@ -738,7 +738,10 @@
                     <textarea id="drawerTextObservations" rows="2" class="drawer-edit-input" style="width:100%; padding:6px; border-radius:4px; border:1px solid #CBD5E1; font-size:12px;" placeholder="Notas adicionales o comentarios de seguimiento..."></textarea>
                 </div>
 
-                <button type="button" class="btn btn-primary" style="width:100%; justify-content:center;" onclick="saveFindingFromDrawer()">💾 Guardar Cambios del Hallazgo</button>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="btn btn-primary" style="flex:1; justify-content:center;" onclick="saveFindingFromDrawer()">💾 Guardar Cambios</button>
+                    <button type="button" class="btn btn-outlined" style="color:#DC2626; border-color:#FCA5A5; justify-content:center;" onclick="deleteCurrentDrawerFinding()">🗑️ Eliminar</button>
+                </div>
             </div>
 
             <!-- Origen e Informe -->

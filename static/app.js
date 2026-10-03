@@ -323,8 +323,14 @@ async function loadAllData() {
         renderActionPlansTab();
         updateSidebarMetrics();
         loadNotifications();
-        if (document.getElementById("tab-tablero-ejecutivo")?.classList.contains("active")) {
-            loadExecutiveDashboard();
+
+        // Always refresh executive dashboard KPIs & stats
+        await loadExecutiveDashboard();
+
+        // If drilldown modal is open, refresh drilldown records
+        const modal = el("execDrilldownModal");
+        if (modal && modal.style.display === "flex" && currentExecutiveDrilldownMetric) {
+            openExecutiveDrilldown(currentExecutiveDrilldownMetric, currentExecutiveDrilldownTitle);
         }
     } catch (err) {
         console.error("Error cargando estructura relacional de AuditTrack:", err);
@@ -1393,38 +1399,50 @@ function populateExecutiveFilterDropdowns() {
     const areaSel = el("execFilterArea");
     const periodSel = el("execFilterPeriod");
 
-    if (reportSel && (reportSel.options.length <= 1 || reportSel.options[0].text !== "Todos los Informes")) {
+    if (reportSel) {
+        const curVal = execFilters.report_id || reportSel.value;
         let html = '<option value="">Todos los Informes</option>';
         (currentReports || []).forEach(r => {
-            html += `<option value="${r.id}">${escapeHtml(r.code || '')} - ${escapeHtml(r.title || '')}</option>`;
+            html += `<option value="${r.id}" ${String(r.id) === String(curVal) ? 'selected' : ''}>${escapeHtml(r.code || '')} - ${escapeHtml(r.title || '')}</option>`;
         });
         reportSel.innerHTML = html;
-        reportSel.value = execFilters.report_id;
+        if (!Array.from(reportSel.options).some(o => o.value === String(curVal))) {
+            execFilters.report_id = "";
+            reportSel.value = "";
+        }
     }
 
-    if (areaSel && (areaSel.options.length <= 1 || areaSel.options[0].text !== "Todas las Áreas Responsables")) {
+    if (areaSel) {
+        const curVal = execFilters.area || areaSel.value;
         const areas = new Set();
-        (currentFindings || []).forEach(f => { if (f.area) areas.add(f.area); });
+        (currentFindings || []).forEach(f => { if (f.responsible_area || f.area) areas.add(f.responsible_area || f.area); });
         (currentProposals || []).forEach(p => { if (p.responsible_area) areas.add(p.responsible_area); });
 
         let html = '<option value="">Todas las Áreas Responsables</option>';
         Array.from(areas).sort().forEach(a => {
-            html += `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`;
+            html += `<option value="${escapeHtml(a)}" ${a === curVal ? 'selected' : ''}>${escapeHtml(a)}</option>`;
         });
         areaSel.innerHTML = html;
-        areaSel.value = execFilters.area;
+        if (!Array.from(areaSel.options).some(o => o.value === curVal)) {
+            execFilters.area = "";
+            areaSel.value = "";
+        }
     }
 
-    if (periodSel && (periodSel.options.length <= 1 || periodSel.options[0].text !== "Todos los Períodos")) {
+    if (periodSel) {
+        const curVal = execFilters.period || periodSel.value;
         const periods = new Set();
         (currentReports || []).forEach(r => { if (r.period) periods.add(r.period); });
 
         let html = '<option value="">Todos los Períodos</option>';
         Array.from(periods).sort().forEach(p => {
-            html += `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`;
+            html += `<option value="${escapeHtml(p)}" ${p === curVal ? 'selected' : ''}>${escapeHtml(p)}</option>`;
         });
         periodSel.innerHTML = html;
-        periodSel.value = execFilters.period;
+        if (!Array.from(periodSel.options).some(o => o.value === curVal)) {
+            execFilters.period = "";
+            periodSel.value = "";
+        }
     }
 }
 
@@ -1613,12 +1631,31 @@ function renderExecutiveAgendaTable(agendaItems) {
     tbody.innerHTML = html;
 }
 
+let currentExecutiveDrilldownMetric = null;
+let currentExecutiveDrilldownTitle = null;
+
 async function openExecutiveDrilldown(metricKey, title) {
     const modal = el("execDrilldownModal");
     if (!modal) return;
 
+    currentExecutiveDrilldownMetric = metricKey;
+    currentExecutiveDrilldownTitle = title;
+
     if (el("execDrilldownTitle")) el("execDrilldownTitle").textContent = title || "Detalle Auditoría";
     if (el("execDrilldownMetricTitle")) el("execDrilldownMetricTitle").textContent = title || "";
+    if (el("execDrilldownTableHead")) {
+        el("execDrilldownTableHead").innerHTML = `
+            <tr>
+                <th class="px-3 py-2 text-xs font-semibold text-slate-700">Código</th>
+                <th class="px-3 py-2 text-xs font-semibold text-slate-700">Título / Compromiso</th>
+                <th class="px-3 py-2 text-xs font-semibold text-slate-700">Informe / Área</th>
+                <th class="px-3 py-2 text-xs font-semibold text-slate-700 text-center">Criticidad</th>
+                <th class="px-3 py-2 text-xs font-semibold text-slate-700 text-center">Estado</th>
+                <th class="px-3 py-2 text-xs font-semibold text-slate-700 text-center">Fecha Target</th>
+                <th class="px-3 py-2 text-xs font-semibold text-slate-700 text-center">Acción</th>
+            </tr>
+        `;
+    }
     if (el("execDrilldownTableBody")) {
         el("execDrilldownTableBody").innerHTML = '<tr><td colspan="7" class="text-center py-4"><i class="fas fa-spinner fa-spin mr-2"></i>Cargando detalle...</td></tr>';
     }
@@ -1666,15 +1703,19 @@ function renderExecutiveDrilldownTable(records) {
 
     let html = "";
     records.forEach(r => {
+        const targetId = r.finding_id || r.id;
         html += `
             <tr class="hover:bg-slate-50 border-b border-slate-100">
                 <td class="px-3 py-2 text-xs font-mono font-bold text-slate-800">${escapeHtml(r.code || '-')}</td>
                 <td class="px-3 py-2 text-xs text-slate-900">${escapeHtml(r.title || r.description || '-')}</td>
                 <td class="px-3 py-2 text-xs text-slate-700">${escapeHtml(r.report_title || r.area || '-')}</td>
-                <td class="px-3 py-2 text-xs text-center"><span class="px-2 py-0.5 rounded ${r.risk_level === 'Alto' ? 'bg-red-100 text-red-800 font-bold' : 'bg-slate-100 text-slate-700'}">${escapeHtml(r.risk_level || '-')}</span></td>
+                <td class="px-3 py-2 text-xs text-center"><span class="px-2 py-0.5 rounded ${r.risk_level === 'Alto' ? 'bg-red-100 text-red-800 font-bold' : (r.risk_level === 'Bajo' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800')}">${escapeHtml(r.risk_level || '-')}</span></td>
                 <td class="px-3 py-2 text-xs text-center">${escapeHtml(r.status || '-')}</td>
                 <td class="px-3 py-2 text-xs text-center font-mono">${escapeHtml(r.target_date || r.closed_date || '-')}</td>
-                <td class="px-3 py-2 text-xs text-slate-600">${escapeHtml(r.note || '-')}</td>
+                <td class="px-3 py-2 text-xs text-center" style="white-space:nowrap;">
+                    <button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px;" onclick="openFindingDrawer('${targetId}')">✏️ Ver</button>
+                    <button class="btn btn-outlined" style="padding: 2px 6px; font-size: 11px; color:#DC2626; border-color:#FCA5A5;" onclick="deleteFindingItem('${targetId}')">🗑️ Eliminar</button>
+                </td>
             </tr>
         `;
     });
@@ -2392,6 +2433,30 @@ async function deleteReportItem(reportId) {
         }
     } catch (err) {
         console.error(err);
+    }
+}
+
+async function deleteFindingItem(findingId) {
+    if (!findingId) return;
+    if (!confirm("¿Eliminar este hallazgo y sus propuestas y planes asociados?")) return;
+    try {
+        const response = await fetch(`/findings/${findingId}`, { method: "DELETE" });
+        if (response.ok) {
+            showToast("Hallazgo eliminado.", "success");
+            closeFindingDrawer();
+            await loadAllData();
+        } else {
+            showToast("Error al eliminar hallazgo.", "error");
+        }
+    } catch (err) {
+        console.error("Error eliminando hallazgo:", err);
+        showToast("Error de conexión al eliminar hallazgo.", "error");
+    }
+}
+
+function deleteCurrentDrawerFinding() {
+    if (currentDrawerFindingId) {
+        deleteFindingItem(currentDrawerFindingId);
     }
 }
 
