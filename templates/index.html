@@ -450,48 +450,62 @@
                     </div>
                 </div>
 
-                <!-- 3 GRÁFICOS EJECUTIVOS CON ESTILO PREMIUM -->
-                <div class="charts-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 24px;">
-                    <!-- Gráfico 1: Comparación por Área -->
+                <!-- 3 GRÁFICOS EJECUTIVOS EN BARRAS HORIZONTALES -->
+                <style>
+                    .exec-risk-btn {
+                        padding: 3px 9px;
+                        font-size: 11px;
+                        font-weight: 600;
+                        border-radius: 6px;
+                        border: 1px solid #CBD5E1;
+                        background: #F8FAFC;
+                        color: #64748B;
+                        cursor: pointer;
+                        transition: all 0.15s ease;
+                    }
+                    .exec-risk-btn.active-high { background: #FEE2E2; color: #991B1B; border-color: #FCA5A5; }
+                    .exec-risk-btn.active-med { background: #FEF3C7; color: #92400E; border-color: #FDE68A; }
+                    .exec-risk-btn.active-low { background: #D1FAE5; color: #065F46; border-color: #6EE7B7; }
+                    .exec-risk-btn.active-ov { background: #FFEDD5; color: #9A3412; border-color: #FDBA74; }
+                    .exec-risk-btn.inactive { opacity: 0.35; filter: grayscale(1); border-color: #CBD5E1; background: #F1F5F9; color: #94A3B8; }
+                </style>
+
+                <div class="charts-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 24px;">
+                    <!-- Gráfico 1: Comparación por Área Responsable (Con Conmutadores de Riesgo) -->
                     <div class="card" style="padding: 18px; border-radius: 12px; box-shadow: 0 4px 20px -2px rgba(0,0,0,0.05); background: #FFFFFF;">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 14px;">
-                            <h3 style="font-size: 14px; color: #0F172A; font-weight: 700; margin:0;">📊 Comparativa por Área</h3>
-                            <span style="font-size: 11px; background: #F1F5F9; color: #475569; padding: 2px 8px; border-radius: 6px; font-weight:600;">Alto vs Vencidos</span>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px; flex-wrap:wrap; gap:8px;">
+                            <h3 style="font-size: 14px; color: #0F172A; font-weight: 700; margin:0;">📊 Comparativa por Área Responsable</h3>
+                            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+                                <button type="button" class="exec-risk-btn active-high" id="btnToggleRiskHigh" onclick="toggleExecutiveChartSeries('high')" title="Activar/Desactivar Riesgo Alto">🔴 Alto</button>
+                                <button type="button" class="exec-risk-btn active-med" id="btnToggleRiskMed" onclick="toggleExecutiveChartSeries('medium')" title="Activar/Desactivar Riesgo Medio">🟡 Medio</button>
+                                <button type="button" class="exec-risk-btn active-low" id="btnToggleRiskLow" onclick="toggleExecutiveChartSeries('low')" title="Activar/Desactivar Riesgo Bajo">🟢 Bajo</button>
+                                <button type="button" class="exec-risk-btn active-ov" id="btnToggleRiskOv" onclick="toggleExecutiveChartSeries('overdue')" title="Activar/Desactivar Compromisos Vencidos">🟠 Vencidos</button>
+                            </div>
                         </div>
-                        <div style="position: relative; height: 250px;">
+                        <div style="position: relative; height: 260px;">
                             <canvas id="execChartArea"></canvas>
                         </div>
                     </div>
 
-                    <!-- Gráfico 2: Antigüedad de Vencimientos (Doughnut) -->
+                    <!-- Gráfico 2: Antigüedad de Vencimientos (Barras Horizontales) -->
                     <div class="card" style="padding: 18px; border-radius: 12px; box-shadow: 0 4px 20px -2px rgba(0,0,0,0.05); background: #FFFFFF;">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 14px;">
-                            <h3 style="font-size: 14px; color: #0F172A; font-weight: 700; margin:0;">🍩 Antigüedad de Vencimientos</h3>
+                            <h3 style="font-size: 14px; color: #0F172A; font-weight: 700; margin:0;">⏳ Antigüedad de Vencimientos</h3>
                             <span style="font-size: 11px; background: #FEF3C7; color: #D97706; padding: 2px 8px; border-radius: 6px; font-weight:600;">Tramos Días</span>
                         </div>
-                        <div style="position: relative; height: 250px; display:flex; justify-content:center; align-items:center;">
+                        <div style="position: relative; height: 260px;">
                             <canvas id="execChartAging"></canvas>
-                            <!-- Badge Central Estadístico -->
-                            <div id="execAgingCenterBadge" style="position: absolute; top: 46%; left: 50%; transform: translate(-50%, -50%); text-align: center; pointer-events: none;">
-                                <div id="execAgingCenterCount" style="font-size: 26px; font-weight: 800; color: #0F172A; line-height: 1;">0</div>
-                                <div style="font-size: 11px; color: #64748B; font-weight: 600; margin-top: 2px;">Vencidos</div>
-                            </div>
                         </div>
                     </div>
 
-                    <!-- Gráfico 3: Efectividad de Cierres e Implementación -->
+                    <!-- Gráfico 3: Estado de Implementación de Propuestas (Barras Horizontales) -->
                     <div class="card" style="padding: 18px; border-radius: 12px; box-shadow: 0 4px 20px -2px rgba(0,0,0,0.05); background: #FFFFFF;">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 14px;">
-                            <h3 style="font-size: 14px; color: #0F172A; font-weight: 700; margin:0;">🎯 Tasa de Implementación</h3>
-                            <span style="font-size: 11px; background: #DCFCE7; color: #166534; padding: 2px 8px; border-radius: 6px; font-weight:600;">Validado vs Pendiente</span>
+                            <h3 style="font-size: 14px; color: #0F172A; font-weight: 700; margin:0;">📈 Estado de Implementación</h3>
+                            <span style="font-size: 11px; background: #DCFCE7; color: #166534; padding: 2px 8px; border-radius: 6px; font-weight:600;">Efectividad Cierres</span>
                         </div>
-                        <div style="position: relative; height: 250px; display:flex; justify-content:center; align-items:center;">
+                        <div style="position: relative; height: 260px;">
                             <canvas id="execChartEffectiveness"></canvas>
-                            <!-- Badge Central de Porcentaje -->
-                            <div id="execEffectivenessCenterBadge" style="position: absolute; top: 46%; left: 50%; transform: translate(-50%, -50%); text-align: center; pointer-events: none;">
-                                <div id="execEffectivenessCenterRate" style="font-size: 24px; font-weight: 800; color: #16A34A; line-height: 1;">--</div>
-                                <div style="font-size: 11px; color: #64748B; font-weight: 600; margin-top: 2px;">Validado</div>
-                            </div>
                         </div>
                     </div>
                 </div>

@@ -1672,10 +1672,12 @@ def get_executive_kpis(filters=None):
         """, params)
         pending_val_cnt = cursor.fetchone()[0] or 0
 
-        # Chart 1: Comparación por Área
+        # Chart 1: Comparación por Área (Alto, Medio, Bajo y Vencidos)
         cursor.execute(f"""
             SELECT COALESCE(NULLIF(f.responsible_area, ''), NULLIF(p.responsible_area, ''), 'Sin área') as area_name,
-                   COUNT(DISTINCT CASE WHEN LOWER(f.severity) = 'alto' AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as high_risk_cnt,
+                   COUNT(DISTINCT CASE WHEN LOWER(f.severity) IN ('alto', 'alta', 'high', 'crítico', 'critico') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as high_risk_cnt,
+                   COUNT(DISTINCT CASE WHEN LOWER(f.severity) IN ('medio', 'media', 'medium') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as medium_risk_cnt,
+                   COUNT(DISTINCT CASE WHEN LOWER(f.severity) IN ('bajo', 'baja', 'low') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as low_risk_cnt,
                    COUNT(DISTINCT CASE WHEN pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ? AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'en suspensión', 'en suspension', 'stand-by') THEN pa.id END) as overdue_cnt
             FROM reports r
             JOIN findings f ON f.report_id = r.id
@@ -1683,13 +1685,15 @@ def get_executive_kpis(filters=None):
             LEFT JOIN action_plans pa ON pa.proposal_id = p.id
             {where_str}
             GROUP BY area_name
-            HAVING high_risk_cnt > 0 OR overdue_cnt > 0
+            HAVING high_risk_cnt > 0 OR medium_risk_cnt > 0 OR low_risk_cnt > 0 OR overdue_cnt > 0
             ORDER BY overdue_cnt DESC, high_risk_cnt DESC
         """, [today_str] + params)
         area_rows = cursor.fetchall()
         chart_area = {
             "labels": [r["area_name"] for r in area_rows],
             "high_risk": [r["high_risk_cnt"] for r in area_rows],
+            "medium_risk": [r["medium_risk_cnt"] for r in area_rows],
+            "low_risk": [r["low_risk_cnt"] for r in area_rows],
             "overdue": [r["overdue_cnt"] for r in area_rows]
         }
 
@@ -1840,6 +1844,8 @@ def get_executive_kpis(filters=None):
             area_chart_list.append({
                 "area": r["area_name"],
                 "high_risk_open": r["high_risk_cnt"],
+                "medium_risk_open": r["medium_risk_cnt"],
+                "low_risk_open": r["low_risk_cnt"],
                 "overdue": r["overdue_cnt"]
             })
 

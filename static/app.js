@@ -1508,49 +1508,95 @@ function renderExecutiveKpis(kpis) {
     if (el("execSubOnTimeRate")) el("execSubOnTimeRate").textContent = kpis.on_time_closing ? kpis.on_time_closing.subtitle : "";
 }
 
+let execChartActiveSeries = { high: true, medium: true, low: true, overdue: true };
+let latestExecutiveAreaData = [];
+
+function toggleExecutiveChartSeries(seriesKey) {
+    if (execChartActiveSeries[seriesKey] !== undefined) {
+        execChartActiveSeries[seriesKey] = !execChartActiveSeries[seriesKey];
+    }
+
+    const btnMap = {
+        high: { id: "btnToggleRiskHigh", cls: "active-high" },
+        medium: { id: "btnToggleRiskMed", cls: "active-med" },
+        low: { id: "btnToggleRiskLow", cls: "active-low" },
+        overdue: { id: "btnToggleRiskOv", cls: "active-ov" }
+    };
+
+    const target = btnMap[seriesKey];
+    if (target && el(target.id)) {
+        const isActive = execChartActiveSeries[seriesKey];
+        el(target.id).className = `exec-risk-btn ${isActive ? target.cls : "inactive"}`;
+    }
+
+    renderExecutiveAreaChart(latestExecutiveAreaData);
+}
+
 function renderExecutiveAreaChart(areaData) {
+    if (areaData) latestExecutiveAreaData = areaData;
     const canvas = el("execChartArea");
     const ctx = canvas?.getContext("2d");
     if (!ctx) return;
     if (chartInstances.execArea) chartInstances.execArea.destroy();
 
-    const labels = (areaData || []).map(item => item.area);
-    const highRiskData = (areaData || []).map(item => item.high_risk_open);
-    const overdueData = (areaData || []).map(item => item.overdue);
+    const dataList = latestExecutiveAreaData || [];
+    const labels = dataList.map(item => item.area);
 
-    // Dynamic gradients for bars
-    let highRiskGrad = ctx.createLinearGradient(0, 0, 300, 0);
-    highRiskGrad.addColorStop(0, "#EF4444");
-    highRiskGrad.addColorStop(1, "#991B1B");
+    const datasets = [];
 
-    let overdueGrad = ctx.createLinearGradient(0, 0, 300, 0);
-    overdueGrad.addColorStop(0, "#F97316");
-    overdueGrad.addColorStop(1, "#C2410C");
+    if (execChartActiveSeries.high) {
+        datasets.push({
+            label: "Riesgo Alto Abierto",
+            data: dataList.map(item => item.high_risk_open || 0),
+            backgroundColor: "#DC2626",
+            borderRadius: 6,
+            borderSkipped: false,
+            barPercentage: 0.7,
+            categoryPercentage: 0.8
+        });
+    }
+
+    if (execChartActiveSeries.medium) {
+        datasets.push({
+            label: "Riesgo Medio Abierto",
+            data: dataList.map(item => item.medium_risk_open || 0),
+            backgroundColor: "#F59E0B",
+            borderRadius: 6,
+            borderSkipped: false,
+            barPercentage: 0.7,
+            categoryPercentage: 0.8
+        });
+    }
+
+    if (execChartActiveSeries.low) {
+        datasets.push({
+            label: "Riesgo Bajo Abierto",
+            data: dataList.map(item => item.low_risk_open || 0),
+            backgroundColor: "#10B981",
+            borderRadius: 6,
+            borderSkipped: false,
+            barPercentage: 0.7,
+            categoryPercentage: 0.8
+        });
+    }
+
+    if (execChartActiveSeries.overdue) {
+        datasets.push({
+            label: "Compromisos Vencidos",
+            data: dataList.map(item => item.overdue || 0),
+            backgroundColor: "#EA580C",
+            borderRadius: 6,
+            borderSkipped: false,
+            barPercentage: 0.7,
+            categoryPercentage: 0.8
+        });
+    }
 
     chartInstances.execArea = new Chart(ctx, {
         type: "bar",
         data: {
             labels: labels.length ? labels : ["Sin áreas registradas"],
-            datasets: [
-                {
-                    label: "Riesgo Alto Abierto",
-                    data: highRiskData.length ? highRiskData : [0],
-                    backgroundColor: highRiskGrad,
-                    borderRadius: 6,
-                    borderSkipped: false,
-                    barPercentage: 0.7,
-                    categoryPercentage: 0.8
-                },
-                {
-                    label: "Compromisos Vencidos",
-                    data: overdueData.length ? overdueData : [0],
-                    backgroundColor: overdueGrad,
-                    borderRadius: 6,
-                    borderSkipped: false,
-                    barPercentage: 0.7,
-                    categoryPercentage: 0.8
-                }
-            ]
+            datasets: datasets.length ? datasets : [{ label: "Sin métrica activa", data: [0], backgroundColor: "#CBD5E1" }]
         },
         options: {
             indexAxis: "y",
@@ -1561,11 +1607,10 @@ function renderExecutiveAreaChart(areaData) {
                     position: "top",
                     align: "end",
                     labels: {
-                        boxWidth: 12,
-                        boxHeight: 12,
+                        boxWidth: 10,
                         usePointStyle: true,
                         pointStyle: "circle",
-                        font: { family: "Inter, sans-serif", size: 11, weight: "600" },
+                        font: { family: "Inter, sans-serif", size: 10, weight: "600" },
                         color: "#475569"
                     }
                 },
@@ -1574,8 +1619,7 @@ function renderExecutiveAreaChart(areaData) {
                     titleFont: { family: "Inter, sans-serif", size: 12, weight: "700" },
                     bodyFont: { family: "Inter, sans-serif", size: 11 },
                     padding: 10,
-                    cornerRadius: 8,
-                    displayColors: true
+                    cornerRadius: 8
                 }
             },
             scales: {
@@ -1605,57 +1649,44 @@ function renderExecutiveAgingChart(agingData) {
         agingData ? agingData[">60"] || 0 : 0
     ];
 
-    const totalOverdue = dataVals.reduce((a, b) => a + b, 0);
-
-    // Update center badge count
-    if (el("execAgingCenterCount")) {
-        el("execAgingCenterCount").textContent = totalOverdue;
-    }
-
     chartInstances.execAging = new Chart(ctx, {
-        type: "doughnut",
+        type: "bar",
         data: {
             labels: ["1-30 días", "31-60 días", "> 60 días"],
             datasets: [
                 {
-                    data: totalOverdue > 0 ? dataVals : [0, 0, 1],
-                    backgroundColor: totalOverdue > 0 ? ["#F59E0B", "#F97316", "#DC2626"] : ["#E2E8F0", "#E2E8F0", "#E2E8F0"],
-                    borderWidth: 3,
-                    borderColor: "#FFFFFF",
-                    hoverOffset: 6
+                    label: "Planes Vencidos",
+                    data: dataVals,
+                    backgroundColor: ["#F59E0B", "#F97316", "#DC2626"],
+                    borderRadius: 6,
+                    borderSkipped: false,
+                    barPercentage: 0.6
                 }
             ]
         },
         options: {
+            indexAxis: "y",
             responsive: true,
             maintainAspectRatio: false,
-            cutout: "75%",
             plugins: {
-                legend: {
-                    position: "bottom",
-                    labels: {
-                        boxWidth: 10,
-                        usePointStyle: true,
-                        pointStyle: "circle",
-                        font: { family: "Inter, sans-serif", size: 11, weight: "600" },
-                        color: "#475569",
-                        padding: 14
-                    }
-                },
+                legend: { display: false },
                 tooltip: {
                     backgroundColor: "#0F172A",
                     titleFont: { family: "Inter, sans-serif", size: 12, weight: "700" },
                     bodyFont: { family: "Inter, sans-serif", size: 11 },
                     padding: 10,
-                    cornerRadius: 8,
-                    callbacks: {
-                        label: function(context) {
-                            if (totalOverdue === 0) return " Sin compromisos vencidos";
-                            const val = context.raw || 0;
-                            const pct = totalOverdue > 0 ? Math.round((val / totalOverdue) * 100) : 0;
-                            return ` ${context.label}: ${val} planes (${pct}%)`;
-                        }
-                    }
+                    cornerRadius: 8
+                }
+            },
+            scales: {
+                x: {
+                    beginAtZero: true,
+                    grid: { color: "#F1F5F9" },
+                    ticks: { precision: 0, font: { family: "Inter, sans-serif", size: 11 }, color: "#64748B" }
+                },
+                y: {
+                    grid: { display: false },
+                    ticks: { font: { family: "Inter, sans-serif", size: 11, weight: "600" }, color: "#334155" }
                 }
             }
         }
@@ -1669,61 +1700,49 @@ function renderExecutiveEffectivenessChart(kpis) {
     if (chartInstances.execEffectiveness) chartInstances.execEffectiveness.destroy();
 
     const validatedObj = kpis ? kpis.validated_implementation : null;
-    const rateVal = validatedObj && validatedObj.rate !== null && validatedObj.rate !== undefined ? validatedObj.rate : null;
     const countVal = validatedObj ? validatedObj.count || 0 : 0;
     const totalVal = validatedObj ? validatedObj.total || 0 : 0;
-    const pendingCount = Math.max(0, totalVal - countVal);
-
-    if (el("execEffectivenessCenterRate")) {
-        el("execEffectivenessCenterRate").textContent = rateVal !== null ? `${rateVal}%` : "0%";
-    }
-
-    const hasData = totalVal > 0;
+    const pendingVal = Math.max(0, totalVal - countVal);
+    const pendingValidationVal = kpis && kpis.pending_validation ? kpis.pending_validation.count || 0 : 0;
 
     chartInstances.execEffectiveness = new Chart(ctx, {
-        type: "doughnut",
+        type: "bar",
         data: {
-            labels: ["Validado", "Pendiente / En Proceso"],
+            labels: ["Validadas", "Al 100% (Pend. Val.)", "En Proceso / Pend."],
             datasets: [
                 {
-                    data: hasData ? [countVal, pendingCount] : [0, 1],
-                    backgroundColor: hasData ? ["#10B981", "#3B82F6"] : ["#E2E8F0", "#E2E8F0"],
-                    borderWidth: 3,
-                    borderColor: "#FFFFFF",
-                    hoverOffset: 6
+                    label: "Propuestas / Compromisos",
+                    data: [countVal, pendingValidationVal, Math.max(0, pendingVal - pendingValidationVal)],
+                    backgroundColor: ["#10B981", "#2563EB", "#94A3B8"],
+                    borderRadius: 6,
+                    borderSkipped: false,
+                    barPercentage: 0.6
                 }
             ]
         },
         options: {
+            indexAxis: "y",
             responsive: true,
             maintainAspectRatio: false,
-            cutout: "75%",
             plugins: {
-                legend: {
-                    position: "bottom",
-                    labels: {
-                        boxWidth: 10,
-                        usePointStyle: true,
-                        pointStyle: "circle",
-                        font: { family: "Inter, sans-serif", size: 11, weight: "600" },
-                        color: "#475569",
-                        padding: 14
-                    }
-                },
+                legend: { display: false },
                 tooltip: {
                     backgroundColor: "#0F172A",
                     titleFont: { family: "Inter, sans-serif", size: 12, weight: "700" },
                     bodyFont: { family: "Inter, sans-serif", size: 11 },
                     padding: 10,
-                    cornerRadius: 8,
-                    callbacks: {
-                        label: function(context) {
-                            if (!hasData) return " Sin propuestas para evaluar";
-                            const val = context.raw || 0;
-                            const pct = totalVal > 0 ? Math.round((val / totalVal) * 100) : 0;
-                            return ` ${context.label}: ${val} (${pct}%)`;
-                        }
-                    }
+                    cornerRadius: 8
+                }
+            },
+            scales: {
+                x: {
+                    beginAtZero: true,
+                    grid: { color: "#F1F5F9" },
+                    ticks: { precision: 0, font: { family: "Inter, sans-serif", size: 11 }, color: "#64748B" }
+                },
+                y: {
+                    grid: { display: false },
+                    ticks: { font: { family: "Inter, sans-serif", size: 11, weight: "600" }, color: "#334155" }
                 }
             }
         }
