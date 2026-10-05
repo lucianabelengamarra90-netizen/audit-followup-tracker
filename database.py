@@ -110,8 +110,18 @@ def is_postgres_conn(conn):
     return isinstance(conn, PGConnWrapper)
 
 
+def is_render_environment():
+    return bool(os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"))
+
+
 def get_db():
-    strict_pg = os.environ.get("STRICT_POSTGRES", "false").lower() == "true"
+    is_render = is_render_environment()
+    strict_pg_env = os.environ.get("STRICT_POSTGRES")
+    if strict_pg_env is not None:
+        strict_pg = strict_pg_env.lower() == "true"
+    else:
+        strict_pg = is_render
+
     db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
     
     if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")):
@@ -127,7 +137,7 @@ def get_db():
             print(f"[WARN] Failed connecting to PostgreSQL ({exc}), falling back to local SQLite.")
 
     if strict_pg:
-        raise RuntimeError("PRODUCTION DB ERROR: DATABASE_URL is not set in production environment. PostgreSQL connection is mandatory.")
+        raise RuntimeError("PRODUCTION DB ERROR: DATABASE_URL is not set in production environment (Render). PostgreSQL connection is mandatory.")
 
     db_dir = os.path.dirname(os.path.abspath(DB_PATH))
     if db_dir and not os.path.exists(db_dir):

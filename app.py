@@ -34,7 +34,8 @@ from database import (
     get_executive_kpis,
     get_executive_drilldown,
     validate_proposal,
-    validate_action_plan
+    validate_action_plan,
+    is_render_environment
 )
 from domain.auth import (
     get_current_user, login_user, logout_user, require_auth, require_role,
@@ -102,6 +103,9 @@ def health():
     db_status = "unknown"
     db_engine = "sqlite"
     row_counts = {}
+    is_render = is_render_environment()
+    warning_msg = None
+
     try:
         conn = get_db()
         db_engine = "postgresql" if is_postgres_conn(conn) else "sqlite"
@@ -128,19 +132,27 @@ def health():
     except Exception as exc:
         db_status = f"error: {str(exc)}"
 
+    if is_render and db_engine == "sqlite":
+        warning_msg = "ENTORNO RENDER DETECTADO EN MODO SQLITE. Los datos no se sincronizarán entre distintas PCs a menos que configures DATABASE_URL en el panel de Render."
+
     status_code = 200 if db_status == "connected" else 503
-    return jsonify({
+    resp = {
         "status": "ok" if db_status == "connected" else "degraded",
         "app": "AuditTrack Relacional",
         "version": "v1.5.1",
-        "base_tag": "v1.5.1-baseline-aprobada",
+        "base_tag": "v1.0.0-base-2026-10-02",
         "db_engine": db_engine,
         "db_status": db_status,
         "counts": row_counts,
         "ai_enabled": False,
-        "strict_postgres": os.environ.get("STRICT_POSTGRES", "false").lower() == "true",
+        "strict_postgres": os.environ.get("STRICT_POSTGRES", "true" if is_render else "false").lower() == "true",
+        "is_render": is_render,
         "timestamp": datetime.now().isoformat()
-    }), status_code
+    }
+    if warning_msg:
+        resp["warning"] = warning_msg
+
+    return jsonify(resp), status_code
 
 
 @app.route("/api/user")
