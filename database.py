@@ -10,6 +10,17 @@ from domain.dates import parse_date_to_iso, format_display_date, is_date_past, g
 DB_PATH = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit_tracker.db"))
 
 
+def normalize_severity(sev):
+    if not sev:
+        return "Medio"
+    s = str(sev).strip().lower()
+    if s in ("alto", "alta", "high", "crítico", "critico", "crítica", "critica", "elevado", "elevada"):
+        return "Alto"
+    if s in ("bajo", "baja", "low", "leve", "menor"):
+        return "Bajo"
+    return "Medio"
+
+
 
 class PGRow(dict):
     """
@@ -1351,7 +1362,7 @@ def get_dashboard_stats():
     cursor.execute("SELECT COUNT(*) FROM findings WHERE LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')")
     open_findings = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM findings WHERE LOWER(severity) = 'alto' AND LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')")
+    cursor.execute("SELECT COUNT(*) FROM findings WHERE LOWER(severity) IN ('alto', 'alta', 'high', 'crítico', 'critico', 'crítica', 'critica') AND LOWER(status) NOT IN ('finalizado', 'completado', 'cerrado')")
     high_risk_findings = cursor.fetchone()[0]
 
     cursor.execute("SELECT COUNT(*) FROM proposals")
@@ -1374,9 +1385,8 @@ def get_dashboard_stats():
     cursor.execute("SELECT severity, COUNT(*) as cnt FROM findings GROUP BY severity")
     risk_breakdown = {"Alto": 0, "Medio": 0, "Bajo": 0}
     for r in cursor.fetchall():
-        sev = r["severity"]
-        if sev in risk_breakdown:
-            risk_breakdown[sev] = r["cnt"]
+        sev = normalize_severity(r["severity"])
+        risk_breakdown[sev] = risk_breakdown.get(sev, 0) + r["cnt"]
 
     cursor.execute("SELECT status, COUNT(*) as cnt FROM findings GROUP BY status")
     status_breakdown = {normalize_status(r["status"]): r["cnt"] for r in cursor.fetchall()}
