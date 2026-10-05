@@ -278,6 +278,38 @@ async function exportExcelReport() {
 // TAB NAVIGATION
 // ============================================================
 
+let isSyncing = false;
+
+async function syncDataWithServer(silent = true) {
+    if (isSyncing) return;
+    isSyncing = true;
+    const badge = el("syncStatusBadge");
+    if (badge && !silent) {
+        badge.innerHTML = '🟡 Sincronizando...';
+        badge.style.color = '#F59E0B';
+    }
+
+    try {
+        await loadAllData(silent);
+        if (badge) {
+            const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            badge.innerHTML = `🟢 Sincronizado (${timeStr})`;
+            badge.style.color = '#10B981';
+        }
+        if (!silent) {
+            showToast("Datos sincronizados en vivo con Supabase", "success");
+        }
+    } catch (e) {
+        console.error("Error en sincronización:", e);
+        if (badge) {
+            badge.innerHTML = '🔴 Error de sync';
+            badge.style.color = '#EF4444';
+        }
+    } finally {
+        isSyncing = false;
+    }
+}
+
 function switchTab(tabName) {
     if (tabName === "tableros" || tabName === "indicadores") {
         tabName = "tablero-ejecutivo";
@@ -296,13 +328,16 @@ function switchTab(tabName) {
     if (tabName === "propuestas") renderProposalsTab();
     if (tabName === "planes") renderActionPlansTab();
     if (tabName === "tablero-ejecutivo") loadExecutiveDashboard();
+
+    // Trigger silent sync when switching tabs
+    syncDataWithServer(true);
 }
 
 // ============================================================
 // DATA LOADING
 // ============================================================
 
-async function loadAllData() {
+async function loadAllData(silent = false) {
     try {
         const [resF, resP, resPA, resR] = await Promise.all([
             fetch("/findings"),
@@ -318,7 +353,12 @@ async function loadAllData() {
 
         populateFilterDropdowns();
         populateExecutiveFilterDropdowns();
-        renderAuditTrackTable(currentFindings);
+
+        const activeDrawerOpen = el("findingDrawer") && el("findingDrawer").classList.contains("open");
+
+        if (!activeDrawerOpen) {
+            renderAuditTrackTable(currentFindings);
+        }
         renderProposalsTab();
         renderActionPlansTab();
         updateSidebarMetrics();
@@ -2942,5 +2982,17 @@ function applyRolePermissions() {
 document.addEventListener("DOMContentLoaded", () => {
     switchTab("hallazgos");
     initUserSession();
-    loadAllData();
+    syncDataWithServer(true);
+
+    // Auto-synchronize with Supabase every 10 seconds when tab is active
+    setInterval(() => {
+        if (document.visibilityState === "visible") {
+            syncDataWithServer(true);
+        }
+    }, 10000);
+
+    // Auto-synchronize whenever user returns to or focuses the window/tab
+    window.addEventListener("focus", () => {
+        syncDataWithServer(true);
+    });
 });

@@ -100,6 +100,11 @@
                     </div>
                     <span class="topnav-widget-label"><strong id="sidebarPct">0%</strong> implementación</span>
                 </div>
+                <div class="topnav-widget-divider"></div>
+                <div class="topnav-widget-item" style="display:flex; align-items:center; gap:6px;">
+                    <span id="syncStatusBadge" style="font-size:11px; color:#10B981; font-weight:500;" title="Sincronización en vivo con Supabase">🟢 Sincronizado</span>
+                    <button type="button" class="btn btn-outlined" onclick="syncDataWithServer(false)" style="padding:2px 6px; font-size:11px;" title="Forzar sincronización instantánea con Supabase">🔄</button>
+                </div>
             </div>
         </nav>
 
