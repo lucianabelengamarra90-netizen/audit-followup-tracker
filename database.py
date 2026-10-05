@@ -1707,18 +1707,20 @@ def get_executive_kpis(filters=None):
 
         # Chart 1: Comparación por Área (Alto, Medio, Bajo y Vencidos)
         cursor.execute(f"""
-            SELECT COALESCE(NULLIF(f.responsible_area, ''), NULLIF(p.responsible_area, ''), 'Sin área') as area_name,
-                   COUNT(DISTINCT CASE WHEN LOWER(f.severity) IN ('alto', 'alta', 'high', 'crítico', 'critico') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as high_risk_cnt,
-                   COUNT(DISTINCT CASE WHEN LOWER(f.severity) IN ('medio', 'media', 'medium') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as medium_risk_cnt,
-                   COUNT(DISTINCT CASE WHEN LOWER(f.severity) IN ('bajo', 'baja', 'low') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as low_risk_cnt,
-                   COUNT(DISTINCT CASE WHEN pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ? AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'en suspensión', 'en suspension', 'stand-by') THEN pa.id END) as overdue_cnt
-            FROM reports r
-            JOIN findings f ON f.report_id = r.id
-            LEFT JOIN proposals p ON p.finding_id = f.id
-            LEFT JOIN action_plans pa ON pa.proposal_id = p.id
-            {where_str}
-            GROUP BY area_name
-            HAVING high_risk_cnt > 0 OR medium_risk_cnt > 0 OR low_risk_cnt > 0 OR overdue_cnt > 0
+            SELECT * FROM (
+                SELECT COALESCE(NULLIF(f.responsible_area, ''), NULLIF(p.responsible_area, ''), 'Sin área') as area_name,
+                       COUNT(DISTINCT CASE WHEN LOWER(f.severity) IN ('alto', 'alta', 'high', 'crítico', 'critico') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as high_risk_cnt,
+                       COUNT(DISTINCT CASE WHEN LOWER(f.severity) IN ('medio', 'media', 'medium') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as medium_risk_cnt,
+                       COUNT(DISTINCT CASE WHEN LOWER(f.severity) IN ('bajo', 'baja', 'low') AND LOWER(f.status) NOT IN ('finalizado', 'completado', 'cerrado') THEN f.id END) as low_risk_cnt,
+                       COUNT(DISTINCT CASE WHEN pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ? AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'en suspensión', 'en suspension', 'stand-by') THEN pa.id END) as overdue_cnt
+                FROM reports r
+                JOIN findings f ON f.report_id = r.id
+                LEFT JOIN proposals p ON p.finding_id = f.id
+                LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+                {where_str}
+                GROUP BY COALESCE(NULLIF(f.responsible_area, ''), NULLIF(p.responsible_area, ''), 'Sin área')
+            ) area_subquery
+            WHERE high_risk_cnt > 0 OR medium_risk_cnt > 0 OR low_risk_cnt > 0 OR overdue_cnt > 0
             ORDER BY overdue_cnt DESC, high_risk_cnt DESC
         """, [today_str] + params)
         area_rows = cursor.fetchall()
