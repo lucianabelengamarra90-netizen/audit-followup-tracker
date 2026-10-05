@@ -127,6 +127,10 @@ def get_db():
     if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")):
         if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
+        if "sslmode=" not in db_url and "supabase" in db_url.lower():
+            sep = "&" if "?" in db_url else "?"
+            db_url = f"{db_url}{sep}sslmode=require"
+
         try:
             import psycopg2
             conn = psycopg2.connect(db_url)
