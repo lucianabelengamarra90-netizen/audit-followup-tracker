@@ -132,8 +132,8 @@ def health():
     return jsonify({
         "status": "ok" if db_status == "connected" else "degraded",
         "app": "AuditTrack Relacional",
-        "version": "v1.4.3",
-        "base_tag": "v1.0.0-base-2026-10-02",
+        "version": "v1.5.1",
+        "base_tag": "v1.5.1-baseline-aprobada",
         "db_engine": db_engine,
         "db_status": db_status,
         "counts": row_counts,
