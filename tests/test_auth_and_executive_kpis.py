@@ -76,7 +76,7 @@ class AuthAndExecutiveKPITests(unittest.TestCase):
                 del os.environ["DATABASE_URL"]
             with self.assertRaises(RuntimeError) as ctx:
                 database.get_db()
-            self.assertIn("DATABASE_URL is not set", str(ctx.exception))
+            self.assertIn("DATABASE_URL", str(ctx.exception))
         finally:
             if original_env is not None:
                 os.environ["STRICT_POSTGRES"] = original_env

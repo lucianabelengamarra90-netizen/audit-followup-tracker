@@ -122,7 +122,16 @@ def get_db():
     else:
         strict_pg = is_render
 
-    db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+    db_url = (
+        os.environ.get("DATABASE_URL") or 
+        os.environ.get("SUPABASE_DB_URL") or 
+        os.environ.get("SUPABASE_URL") or 
+        os.environ.get("POSTGRES_URL") or 
+        os.environ.get("POSTGRESQL_URL") or
+        os.environ.get("RENDER_POSTGRES_URL")
+    )
+    if db_url:
+        db_url = db_url.strip()
     
     if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres://")):
         if db_url.startswith("postgres://"):
@@ -141,7 +150,7 @@ def get_db():
             print(f"[WARN] Failed connecting to PostgreSQL ({exc}), falling back to local SQLite.")
 
     if strict_pg:
-        raise RuntimeError("PRODUCTION DB ERROR: DATABASE_URL is not set in production environment (Render). PostgreSQL connection is mandatory.")
+        raise RuntimeError("PRODUCTION DB ERROR: No PostgreSQL connection variable (DATABASE_URL, SUPABASE_DB_URL, SUPABASE_URL, POSTGRES_URL) found in Render environment variables. PostgreSQL connection is mandatory.")
 
     db_dir = os.path.dirname(os.path.abspath(DB_PATH))
     if db_dir and not os.path.exists(db_dir):
