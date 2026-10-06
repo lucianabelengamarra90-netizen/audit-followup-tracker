@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, jsonify, send_file
 import os
 import re
-from datetime import datetime
+from datetime import datetime, date
 from io import BytesIO
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -215,7 +215,16 @@ def upload_report():
     file.save(saved_path)
 
     try:
-        parsed_data = parse_audit_report(saved_path, safe_filename)
+        if ext in ("xlsx", "xls", "xlsm", "csv"):
+            try:
+                parsed_data = parse_excel_file_data(saved_path, safe_filename)
+                if not parsed_data.get("findings"):
+                    parsed_data = parse_audit_report(saved_path, safe_filename)
+            except Exception:
+                parsed_data = parse_audit_report(saved_path, safe_filename)
+        else:
+            parsed_data = parse_audit_report(saved_path, safe_filename)
+
         report_info = parsed_data.get("report", {})
         findings_hierarchy = parsed_data.get("findings", [])
 
@@ -844,6 +853,168 @@ def parse_excel_pct(val):
         return 0
 
 
+def parse_excel_file_data(file_path, filename):
+    wb = load_workbook(filename=file_path, data_only=True)
+    ws1 = wb["Hallazgos y Propuestas"] if "Hallazgos y Propuestas" in wb.sheetnames else wb.active
+    ws3 = wb["Planes de Acción"] if "Planes de Acción" in wb.sheetnames else None
+
+    rows1 = list(ws1.iter_rows(values_only=True))
+    if len(rows1) < 2:
+        return {"report": {}, "findings": []}
+
+    col_map = map_excel_columns(rows1[0])
+    report_title = f"Importación Excel - {os.path.splitext(filename)[0]}"
+
+    findings_map = {}
+    findings_order = []
+
+    def get_val(row_tuple, col_idx, default=""):
+        if col_idx < len(row_tuple) and row_tuple[col_idx] is not None:
+            v = row_tuple[col_idx]
+            if isinstance(v, (datetime, date)):
+                return v.strftime("%Y-%m-%d")
+            return str(v).strip()
+        return default
+
+    for idx, row in enumerate(rows1[1:], start=1):
+        if not row or not any(row):
+            continue
+
+        area = get_val(row, col_map["area"])
+        h_code = get_val(row, col_map["h_code"])
+        situation = get_val(row, col_map["situation"])
+        p_code = get_val(row, col_map["p_code"])
+        prop_text = get_val(row, col_map["prop_text"])
+        risk = get_val(row, col_map["risk"], "Medio")
+        owner = get_val(row, col_map["owner"])
+        target_date = get_val(row, col_map["target_date"])
+        status = get_val(row, col_map["status"], "En proceso")
+        pct_raw = row[col_map["pct"]] if col_map["pct"] < len(row) else 0
+        pct = parse_excel_pct(pct_raw)
+        actions = get_val(row, col_map["actions"])
+        obs = get_val(row, col_map["obs"])
+
+        if not h_code and not situation and not prop_text:
+            continue
+
+        if not h_code:
+            h_code = f"H-IMP-{idx:03d}"
+        if not p_code:
+            p_code = f"PM-IMP-{idx:03d}"
+
+        clean_status = "En proceso"
+        if "suspensión" in status.lower() or "suspension" in status.lower():
+            clean_status = "En suspensión"
+        elif any(w in status.lower() for w in ["finalizado", "finalizada", "completada", "completado", "cerrado"]):
+            clean_status = "Finalizado"
+
+        clean_risk = "Medio"
+        if "alto" in risk.lower():
+            clean_risk = "Alto"
+        elif "bajo" in risk.lower():
+            clean_risk = "Bajo"
+
+        if h_code not in findings_map:
+            findings_map[h_code] = {
+                "code": h_code,
+                "title": situation[:100] if situation else f"Hallazgo {h_code}",
+                "situation": situation or "Sin detalle",
+                "risk": clean_risk,
+                "severity": clean_risk,
+                "responsible_area": area or "Operaciones",
+                "action_owner": owner or "Auditoría",
+                "status": clean_status,
+                "observations": obs,
+                "proposals": []
+            }
+            findings_order.append(h_code)
+
+        finding_item = findings_map[h_code]
+        existing_prop = next((p for p in finding_item["proposals"] if p["code"] == p_code), None)
+        if not existing_prop:
+            prop_item = {
+                "code": p_code,
+                "title": prop_text[:100] if prop_text else f"Propuesta {p_code}",
+                "proposal_text": prop_text or "Sin detalle de propuesta",
+                "severity": clean_risk,
+                "responsible_area": area or "Operaciones",
+                "action_owner": owner or "Auditoría",
+                "target_date": target_date,
+                "status": clean_status,
+                "action_plans": []
+            }
+            finding_item["proposals"].append(prop_item)
+            existing_prop = prop_item
+
+        if not ws3 and (actions or pct > 0):
+            pa_code = f"PA-IMP-{idx:03d}"
+            existing_prop["action_plans"].append({
+                "code": pa_code,
+                "title": actions or prop_text[:100] or "Plan de Acción",
+                "action_text": actions or prop_text or "Plan de Acción",
+                "action_owner": owner or "Auditoría",
+                "target_date": target_date,
+                "status": clean_status,
+                "progress_pct": pct,
+                "notes": obs
+            })
+
+    findings_list = [findings_map[h] for h in findings_order]
+    report_dict = {
+        "title": report_title,
+        "process": "Importación Excel",
+        "area": findings_list[0]["responsible_area"] if findings_list else "Operaciones",
+        "period": "2026",
+        "auditor": "Auditoría Interna",
+        "summary": f"Importación relacional desde planilla Excel ({len(findings_list)} hallazgos)."
+    }
+    return {"report": report_dict, "findings": findings_list}
+
+
+def map_excel_columns(header_row):
+    col_map = {
+        "area": 0, "h_code": 1, "situation": 2, "p_code": 3,
+        "prop_text": 4, "risk": 5, "owner": 6, "target_date": 7,
+        "status": 8, "pct": 9, "actions": 10, "obs": 11
+    }
+    if not header_row:
+        return col_map
+
+    for idx, cell in enumerate(header_row):
+        if cell is None:
+            continue
+        h_str = str(cell).strip().lower()
+        if not h_str:
+            continue
+
+        if any(k in h_str for k in ["observaciones", "comentarios", "notas"]):
+            col_map["obs"] = idx
+        elif any(k in h_str for k in ["id hallazgo", "cod hallazgo", "código hallazgo", "codigo hallazgo"]):
+            col_map["h_code"] = idx
+        elif any(k in h_str for k in ["id propuesta", "cod propuesta", "código propuesta", "codigo propuesta"]):
+            col_map["p_code"] = idx
+        elif any(k in h_str for k in ["área", "area", "proceso", "sector", "gerencia"]):
+            col_map["area"] = idx
+        elif any(k in h_str for k in ["hallazgo", "situación", "situacion", "desviación", "desviacion"]):
+            col_map["situation"] = idx
+        elif any(k in h_str for k in ["propuesta", "recomendación", "recomendacion", "medida"]):
+            col_map["prop_text"] = idx
+        elif any(k in h_str for k in ["riesgo", "severidad", "criticidad"]):
+            col_map["risk"] = idx
+        elif any(k in h_str for k in ["responsable", "propietario", "lider", "líder", "owner"]):
+            col_map["owner"] = idx
+        elif any(k in h_str for k in ["fecha", "compromiso", "vencimiento", "plazo"]):
+            col_map["target_date"] = idx
+        elif any(k in h_str for k in ["estado", "estatus", "status"]):
+            col_map["status"] = idx
+        elif any(k in h_str for k in ["avance", "progreso", "%"]):
+            col_map["pct"] = idx
+        elif any(k in h_str for k in ["acciones", "accion", "acción", "plan"]):
+            col_map["actions"] = idx
+
+    return col_map
+
+
 @app.route("/import-excel", methods=["POST"])
 @require_auth
 @require_role(ROLE_EDITOR, ROLE_VALIDATOR)
@@ -852,8 +1023,9 @@ def import_excel():
         return jsonify({"error": "No se envió ningún archivo"}), 400
 
     file = request.files["file"]
-    if not file or not file.filename.lower().endswith(".xlsx"):
-        return jsonify({"error": "Formato inválido. Debe ser un archivo Excel (.xlsx)"}), 400
+    ext = file.filename.rsplit(".", 1)[1].lower() if "." in file.filename else ""
+    if not file or ext not in ("xlsx", "xls", "xlsm", "csv"):
+        return jsonify({"error": "Formato inválido. Debe ser un archivo Excel (.xlsx, .xls, .xlsm) o CSV (.csv)"}), 400
 
     try:
         content_bytes = file.read()
@@ -866,28 +1038,39 @@ def import_excel():
         if len(rows1) < 2:
             return jsonify({"error": "El archivo Excel está vacío o no contiene filas de datos"}), 400
 
+        col_map = map_excel_columns(rows1[0])
+
         report_filename = file.filename
         report_title = f"Importación Excel - {os.path.splitext(report_filename)[0]}"
 
         findings_map = {}
         findings_order = []
 
+        def get_cell_val(row_tuple, col_idx, default=""):
+            if col_idx < len(row_tuple) and row_tuple[col_idx] is not None:
+                val = row_tuple[col_idx]
+                if isinstance(val, (datetime, date)):
+                    return val.strftime("%Y-%m-%d")
+                return str(val).strip()
+            return default
+
         for idx, row in enumerate(rows1[1:], start=1):
             if not row or not any(row):
                 continue
 
-            area = str(row[0] or "").strip()
-            h_code = str(row[1] or "").strip()
-            situation = str(row[2] or "").strip()
-            p_code = str(row[3] or "").strip()
-            prop_text = str(row[4] or "").strip()
-            risk = str(row[5] or "Medio").strip()
-            owner = str(row[6] or "").strip()
-            target_date = str(row[7] or "").strip()
-            status = str(row[8] or "En proceso").strip()
-            pct = parse_excel_pct(row[9] if len(row) > 9 else 0)
-            actions = str(row[10] or "").strip() if len(row) > 10 else ""
-            obs = str(row[11] or "").strip() if len(row) > 11 else ""
+            area = get_cell_val(row, col_map["area"])
+            h_code = get_cell_val(row, col_map["h_code"])
+            situation = get_cell_val(row, col_map["situation"])
+            p_code = get_cell_val(row, col_map["p_code"])
+            prop_text = get_cell_val(row, col_map["prop_text"])
+            risk = get_cell_val(row, col_map["risk"], "Medio")
+            owner = get_cell_val(row, col_map["owner"])
+            target_date = get_cell_val(row, col_map["target_date"])
+            status = get_cell_val(row, col_map["status"], "En proceso")
+            pct_raw = row[col_map["pct"]] if col_map["pct"] < len(row) else 0
+            pct = parse_excel_pct(pct_raw)
+            actions = get_cell_val(row, col_map["actions"])
+            obs = get_cell_val(row, col_map["obs"])
 
             if not h_code and not situation and not prop_text:
                 continue

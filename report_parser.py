@@ -7,6 +7,7 @@ import uuid
 import hashlib
 import zipfile
 import xml.etree.ElementTree as ET
+from datetime import datetime, date
 from typing import Optional, List
 
 from openpyxl import load_workbook
@@ -74,6 +75,8 @@ def normalize_text(value):
 def clean_text(value):
     if value is None:
         return ""
+    if isinstance(value, (datetime, date)):
+        return value.strftime("%Y-%m-%d")
 
     return re.sub(
         r"\s+",
