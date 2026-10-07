@@ -586,6 +586,11 @@ def import_report_structure(report_data, findings, source_filename="", mode="aut
         for f in findings:
             _import_finding(ctx, f, report_id, area, target_findings)
 
+        if ctx.conflicts:
+            conn.rollback()
+            conflict_msg = "No se completó la importación debido a incompatibilidades de relaciones:\n" + "\n".join(ctx.conflicts)
+            raise ValueError(conflict_msg)
+
         counts = ctx.counts
         any_change = any(counts[k]["created"] or counts[k]["updated"] for k in counts)
         status = "created" if mode == "new" else ("updated" if any_change else "unchanged")

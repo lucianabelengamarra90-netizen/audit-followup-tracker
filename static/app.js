@@ -883,51 +883,44 @@ async function inlineUpdateOwner(el) {
 }
 
 async function inlineUpdateDate(el) {
-    const findingId = el.dataset.findingId;
     const proposalId = el.dataset.proposalId;
+    const planId = el.dataset.planId;
     const value = el.value;
 
-    const finding = currentFindings.find(f => f.id === findingId);
-    if (finding) {
-        finding.target_date = value;
-        if (finding.proposals) {
-            finding.proposals.forEach(p => {
-                if (!proposalId || p.id === proposalId) p.target_date = value;
-            });
-        }
-    }
+    if (!proposalId && !planId) return;
 
     if (proposalId) {
-        const prop = currentProposals.find(p => p.id === proposalId);
+        const prop = (currentProposals || []).find(p => p.id === proposalId);
         if (prop) prop.target_date = value;
+    }
+    if (planId) {
+        const plan = (currentActionPlans || []).find(pa => pa.id === planId);
+        if (plan) plan.target_date = value;
     }
 
     try {
-        let res1Ok = true;
-        let res2Ok = true;
-        if (findingId) {
-            const res1 = await fetch(`/findings/${findingId}/update`, {
+        let resp = null;
+        if (planId) {
+            resp = await fetch(`/action-plans/${planId}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ target_date: value })
             });
-            res1Ok = res1.ok;
-        }
-        if (proposalId) {
-            const res2 = await fetch(`/proposals/${proposalId}/update`, {
+        } else if (proposalId) {
+            resp = await fetch(`/proposals/${proposalId}/update`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ target_date: value })
             });
-            res2Ok = res2.ok;
         }
 
-        if (res1Ok && res2Ok) {
+        if (resp && resp.ok) {
             showToast("Fecha actualizada", "success");
+            await loadAllData();
         } else {
             showToast("Error al actualizar fecha en el servidor", "error");
+            await loadAllData();
         }
-        await loadAllData();
     } catch (e) {
         showToast("Error al actualizar fecha", "error");
         await loadAllData();

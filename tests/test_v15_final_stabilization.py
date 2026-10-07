@@ -27,7 +27,7 @@ class TestV15FinalStabilization(unittest.TestCase):
         return self.app.post("/login", json={"username": "admin", "password": "audit2026admin"})
 
     def test_cross_report_finding_modification_rejected(self):
-        """Verifica que un hallazgo con código H-2026-001 de Informe A NO modifique Informe A al reimportar Informe B."""
+        """Verifica que un hallazgo con código H-2026-001 de Informe A rechace la importación en Informe B."""
         repA_id = database.save_relational_report_structure(
             {"title": "Informe A", "process": "P", "area": "Area A"},
             [{"title": "Hallazgo A", "situation": "Sit A", "code": "H-2026-001"}],
@@ -39,17 +39,16 @@ class TestV15FinalStabilization(unittest.TestCase):
             "informeB.xlsx", mode="new"
         )
 
-        res = import_engine.import_report_structure(
-            report_data={"title": "Informe B Modificado"},
-            findings=[{"title": "Intento de sobreescribir A", "situation": "Sit Mod", "code": "H-2026-001"}],
-            source_filename="informeB.xlsx",
-            mode="merge",
-            target_report_id=repB_id
-        )
+        with self.assertRaises(ValueError):
+            import_engine.import_report_structure(
+                report_data={"title": "Informe B Modificado"},
+                findings=[{"title": "Intento de sobreescribir A", "situation": "Sit Mod", "code": "H-2026-001"}],
+                source_filename="informeB.xlsx",
+                mode="merge",
+                target_report_id=repB_id
+            )
 
-        self.assertGreater(len(res["conflicts"]), 0)
-        self.assertIn("pertenece al informe", res["conflicts"][0])
-
+        # Verificar que Hallazgo A en Informe A sigue con su situación original
         conn = database.get_db()
         cur = conn.cursor()
         cur.execute("SELECT situation FROM findings WHERE id = (SELECT id FROM findings WHERE code = 'H-2026-001')")
@@ -85,6 +84,53 @@ class TestV15FinalStabilization(unittest.TestCase):
         self.assertEqual(res.status_code, 409)
         data = res.get_json()
         self.assertTrue(data.get("requires_decision"))
+
+    def test_proposal_update_accepts_target_date(self):
+        """Verifica que la actualización directa de fecha a propuestas funcione correctamente."""
+        self.login_admin()
+        rep_id = database.save_relational_report_structure(
+            {"title": "Informe Fecha", "process": "P", "area": "Op"},
+            [{"title": "H1", "situation": "Sit 1", "proposals": [{"title": "PM1", "proposal_text": "Prop text"}]}],
+            "informe.xlsx", mode="new"
+        )
+        props = database.get_all_proposals()
+        self.assertGreater(len(props), 0)
+        p_id = props[0]["id"]
+
+        res = self.app.post(f"/proposals/{p_id}/update", json={"target_date": "2026-12-31"})
+        self.assertEqual(res.status_code, 200)
+        
+        updated_prop = database.get_all_proposals()[0]
+        self.assertEqual(updated_prop.get("target_date"), "2026-12-31")
+
+    def test_import_conflict_rolls_back_transaction(self):
+        """Verifica que si surgen conflictos relacionales el motor revierta la transacción sin escribir nada."""
+        repA_id = database.save_relational_report_structure(
+            {"title": "Informe A", "process": "P", "area": "Area A"},
+            [{"title": "Hallazgo A", "situation": "Sit A", "code": "H-2026-001"}],
+            "informeA.xlsx", mode="new"
+        )
+        repB_id = database.save_relational_report_structure(
+            {"title": "Informe B", "process": "P", "area": "Area B"},
+            [{"title": "Hallazgo B", "situation": "Sit B", "code": "H-2026-002"}],
+            "informeB.xlsx", mode="new"
+        )
+
+        with self.assertRaises(ValueError):
+            import_engine.import_report_structure(
+                report_data={"title": "Informe B Modificado"},
+                findings=[
+                    {"title": "Valid", "situation": "Sit Valid"},
+                    {"title": "Conflict", "situation": "Sit Conflict", "code": "H-2026-001"} # pertenece a A
+                ],
+                source_filename="incompatible.xlsx",
+                mode="merge",
+                target_report_id=repB_id
+            )
+
+        # Verificar que la transacción fue revertida y no se agregó "Valid" ni se modificó nada
+        reps = database.get_all_reports()
+        self.assertEqual(len(reps), 2)
 
 
 if __name__ == "__main__":

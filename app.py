@@ -239,6 +239,13 @@ def upload_report():
         warnings = parsed_data.get("warnings", [])
         errors = parsed_data.get("errors", [])
 
+        if errors:
+            return jsonify({
+                "error": "El archivo contiene errores de relación o estructura que impiden completar la importación.",
+                "errors": errors,
+                "warnings": warnings
+            }), 400
+
         mode = request.form.get("mode") or "auto"
         target_report_id = request.form.get("target_report_id")
         user = get_current_user()
