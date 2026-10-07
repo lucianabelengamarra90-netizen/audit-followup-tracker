@@ -1755,17 +1755,7 @@ function renderExecutiveAreaChart(areaData) {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: {
-                    position: "top",
-                    align: "end",
-                    labels: {
-                        boxWidth: 10,
-                        usePointStyle: true,
-                        pointStyle: "circle",
-                        font: { family: "Inter, sans-serif", size: 10, weight: "600" },
-                        color: "#475569"
-                    }
-                },
+                legend: { display: false },
                 tooltip: {
                     backgroundColor: "#0F172A",
                     titleFont: { family: "Inter, sans-serif", size: 12, weight: "700" },
