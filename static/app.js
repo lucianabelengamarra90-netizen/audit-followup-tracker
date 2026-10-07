@@ -137,7 +137,12 @@ function getRowEffectiveStatus(item, prop) {
         return "En suspensión";
     }
 
-    // 3, 4, 5. Si estado = En proceso (o similar) y hay fecha compromiso
+    // 3. Si estado = Pendiente de validación -> estado efectivo = Pendiente de validación
+    if (clean.includes("pendiente de validación") || clean.includes("pendiente de validacion") || clean === "pendiente validacion") {
+        return "Pendiente de validación";
+    }
+
+    // 4, 5. Si estado = En proceso y hay fecha compromiso
     const targetDateStr = (prop && prop.target_date) || (item && item.target_date) || "";
     if (targetDateStr && isDateOverdue(targetDateStr)) {
         return "Vencido";
@@ -402,6 +407,7 @@ async function loadAllData(silent = false) {
         }
     } catch (err) {
         console.error("Error cargando estructura relacional de AuditTrack:", err);
+        throw err;
     }
 }
 
@@ -1444,7 +1450,7 @@ async function loadExecutiveDashboard() {
         const res = await fetch(url);
         if (!res.ok) {
             showToast("Error cargando Tablero Ejecutivo", "error");
-            return;
+            throw new Error(`HTTP ${res.status} al cargar Tablero Ejecutivo`);
         }
         execData = await res.json();
 
@@ -1460,6 +1466,7 @@ async function loadExecutiveDashboard() {
     } catch (err) {
         console.error("Error cargando Tablero Ejecutivo:", err);
         showToast("Error de conexión al cargar Tablero Ejecutivo", "error");
+        throw err;
     }
 }
 
@@ -2871,6 +2878,7 @@ async function saveFindingFromDrawer() {
             showToast("Cambios guardados correctamente en AuditTrack.", "success");
             closeFindingDrawer();
             await loadAllData();
+            await loadExecutiveDashboard();
         } else {
             showToast("Error al guardar cambios del hallazgo.", "error");
         }

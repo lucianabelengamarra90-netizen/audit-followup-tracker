@@ -64,10 +64,12 @@ def add_no_cache_headers(response):
 
 import uuid
 
-ALLOWED_EXTENSIONS = {"xlsx", "csv", "docx", "doc", "pdf", "txt"}
+ALLOWED_EXTENSIONS = {"xlsx", "xls", "xlsm", "csv", "docx", "doc", "pdf", "txt"}
 MAX_SIZE_MAP = {
     "pdf": 50 * 1024 * 1024,
     "xlsx": 50 * 1024 * 1024,
+    "xls": 50 * 1024 * 1024,
+    "xlsm": 50 * 1024 * 1024,
     "docx": 25 * 1024 * 1024,
     "doc": 25 * 1024 * 1024,
     "csv": 20 * 1024 * 1024,
@@ -140,12 +142,13 @@ def health():
     except Exception as exc:
         db_status = f"error: {str(exc)}"
 
-    commit_hash = "fea13fa"
-    try:
-        import subprocess
-        commit_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("utf-8").strip()
-    except Exception:
-        pass
+    commit_hash = os.environ.get("RENDER_GIT_COMMIT", "").strip()[:7]
+    if not commit_hash:
+        try:
+            import subprocess
+            commit_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("utf-8").strip()
+        except Exception:
+            commit_hash = "unknown"
 
     if is_render and db_engine == "sqlite":
         warning_msg = "ENTORNO RENDER DETECTADO EN MODO SQLITE. Los datos no se sincronizarán entre distintas PCs a menos que configures DATABASE_URL en el panel de Render."

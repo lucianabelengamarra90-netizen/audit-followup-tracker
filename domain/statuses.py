@@ -48,9 +48,9 @@ def compute_effective_status(status_raw: Optional[str], target_date_str: Optiona
     REGLAS:
     1. Finalizado -> Finalizado
     2. En suspensión -> En suspensión
-    3. En proceso + fecha compromiso < hoy -> Vencido
-    4. En proceso + fecha compromiso >= hoy -> En proceso
-    5. Sin fecha compromiso -> En proceso (nunca se marca como Vencido)
+    3. Pendiente de validación -> Pendiente de validación
+    4. En proceso + fecha compromiso < hoy -> Vencido
+    5. En proceso + fecha compromiso >= hoy -> En proceso
     """
     norm = normalize_status(status_raw)
     
@@ -58,6 +58,8 @@ def compute_effective_status(status_raw: Optional[str], target_date_str: Optiona
         return "Finalizado"
     if norm == "En suspensión":
         return "En suspensión"
+    if norm == "Pendiente de validación":
+        return "Pendiente de validación"
         
     if target_date_str:
         try:

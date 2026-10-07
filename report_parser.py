@@ -2264,6 +2264,51 @@ def map_spreadsheet_columns(header_row):
     return col_map
 
 
+def map_action_plan_columns(header_row):
+    col_map = {
+        "pa_code": None, "action_text": None, "p_code": None, "h_code": None,
+        "owner": None, "target_date": None, "pct": None, "status": None, "obs": None
+    }
+    if not header_row:
+        return {
+            "pa_code": 0, "action_text": 1, "p_code": 2, "h_code": 3,
+            "owner": 5, "target_date": 6, "pct": 7, "status": 8, "obs": 9
+        }
+
+    matched_count = 0
+    for idx, cell in enumerate(header_row):
+        if cell is None: continue
+        h_str = str(cell).strip().lower()
+        if not h_str: continue
+
+        if any(k in h_str for k in ["id plan", "cod plan", "código plan", "codigo plan"]):
+            if col_map["pa_code"] is None: col_map["pa_code"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["acción compromiso", "accion compromiso", "acción", "accion", "detalle"]):
+            if col_map["action_text"] is None: col_map["action_text"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["propuesta vinculada", "id propuesta", "cod propuesta", "código propuesta"]):
+            if col_map["p_code"] is None: col_map["p_code"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["id hallazgo", "cod hallazgo", "código hallazgo", "codigo hallazgo"]):
+            if col_map["h_code"] is None: col_map["h_code"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["responsable", "owner", "lider"]):
+            if col_map["owner"] is None: col_map["owner"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["fecha", "compromiso", "vencimiento"]):
+            if col_map["target_date"] is None: col_map["target_date"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["avance", "progreso", "%"]):
+            if col_map["pct"] is None: col_map["pct"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["estado", "status", "estatus"]):
+            if col_map["status"] is None: col_map["status"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["evidencia", "observaciones", "notas", "comentarios"]):
+            if col_map["obs"] is None: col_map["obs"] = idx; matched_count += 1
+
+    if matched_count == 0:
+        return {
+            "pa_code": 0, "action_text": 1, "p_code": 2, "h_code": 3,
+            "owner": 5, "target_date": 6, "pct": 7, "status": 8, "obs": 9
+        }
+
+    return col_map
+
+
 def read_spreadsheet_sheets(file_path, ext):
     sheets_dict = {}
 
@@ -2395,10 +2440,12 @@ def parse_spreadsheet_data(file_path, filename):
         if not h_code and not situation and not prop_text and not actions:
             continue
 
-        if not h_code and last_seen_h_code and (prop_text or actions or p_code):
+        # Inherit ONLY if h_code AND situation AND area are all empty (explicit row continuation)
+        is_explicit_continuation = (not h_code and not situation and not area and (prop_text or actions or p_code))
+        if is_explicit_continuation and last_seen_h_code:
             h_code = last_seen_h_code
-            if not area: area = last_seen_area
-            if not situation: situation = last_seen_situation
+            area = last_seen_area
+            situation = last_seen_situation
 
         if not h_code:
             h_code = f"H-IMP-{idx:03d}"
@@ -2505,76 +2552,62 @@ def parse_spreadsheet_data(file_path, filename):
                 f_item["proposals"].append(p_item)
                 proposals_map[p_code_final] = (p_item, f_item)
 
-    # 3. PARSE SHEET 3 (Planes de Acción)
+    # 3. PARSE SHEET 3 (Planes de Acción con Mapeo Específico)
     if rows3:
-        col_map3 = map_spreadsheet_columns(rows3[0])
+        col_map3 = map_action_plan_columns(rows3[0])
         for idx, row in enumerate(rows3[1:], start=1):
             if not row or not any(row): continue
-            pa_code = get_cell_val(row, col_map3.get("actions"))
-            if not pa_code or pa_code.startswith("PA-") is False:
-                pa_code = get_cell_val(row, 0)
-            if not pa_code:
+            pa_code = get_cell_val(row, col_map3.get("pa_code"))
+            if not pa_code or not pa_code.startswith("PA-"):
                 pa_code = f"PA-IMP-{idx:03d}"
 
-            action_text = get_cell_val(row, col_map3.get("situation")) or get_cell_val(row, col_map3.get("prop_text")) or get_cell_val(row, 1)
-            p_code = get_cell_val(row, col_map3.get("p_code")) or get_cell_val(row, 2)
-            h_code = get_cell_val(row, col_map3.get("h_code")) or get_cell_val(row, 3)
-            owner = get_cell_val(row, col_map3.get("owner")) or get_cell_val(row, 5)
-            target_date = get_cell_val(row, col_map3.get("target_date")) or get_cell_val(row, 6)
-            pct_raw = row[col_map3["pct"]] if (col_map3.get("pct") is not None and col_map3["pct"] < len(row)) else (row[7] if len(row) > 7 else 0)
+            action_text = get_cell_val(row, col_map3.get("action_text"))
+            p_code = get_cell_val(row, col_map3.get("p_code"))
+            h_code = get_cell_val(row, col_map3.get("h_code"))
+            owner = get_cell_val(row, col_map3.get("owner"))
+            target_date = get_cell_val(row, col_map3.get("target_date"))
+            pct_raw = row[col_map3["pct"]] if (col_map3.get("pct") is not None and col_map3["pct"] < len(row)) else 0
             pct = parse_excel_pct_val(pct_raw)
-            status = get_cell_val(row, col_map3.get("status")) or (row[8] if len(row) > 8 else "En proceso")
-            obs = get_cell_val(row, col_map3.get("obs")) or (row[9] if len(row) > 9 else "")
+            status = get_cell_val(row, col_map3.get("status"))
+            obs = get_cell_val(row, col_map3.get("obs"))
 
-            if not action_text and not p_code: continue
+            if not action_text and not pa_code: continue
 
             target_prop = None
             if p_code and p_code in proposals_map:
                 target_prop, target_finding = proposals_map[p_code]
+                if h_code and target_finding["code"] != h_code:
+                    print(f"[Parser] Advertencia: Plan {pa_code} asignado a propuesta {p_code} del hallazgo {target_finding['code']}, diferente a {h_code}.")
             elif h_code and h_code in findings_map:
                 target_finding = findings_map[h_code]
                 if target_finding["proposals"]:
                     target_prop = target_finding["proposals"][0]
 
-            if not target_prop and findings_order:
-                target_finding = findings_map[findings_order[0]]
-                if not target_finding["proposals"]:
-                    p_item = {
-                        "code": p_code or "PM-IMP-001",
-                        "title": "Propuesta General",
-                        "proposal_text": "Propuesta de Mejora General",
-                        "severity": target_finding["severity"],
-                        "responsible_area": target_finding["responsible_area"],
-                        "action_owner": owner or target_finding["action_owner"],
-                        "target_date": target_date,
-                        "status": "En proceso",
-                        "action_plans": []
-                    }
-                    target_finding["proposals"].append(p_item)
-                    proposals_map[p_item["code"]] = (p_item, target_finding)
-                target_prop = target_finding["proposals"][0]
+            # Si no se encuentra vínculo exacto por propuesta/hallazgo, omitir asignación arbitraria
+            if not target_prop:
+                print(f"[Parser] Omisión de asignación arbitraria para Plan {pa_code} (Propuesta '{p_code}' / Hallazgo '{h_code}' no existe).")
+                continue
 
-            if target_prop:
-                clean_pa_status = "En proceso"
-                if pct == 100 or "pendiente" in str(status).lower():
-                    clean_pa_status = "Pendiente de validación"
-                elif "suspensión" in str(status).lower() or "suspension" in str(status).lower():
-                    clean_pa_status = "En suspensión"
-                elif any(w in str(status).lower() for w in ["finalizado", "completado", "cerrado"]):
-                    clean_pa_status = "Finalizado"
+            clean_pa_status = "En proceso"
+            if pct == 100 or "pendiente" in str(status).lower():
+                clean_pa_status = "Pendiente de validación"
+            elif "suspensión" in str(status).lower() or "suspension" in str(status).lower():
+                clean_pa_status = "En suspensión"
+            elif any(w in str(status).lower() for w in ["finalizado", "completado", "cerrado"]):
+                clean_pa_status = "Finalizado"
 
-                existing_pa = next((pa for pa in target_prop["action_plans"] if pa["code"] == pa_code), None)
-                if not existing_pa:
-                    target_prop["action_plans"].append({
-                        "code": pa_code,
-                        "title": action_text or f"Plan {pa_code}",
-                        "action_text": action_text or f"Plan {pa_code}",
-                        "action_owner": owner or target_prop.get("action_owner", "Auditoría"),
-                        "target_date": target_date,
-                        "status": clean_pa_status,
-                        "progress_pct": pct,
-                        "notes": obs
-                    })
+            existing_pa = next((pa for pa in target_prop["action_plans"] if pa["code"] == pa_code), None)
+            if not existing_pa:
+                target_prop["action_plans"].append({
+                    "code": pa_code,
+                    "title": action_text or f"Plan {pa_code}",
+                    "action_text": action_text or f"Plan {pa_code}",
+                    "action_owner": owner or target_prop.get("action_owner", "Auditoría"),
+                    "target_date": target_date,
+                    "status": clean_pa_status,
+                    "progress_pct": pct,
+                    "notes": obs
+                })
 
     findings_list = [findings_map[h] for h in findings_order]
     report_dict = {

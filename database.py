@@ -222,10 +222,14 @@ def generate_next_code(entity_type: str, year: int = None, cursor=None) -> str:
     finally:
         if close_cursor:
             cursor.connection.commit()
-            cursor.connection.close()
+_DB_INITIALIZED = False
 
 
-def init_db():
+def init_db(force=False):
+    global _DB_INITIALIZED
+    if _DB_INITIALIZED and not force:
+        return
+
     try:
         conn = get_db()
         cursor = conn.cursor()
@@ -427,6 +431,8 @@ def sync_code_sequences(cursor):
             elif max_val > seq_row[0]:
                 cursor.execute("UPDATE code_sequences SET last_value = ? WHERE entity_type = ? AND year = ?", (max_val, entity_type, yr))
 
+    _DB_INITIALIZED = True
+
 
 def add_history_log(entity_type, entity_id, user_name, description, cursor=None):
     close_at_end = False
@@ -474,30 +480,33 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
     cursor = conn.cursor()
 
     try:
-        report_id = str(uuid.uuid4())
-        rep_code = generate_next_code("report", cursor=cursor)
-
-        title = (report_data.get("title") or f"Informe de Auditoría {rep_code}").strip()
+        title = (report_data.get("title") or "Informe de Auditoría").strip()
         process = (report_data.get("process") or "Proceso General").strip()
         area = (report_data.get("area") or "Operaciones").strip()
         period = (report_data.get("period") or "2026").strip()
         auditor = (report_data.get("auditor") or "Auditoría Interna").strip()
         summary = (report_data.get("summary") or "").strip()
 
-        cursor.execute("""
-            INSERT INTO reports (id, code, title, process, area, period, auditor, summary, source_filename)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (report_id, rep_code, title, process, area, period, auditor, summary, source_filename))
-
-        add_history_log("report", report_id, auditor, f"Carga inicial de informe {title} ({source_filename})", cursor=cursor)
+        cursor.execute("SELECT id, code FROM reports WHERE title = ? OR (source_filename = ? AND source_filename != '')", (title, source_filename))
+        existing_rep = cursor.fetchone()
+        if existing_rep:
+            report_id = existing_rep[0]
+            rep_code = existing_rep[1]
+            cursor.execute("""
+                UPDATE reports SET process = ?, area = ?, period = ?, auditor = ?, summary = ? WHERE id = ?
+            """, (process, area, period, auditor, summary, report_id))
+            add_history_log("report", report_id, auditor, f"Actualización idempotente de informe {title} ({source_filename})", cursor=cursor)
+        else:
+            report_id = str(uuid.uuid4())
+            rep_code = generate_next_code("report", cursor=cursor)
+            cursor.execute("""
+                INSERT INTO reports (id, code, title, process, area, period, auditor, summary, source_filename)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (report_id, rep_code, title, process, area, period, auditor, summary, source_filename))
+            add_history_log("report", report_id, auditor, f"Carga inicial de informe {title} ({source_filename})", cursor=cursor)
 
         for f_item in findings_hierarchy:
-            finding_id = str(uuid.uuid4())
             f_code = f_item.get("code") or generate_next_code("finding", cursor=cursor)
-
-            cursor.execute("SELECT COUNT(*) FROM findings WHERE code = ?", (f_code,))
-            if cursor.fetchone()[0] > 0:
-                f_code = generate_next_code("finding", cursor=cursor)
 
             f_title = (f_item.get("title") or "Observación de Auditoría").strip()
             situation = (f_item.get("situation") or f_title).strip()
@@ -514,12 +523,24 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
             action_owner = (f_item.get("action_owner") or "Pendiente de definir").strip()
             status = normalize_status(f_item.get("status") or "En proceso")
 
-            cursor.execute("""
-                INSERT INTO findings (id, report_id, code, title, situation, risk, severity, responsible_area, action_owner, status, observations)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (finding_id, report_id, f_code, f_title, situation, risk, severity, responsible_area, action_owner, status, f_item.get("observations", "")))
+            cursor.execute("SELECT id FROM findings WHERE code = ? AND report_id = ?", (f_code, report_id))
+            existing_f = cursor.fetchone()
+            if existing_f:
+                finding_id = existing_f[0]
+                cursor.execute("""
+                    UPDATE findings SET title = ?, situation = ?, risk = ?, severity = ?, responsible_area = ?, action_owner = ?, status = ?, observations = ? WHERE id = ?
+                """, (f_title, situation, risk, severity, responsible_area, action_owner, status, f_item.get("observations", ""), finding_id))
+            else:
+                finding_id = str(uuid.uuid4())
+                cursor.execute("SELECT COUNT(*) FROM findings WHERE code = ?", (f_code,))
+                if cursor.fetchone()[0] > 0:
+                    f_code = generate_next_code("finding", cursor=cursor)
 
-            add_history_log("finding", finding_id, auditor, f"Creación de hallazgo {f_code}: {f_title}", cursor=cursor)
+                cursor.execute("""
+                    INSERT INTO findings (id, report_id, code, title, situation, risk, severity, responsible_area, action_owner, status, observations)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (finding_id, report_id, f_code, f_title, situation, risk, severity, responsible_area, action_owner, status, f_item.get("observations", "")))
+                add_history_log("finding", finding_id, auditor, f"Creación de hallazgo {f_code}: {f_title}", cursor=cursor)
 
             proposals_list = f_item.get("proposals") or []
             if not proposals_list and f_item.get("proposal"):
