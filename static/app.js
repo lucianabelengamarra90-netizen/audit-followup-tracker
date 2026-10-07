@@ -382,7 +382,7 @@ function switchTab(tabName) {
     });
 
     if (tabName === "informes") loadReports();
-    if (tabName === "hallazgos") renderAuditTrackTable(currentFindings);
+    if (tabName === "hallazgos") filterAndRenderAll();
     if (tabName === "propuestas") renderProposalsTab();
     if (tabName === "planes") renderActionPlansTab();
     if (tabName === "tablero-ejecutivo") loadExecutiveDashboard();
@@ -432,7 +432,7 @@ async function loadAllData(silent = false) {
         const activeDrawerOpen = el("findingDrawer") && el("findingDrawer").classList.contains("open");
 
         if (!activeDrawerOpen) {
-            renderAuditTrackTable(currentFindings);
+            filterAndRenderAll();
         }
         renderProposalsTab();
         renderActionPlansTab();
