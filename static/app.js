@@ -228,7 +228,7 @@ async function downloadExcelTemplate() {
     }
 }
 
-async function importExcelFile(file) {
+async function importExcelFile(file, selectedMode = null, targetReportId = null) {
     if (!file) return;
     const dropdown = el("excelMenuDropdown");
     if (dropdown) dropdown.style.display = "none";
@@ -237,6 +237,8 @@ async function importExcelFile(file) {
         showToast("Procesando e importando planilla...", "info");
         const formData = new FormData();
         formData.append("file", file);
+        if (selectedMode) formData.append("mode", selectedMode);
+        if (targetReportId) formData.append("target_report_id", targetReportId);
 
         const response = await fetch("/import-excel", {
             method: "POST",
@@ -245,6 +247,26 @@ async function importExcelFile(file) {
 
         const data = await response.json();
         const input = el("importExcelInput");
+
+        if (response.status === 409 && data.requires_decision) {
+            const cand = (data.analysis && data.analysis.candidates && data.analysis.candidates[0]) || {};
+            const title = cand.title || "Informe existente";
+            const code = cand.code || "";
+            const choice = prompt(
+                `El archivo contiene datos que ya existen en AuditTrack (${code} · ${title}).\n\n` +
+                `Escribí el número de la opción deseada:\n` +
+                `1. Actualizar conservando ediciones manuales (Recomendado)\n` +
+                `2. Sobrescribir todos los datos\n` +
+                `3. Crear un nuevo informe separado`,
+                "1"
+            );
+            if (input) input.value = "";
+            if (!choice) return;
+            const modeMap = { "1": "merge", "2": "overwrite", "3": "new" };
+            const mode = modeMap[choice.trim()] || "merge";
+            return importExcelFile(file, mode, cand.report_id);
+        }
+
         if (input) input.value = "";
 
         if (!response.ok || data.error) {
@@ -252,8 +274,14 @@ async function importExcelFile(file) {
             return;
         }
 
-        showToast(data.message || "Planilla importada exitosamente", "success");
+        if (data.errors && data.errors.length > 0) {
+            alert("Atención: Ocurrieron errores o incompatibilidades en filas de la planilla:\n\n" + data.errors.join("\n"));
+        }
+
+        const msg = data.message || "Planilla importada exitosamente";
+        showToast(msg, "success");
         await loadAllData();
+        await loadExecutiveDashboard();
     } catch (e) {
         console.error("Error al importar planilla:", e);
         showToast("Error de conexión al importar planilla", "error");
@@ -261,6 +289,7 @@ async function importExcelFile(file) {
         if (input) input.value = "";
     }
 }
+
 
 async function exportExcelReport() {
     try {
@@ -366,7 +395,11 @@ function switchTab(tabName) {
 // DATA LOADING
 // ============================================================
 
+let globalDataSeq = 0;
+let execDashboardSeq = 0;
+
 async function loadAllData(silent = false) {
+    const seq = ++globalDataSeq;
     try {
         const [resF, resP, resPA, resR] = await Promise.all([
             fetch("/findings"),
@@ -375,14 +408,23 @@ async function loadAllData(silent = false) {
             fetch("/reports")
         ]);
 
+        if (seq !== globalDataSeq) return;
+
         if (!resF.ok || !resP.ok || !resPA.ok || !resR.ok) {
             throw new Error(`Error al consultar servidor: F:${resF.status} P:${resP.status} PA:${resPA.status} R:${resR.status}`);
         }
 
-        currentFindings = (await resF.json()).findings || [];
-        currentProposals = (await resP.json()).proposals || [];
-        currentActionPlans = (await resPA.json()).action_plans || [];
-        currentReports = (await resR.json()).reports || [];
+        const dataF = await resF.json();
+        const dataP = await resP.json();
+        const dataPA = await resPA.json();
+        const dataR = await resR.json();
+
+        if (seq !== globalDataSeq) return;
+
+        currentFindings = dataF.findings || [];
+        currentProposals = dataP.proposals || [];
+        currentActionPlans = dataPA.action_plans || [];
+        currentReports = dataR.reports || [];
 
         populateFilterDropdowns();
         populateExecutiveFilterDropdowns();
@@ -738,11 +780,14 @@ async function inlineUpdateFindingRisk(el) {
         });
         if (resp.ok) {
             showToast(`Riesgo actualizado a "${value}"`, "success");
+            await loadAllData();
         } else {
             showToast("Error al actualizar riesgo", "error");
+            await loadAllData();
         }
     } catch (e) {
         showToast("Error de conexión", "error");
+        await loadAllData();
     }
 }
 
@@ -758,11 +803,14 @@ async function inlineUpdateFinding(el) {
         });
         if (resp.ok) {
             showToast("Registro actualizado", "success");
+            await loadAllData();
         } else {
             showToast("Error al actualizar", "error");
+            await loadAllData();
         }
     } catch (e) {
         showToast("Error de conexión", "error");
+        await loadAllData();
     }
 }
 
@@ -813,8 +861,10 @@ async function inlineUpdateOwner(el) {
             });
         }
         showToast("Responsable actualizado", "success");
+        await loadAllData();
     } catch (e) {
         showToast("Error al actualizar responsable", "error");
+        await loadAllData();
     }
 }
 
@@ -847,10 +897,10 @@ async function inlineUpdateDate(el) {
             });
         }
         showToast("Fecha actualizada", "success");
-        renderAuditTrackTable(currentFindings);
-        renderProposalsTab();
+        await loadAllData();
     } catch (e) {
         showToast("Error al actualizar fecha", "error");
+        await loadAllData();
     }
 }
 
@@ -1438,6 +1488,7 @@ let execFilters = {
 let execData = null;
 
 async function loadExecutiveDashboard() {
+    const seq = ++execDashboardSeq;
     try {
         populateExecutiveFilterDropdowns();
 
@@ -1448,11 +1499,14 @@ async function loadExecutiveDashboard() {
 
         const url = `/api/kpi-executive${params.toString() ? "?" + params.toString() : ""}`;
         const res = await fetch(url);
+        if (seq !== execDashboardSeq) return;
         if (!res.ok) {
             showToast("Error cargando Tablero Ejecutivo", "error");
             throw new Error(`HTTP ${res.status} al cargar Tablero Ejecutivo`);
         }
-        execData = await res.json();
+        const data = await res.json();
+        if (seq !== execDashboardSeq) return;
+        execData = data;
 
         // Set cut date in header
         if (el("execCutDateStr")) el("execCutDateStr").textContent = execData.cut_date || "--";

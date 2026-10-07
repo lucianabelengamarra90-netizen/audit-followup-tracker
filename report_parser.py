@@ -2231,23 +2231,23 @@ def map_spreadsheet_columns(header_row):
 
         if any(k in h_str for k in ["observaciones", "comentarios", "notas", "evidencia"]):
             if col_map["obs"] is None: col_map["obs"] = idx; matched_count += 1
-        elif any(k in h_str for k in ["id hallazgo", "cod hallazgo", "código hallazgo", "codigo hallazgo"]):
+        elif any(k in h_str for k in ["hallazgo origen", "id hallazgo", "cod hallazgo", "código hallazgo", "codigo hallazgo"]):
             if col_map["h_code"] is None: col_map["h_code"] = idx; matched_count += 1
-        elif any(k in h_str for k in ["id propuesta", "cod propuesta", "código propuesta", "codigo propuesta"]):
+        elif any(k in h_str for k in ["id propuesta", "cod propuesta", "código propuesta", "codigo propuesta", "propuesta vinculada"]):
             if col_map["p_code"] is None: col_map["p_code"] = idx; matched_count += 1
         elif any(k in h_str for k in ["área", "area", "proceso", "sector", "gerencia"]):
             if col_map["area"] is None: col_map["area"] = idx; matched_count += 1
         elif any(k in h_str for k in ["hallazgo", "situación", "situacion", "desviación", "desviacion"]):
             if col_map["situation"] is None: col_map["situation"] = idx; matched_count += 1
-        elif any(k in h_str for k in ["propuesta", "recomendación", "recomendacion", "medida"]):
+        elif any(k in h_str for k in ["propuesta de mejora", "propuesta", "recomendación", "recomendacion", "medida"]):
             if col_map["prop_text"] is None: col_map["prop_text"] = idx; matched_count += 1
         elif any(k in h_str for k in ["riesgo", "severidad", "criticidad"]):
             if col_map["risk"] is None: col_map["risk"] = idx; matched_count += 1
         elif any(k in h_str for k in ["responsable", "propietario", "lider", "líder", "owner"]):
             if col_map["owner"] is None: col_map["owner"] = idx; matched_count += 1
-        elif any(k in h_str for k in ["fecha", "compromiso", "vencimiento", "plazo"]):
+        elif any(k in h_str for k in ["fecha compromiso", "fecha", "compromiso", "vencimiento", "plazo"]):
             if col_map["target_date"] is None: col_map["target_date"] = idx; matched_count += 1
-        elif any(k in h_str for k in ["estado", "estatus", "status"]):
+        elif any(k in h_str for k in ["estado de implementación", "estado", "estatus", "status"]):
             if col_map["status"] is None: col_map["status"] = idx; matched_count += 1
         elif any(k in h_str for k in ["avance", "progreso", "%"]):
             if col_map["pct"] is None: col_map["pct"] = idx; matched_count += 1
@@ -2287,11 +2287,11 @@ def map_action_plan_columns(header_row):
             if col_map["action_text"] is None: col_map["action_text"] = idx; matched_count += 1
         elif any(k in h_str for k in ["propuesta vinculada", "id propuesta", "cod propuesta", "código propuesta"]):
             if col_map["p_code"] is None: col_map["p_code"] = idx; matched_count += 1
-        elif any(k in h_str for k in ["id hallazgo", "cod hallazgo", "código hallazgo", "codigo hallazgo"]):
+        elif any(k in h_str for k in ["hallazgo", "id hallazgo", "cod hallazgo", "código hallazgo", "codigo hallazgo"]):
             if col_map["h_code"] is None: col_map["h_code"] = idx; matched_count += 1
         elif any(k in h_str for k in ["responsable", "owner", "lider"]):
             if col_map["owner"] is None: col_map["owner"] = idx; matched_count += 1
-        elif any(k in h_str for k in ["fecha", "compromiso", "vencimiento"]):
+        elif any(k in h_str for k in ["fecha compromiso", "fecha", "compromiso", "vencimiento"]):
             if col_map["target_date"] is None: col_map["target_date"] = idx; matched_count += 1
         elif any(k in h_str for k in ["avance", "progreso", "%"]):
             if col_map["pct"] is None: col_map["pct"] = idx; matched_count += 1
@@ -2404,6 +2404,8 @@ def parse_spreadsheet_data(file_path, filename):
     findings_map = {}
     findings_order = []
     proposals_map = {}
+    warnings = []
+    errors = []
 
     def get_cell_val(row_tuple, col_idx, default=""):
         if col_idx is not None and col_idx < len(row_tuple) and row_tuple[col_idx] is not None:
@@ -2420,6 +2422,7 @@ def parse_spreadsheet_data(file_path, filename):
 
     # 1. PARSE SHEET 1 (Hallazgos y Propuestas)
     for idx, row in enumerate(rows1[1:], start=1):
+        row_num = idx + 1
         if not row or not any(row):
             continue
 
@@ -2447,10 +2450,15 @@ def parse_spreadsheet_data(file_path, filename):
             area = last_seen_area
             situation = last_seen_situation
 
+        h_code_generated = False
         if not h_code:
             h_code = f"H-IMP-{idx:03d}"
+            h_code_generated = True
+
+        p_code_generated = False
         if not p_code and prop_text:
             p_code = f"PM-IMP-{idx:03d}"
+            p_code_generated = True
 
         last_seen_h_code = h_code
         if area: last_seen_area = area
@@ -2469,6 +2477,7 @@ def parse_spreadsheet_data(file_path, filename):
         if h_code not in findings_map:
             findings_map[h_code] = {
                 "code": h_code,
+                "code_generated": h_code_generated,
                 "title": situation[:100] if situation else f"Hallazgo {h_code}",
                 "situation": situation or "Sin detalle",
                 "risk": clean_risk,
@@ -2489,6 +2498,7 @@ def parse_spreadsheet_data(file_path, filename):
             if not existing_prop:
                 prop_item = {
                     "code": p_code_final,
+                    "code_generated": p_code_generated,
                     "title": prop_text[:100] if prop_text else f"Propuesta {p_code_final}",
                     "proposal_text": prop_text or "Sin detalle de propuesta",
                     "severity": clean_risk,
@@ -2506,6 +2516,7 @@ def parse_spreadsheet_data(file_path, filename):
                 pa_code = f"PA-IMP-{idx:03d}"
                 existing_prop["action_plans"].append({
                     "code": pa_code,
+                    "code_generated": True,
                     "title": actions or prop_text[:100] or "Plan de Acción",
                     "action_text": actions or prop_text or "Plan de Acción",
                     "action_owner": owner or "Auditoría",
@@ -2519,6 +2530,7 @@ def parse_spreadsheet_data(file_path, filename):
     if rows2:
         col_map2 = map_spreadsheet_columns(rows2[0])
         for idx, row in enumerate(rows2[1:], start=1):
+            row_num = idx + 1
             if not row or not any(row): continue
             p_code = get_cell_val(row, col_map2.get("p_code"))
             prop_text = get_cell_val(row, col_map2.get("prop_text"))
@@ -2540,6 +2552,7 @@ def parse_spreadsheet_data(file_path, filename):
                 p_code_final = p_code or f"PM-IMP-S2-{idx:03d}"
                 p_item = {
                     "code": p_code_final,
+                    "code_generated": not bool(p_code),
                     "title": prop_text[:100] if prop_text else f"Propuesta {p_code_final}",
                     "proposal_text": prop_text or "Sin detalle",
                     "severity": f_item["severity"],
@@ -2551,15 +2564,27 @@ def parse_spreadsheet_data(file_path, filename):
                 }
                 f_item["proposals"].append(p_item)
                 proposals_map[p_code_final] = (p_item, f_item)
+            else:
+                err_msg = f"Hoja '{ws2_name}', Fila {row_num}: La Propuesta '{p_code or prop_text[:30]}' "
+                if h_code:
+                    err_msg += f"especifica el Hallazgo '{h_code}', que no existe en la planilla. Relación rechazada."
+                else:
+                    err_msg += "no especifica un Hallazgo de Origen válido ('h_code'). Relación rechazada."
+                errors.append(err_msg)
 
-    # 3. PARSE SHEET 3 (Planes de Acción con Mapeo Específico)
+    # 3. PARSE SHEET 3 (Planes de Acción con Mapeo Específico y Validación de Relaciones)
     if rows3:
         col_map3 = map_action_plan_columns(rows3[0])
         for idx, row in enumerate(rows3[1:], start=1):
+            row_num = idx + 1
             if not row or not any(row): continue
-            pa_code = get_cell_val(row, col_map3.get("pa_code"))
-            if not pa_code or not pa_code.startswith("PA-"):
+            pa_code_raw = get_cell_val(row, col_map3.get("pa_code"))
+            pa_code_generated = False
+            if pa_code_raw and pa_code_raw.startswith("PA-"):
+                pa_code = pa_code_raw
+            else:
                 pa_code = f"PA-IMP-{idx:03d}"
+                pa_code_generated = True
 
             action_text = get_cell_val(row, col_map3.get("action_text"))
             p_code = get_cell_val(row, col_map3.get("p_code"))
@@ -2571,21 +2596,55 @@ def parse_spreadsheet_data(file_path, filename):
             status = get_cell_val(row, col_map3.get("status"))
             obs = get_cell_val(row, col_map3.get("obs"))
 
-            if not action_text and not pa_code: continue
+            if not action_text and not pa_code_raw: continue
 
             target_prop = None
-            if p_code and p_code in proposals_map:
-                target_prop, target_finding = proposals_map[p_code]
-                if h_code and target_finding["code"] != h_code:
-                    print(f"[Parser] Advertencia: Plan {pa_code} asignado a propuesta {p_code} del hallazgo {target_finding['code']}, diferente a {h_code}.")
-            elif h_code and h_code in findings_map:
-                target_finding = findings_map[h_code]
-                if target_finding["proposals"]:
-                    target_prop = target_finding["proposals"][0]
 
-            # Si no se encuentra vínculo exacto por propuesta/hallazgo, omitir asignación arbitraria
-            if not target_prop:
-                print(f"[Parser] Omisión de asignación arbitraria para Plan {pa_code} (Propuesta '{p_code}' / Hallazgo '{h_code}' no existe).")
+            # Caso 1: Código de propuesta explícito ingresado
+            if p_code:
+                if p_code in proposals_map:
+                    cand_prop, cand_finding = proposals_map[p_code]
+                    if h_code and cand_finding["code"] != h_code:
+                        errors.append(
+                            f"Hoja '{ws3_name}', Fila {row_num}: Incompatibilidad. El Plan '{pa_code}' indica Hallazgo '{h_code}', "
+                            f"pero la Propuesta '{p_code}' pertenece al Hallazgo '{cand_finding['code']}'. Relación rechazada."
+                        )
+                        continue
+                    target_prop = cand_prop
+                else:
+                    errors.append(
+                        f"Hoja '{ws3_name}', Fila {row_num}: La Propuesta '{p_code}' indicada para el Plan '{pa_code}' no existe en la planilla. Relación rechazada."
+                    )
+                    continue
+
+            # Caso 2: Sin código de propuesta, pero con código de hallazgo explícito
+            elif h_code:
+                if h_code in findings_map:
+                    cand_finding = findings_map[h_code]
+                    if len(cand_finding["proposals"]) == 1:
+                        target_prop = cand_finding["proposals"][0]
+                    elif len(cand_finding["proposals"]) > 1:
+                        errors.append(
+                            f"Hoja '{ws3_name}', Fila {row_num}: El Hallazgo '{h_code}' tiene {len(cand_finding['proposals'])} propuestas. "
+                            f"Debe indicar el código de propuesta ('p_code') para vincular el Plan '{pa_code}'. Relación rechazada."
+                        )
+                        continue
+                    else:
+                        errors.append(
+                            f"Hoja '{ws3_name}', Fila {row_num}: El Hallazgo '{h_code}' no posee propuestas para vincular el Plan '{pa_code}'. Relación rechazada."
+                        )
+                        continue
+                else:
+                    errors.append(
+                        f"Hoja '{ws3_name}', Fila {row_num}: El Hallazgo '{h_code}' indicado para el Plan '{pa_code}' no existe en la planilla. Relación rechazada."
+                    )
+                    continue
+
+            # Caso 3: Sin propuesta ni hallazgo especificado
+            else:
+                errors.append(
+                    f"Hoja '{ws3_name}', Fila {row_num}: El Plan '{pa_code}' no especifica Propuesta ('p_code') ni Hallazgo ('h_code'). Relación rechazada."
+                )
                 continue
 
             clean_pa_status = "En proceso"
@@ -2600,6 +2659,7 @@ def parse_spreadsheet_data(file_path, filename):
             if not existing_pa:
                 target_prop["action_plans"].append({
                     "code": pa_code,
+                    "code_generated": pa_code_generated,
                     "title": action_text or f"Plan {pa_code}",
                     "action_text": action_text or f"Plan {pa_code}",
                     "action_owner": owner or target_prop.get("action_owner", "Auditoría"),
@@ -2619,5 +2679,11 @@ def parse_spreadsheet_data(file_path, filename):
         "summary": f"Importación relacional desde planilla ({len(findings_list)} hallazgos).",
         "source_filename": filename
     }
-    return {"report": report_dict, "findings": findings_list}
+    return {
+        "report": report_dict,
+        "findings": findings_list,
+        "warnings": warnings,
+        "errors": errors
+    }
+
 

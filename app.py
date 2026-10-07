@@ -42,6 +42,7 @@ from domain.auth import (
     ROLE_READER, ROLE_EDITOR, ROLE_VALIDATOR, DEMO_USERS
 )
 from report_parser import parse_audit_report, clean_text, parse_spreadsheet_data
+from import_engine import import_report_structure, compute_file_hash, ImportDecisionRequired
 
 init_db()
 
@@ -227,6 +228,7 @@ def upload_report():
     file.save(saved_path)
 
     try:
+        file_hash = compute_file_hash(saved_path)
         if ext in ("xlsx", "xls", "xlsm", "csv"):
             parsed_data = parse_spreadsheet_data(saved_path, safe_filename)
         else:
@@ -234,14 +236,39 @@ def upload_report():
 
         report_info = parsed_data.get("report", {})
         findings_hierarchy = parsed_data.get("findings", [])
+        warnings = parsed_data.get("warnings", [])
+        errors = parsed_data.get("errors", [])
 
-        report_id = save_relational_report_structure(report_info, findings_hierarchy, safe_filename)
+        mode = request.form.get("mode") or "auto"
+        target_report_id = request.form.get("target_report_id")
+        user = get_current_user()
+        user_name = user.get("name") if user else "Auditoría Interna"
 
-        return jsonify({
-            "message": f"Informe '{report_info.get('title')}' ingresado correctamente con relaciones integradas.",
-            "report_id": report_id,
-            "findings_count": len(findings_hierarchy)
-        })
+        try:
+            res = import_report_structure(
+                report_info, findings_hierarchy, source_filename=safe_filename,
+                mode=mode, target_report_id=target_report_id, file_hash=file_hash, user_name=user_name
+            )
+            return jsonify({
+                "message": res.get("message") or f"Informe '{report_info.get('title')}' ingresado correctamente con relaciones integradas.",
+                "report_id": res.get("report_id"),
+                "status": res.get("status"),
+                "findings_count": len(findings_hierarchy),
+                "counts": res.get("counts"),
+                "preserved_manual": res.get("preserved_manual"),
+                "overwritten_manual": res.get("overwritten_manual"),
+                "conflicts": res.get("conflicts"),
+                "warnings": warnings,
+                "errors": errors
+            })
+        except ImportDecisionRequired as idr:
+            return jsonify({
+                "requires_decision": True,
+                "message": str(idr),
+                "analysis": idr.analysis,
+                "warnings": warnings,
+                "errors": errors
+            }), 409
     except ValueError as ve:
         err_str = str(ve)
         status = 422 if ("requiere OCR" in err_str or "vacío" in err_str or "texto" in err_str) else 400
@@ -290,7 +317,9 @@ def parse_preview():
         return jsonify({
             "report_file": safe_filename,
             "report": parsed_data.get("report", {}),
-            "findings": parsed_data.get("findings", [])
+            "findings": parsed_data.get("findings", []),
+            "warnings": parsed_data.get("warnings", []),
+            "errors": parsed_data.get("errors", [])
         })
     except ValueError as ve:
         err_str = str(ve)
@@ -315,20 +344,34 @@ def save_validated_report():
     report_info = data.get("report", {})
     findings_hierarchy = data.get("findings", [])
     source_filename = data.get("report_file", "Informe.docx")
+    mode = data.get("mode") or "merge"
+    target_report_id = data.get("target_report_id")
 
     if not report_info or not findings_hierarchy:
         return jsonify({"error": "No hay datos validados para guardar."}), 400
 
+    user = get_current_user()
+    user_name = user.get("name") if user else "Auditoría Interna"
+
     try:
-        report_id = save_relational_report_structure(report_info, findings_hierarchy, source_filename)
+        res = import_report_structure(
+            report_info, findings_hierarchy, source_filename=source_filename,
+            mode=mode, target_report_id=target_report_id, user_name=user_name
+        )
         return jsonify({
-            "message": f"Informe '{report_info.get('title')}' ingresado correctamente en AuditTrack.",
-            "report_id": report_id,
-            "findings_count": len(findings_hierarchy)
+            "message": f"Informe '{report_info.get('title')}' guardado correctamente en AuditTrack.",
+            "report_id": res.get("report_id"),
+            "status": res.get("status"),
+            "findings_count": len(findings_hierarchy),
+            "counts": res.get("counts"),
+            "preserved_manual": res.get("preserved_manual"),
+            "overwritten_manual": res.get("overwritten_manual"),
+            "conflicts": res.get("conflicts")
         })
     except Exception as exc:
         print(f"Error guardando informe validado: {exc}")
         return jsonify({"error": f"No se pudo guardar el informe: {str(exc)}"}), 500
+
 
 
 @app.route("/reports", methods=["GET"])
@@ -1047,26 +1090,55 @@ def import_excel():
     file.save(saved_path)
 
     try:
+        file_hash = compute_file_hash(saved_path)
         parsed_data = parse_spreadsheet_data(saved_path, safe_filename)
         report_info = parsed_data.get("report", {})
         findings_hierarchy = parsed_data.get("findings", [])
+        warnings = parsed_data.get("warnings", [])
+        errors = parsed_data.get("errors", [])
 
-        if not findings_hierarchy:
+        if not findings_hierarchy and not errors:
             return jsonify({"error": "No se encontraron filas válidas en la planilla."}), 400
 
-        report_id = save_relational_report_structure(report_info, findings_hierarchy, safe_filename)
+        req_json = request.get_json(silent=True) or {}
+        mode = request.form.get("mode") or req_json.get("mode") or "auto"
+        target_report_id = request.form.get("target_report_id") or req_json.get("target_report_id")
+        user = get_current_user()
+        user_name = user.get("name") if user else "Auditoría Interna"
 
-        return jsonify({
-            "success": True,
-            "message": f"Se importaron exitosamente {len(findings_hierarchy)} hallazgos agrupados con sus propuestas y planes desde la planilla.",
-            "report_id": report_id,
-            "imported_count": len(findings_hierarchy)
-        })
+        try:
+            res = import_report_structure(
+                report_info, findings_hierarchy, source_filename=safe_filename,
+                mode=mode, target_report_id=target_report_id, file_hash=file_hash, user_name=user_name
+            )
+            msg = res.get("message") or f"Se importaron exitosamente {len(findings_hierarchy)} hallazgos agrupados con sus propuestas y planes."
+            return jsonify({
+                "success": True,
+                "message": msg,
+                "status": res.get("status"),
+                "report_id": res.get("report_id"),
+                "imported_count": len(findings_hierarchy),
+                "counts": res.get("counts"),
+                "preserved_manual": res.get("preserved_manual"),
+                "overwritten_manual": res.get("overwritten_manual"),
+                "conflicts": res.get("conflicts"),
+                "warnings": warnings,
+                "errors": errors
+            })
+        except ImportDecisionRequired as idr:
+            return jsonify({
+                "requires_decision": True,
+                "message": str(idr),
+                "analysis": idr.analysis,
+                "warnings": warnings,
+                "errors": errors
+            }), 409
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 422
     except Exception as exc:
         print(f"Error procesando importación de planilla: {exc}")
         return jsonify({"error": f"No se pudo procesar la planilla: {str(exc)}"}), 500
+
     finally:
         if os.path.exists(saved_path):
             try:

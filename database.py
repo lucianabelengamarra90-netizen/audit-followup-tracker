@@ -197,11 +197,10 @@ def generate_next_code(entity_type: str, year: int = None, cursor=None) -> str:
         "action_plan": "action_plans"
     }
 
-    close_cursor = False
+    own_conn = None
     if cursor is None:
-        conn = get_db()
-        cursor = conn.cursor()
-        close_cursor = True
+        own_conn = get_db()
+        cursor = own_conn.cursor()
 
     try:
         cursor.execute("SELECT last_value FROM code_sequences WHERE entity_type = ? AND year = ?", (entity_type, year))
@@ -218,24 +217,136 @@ def generate_next_code(entity_type: str, year: int = None, cursor=None) -> str:
                 next_val += 1
 
         cursor.execute("INSERT OR REPLACE INTO code_sequences (entity_type, year, last_value) VALUES (?, ?, ?)", (entity_type, year, next_val))
+        if own_conn is not None:
+            own_conn.commit()
         return f"{entity_prefix}-{year}-{next_val:03d}"
+    except Exception:
+        if own_conn is not None:
+            own_conn.rollback()
+        raise
     finally:
-        if close_cursor:
-            cursor.connection.commit()
-_DB_INITIALIZED = False
+        if own_conn is not None:
+            own_conn.close()
+
+
+# Bases ya inicializadas en este proceso (clave = motor + ubicación).
+# Solo se agrega una clave después de que el esquema y las migraciones
+# se confirmaron (commit) correctamente.
+_INITIALIZED_DBS = set()
+
+
+def _resolve_db_url():
+    db_url = (
+        os.environ.get("DATABASE_URL") or
+        os.environ.get("SUPABASE_DB_URL") or
+        os.environ.get("SUPABASE_URL") or
+        os.environ.get("POSTGRES_URL") or
+        os.environ.get("POSTGRESQL_URL") or
+        os.environ.get("RENDER_POSTGRES_URL")
+    )
+    return (db_url or "").strip()
+
+
+def _db_identity():
+    """Identifica la base que usará get_db() sin abrir una conexión."""
+    db_url = _resolve_db_url()
+    if db_url.startswith(("postgres://", "postgresql://")):
+        return "postgresql:" + db_url
+    return "sqlite:" + os.path.abspath(DB_PATH)
+
+
+def is_db_initialized():
+    return _db_identity() in _INITIALIZED_DBS
 
 
 def init_db(force=False):
-    global _DB_INITIALIZED
-    if _DB_INITIALIZED and not force:
-        return
+    """
+    Crea el esquema y aplica migraciones pendientes una sola vez por base y proceso.
+    Las lecturas habituales llaman a init_db() pero, una vez inicializada la base,
+    la llamada es una simple verificación en memoria (sin consultas ni conexiones).
+    Devuelve True si la base quedó inicializada.
+    """
+    key = _db_identity()
+    if key in _INITIALIZED_DBS and not force:
+        if key.startswith("sqlite:"):
+            if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0:
+                _INITIALIZED_DBS.discard(key)
+            else:
+                return True
+        else:
+            return True
 
     try:
         conn = get_db()
-        cursor = conn.cursor()
     except Exception as exc:
-        print(f"[WARN] init_db skipped on startup: {exc}")
-        return
+        print(f"[WARN] init_db: no se pudo conectar a la base ({exc}). Se reintentará en la próxima operación.")
+        return False
+
+    try:
+        cursor = conn.cursor()
+        _create_schema(conn, cursor)
+        _apply_migrations(conn, cursor)
+        sync_code_sequences(cursor)
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"[ERROR] init_db: falló la inicialización del esquema ({exc}). No se marca como inicializada.")
+        return False
+    finally:
+        conn.close()
+
+    _INITIALIZED_DBS.add(key)
+    return True
+
+
+def _apply_migrations(conn, cursor):
+    """Migraciones versionadas registradas en schema_migrations (se ejecutan una sola vez)."""
+    cursor.execute("SELECT version FROM schema_migrations")
+    applied = {int(r[0]) for r in cursor.fetchall()}
+
+    for version, name, fn in MIGRATIONS:
+        if version in applied:
+            continue
+        fn(cursor)
+        cursor.execute("INSERT INTO schema_migrations (version, name) VALUES (?, ?)", (version, name))
+
+
+def _migration_001_import_identity(cursor):
+    # Registro de importaciones identificadas por contenido (idempotencia).
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS import_batches (
+            id TEXT PRIMARY KEY,
+            report_id TEXT NOT NULL,
+            content_fingerprint TEXT NOT NULL,
+            file_hash TEXT,
+            source_filename TEXT,
+            mode TEXT,
+            summary TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (report_id) REFERENCES reports (id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_import_batches_fp ON import_batches (content_fingerprint)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_import_batches_file ON import_batches (file_hash)")
+
+    # Línea base de los valores escritos por la última importación, por entidad.
+    # Permite distinguir ediciones manuales (valor actual != línea base) de datos importados.
+    for table in ("findings", "proposals", "action_plans"):
+        cursor.execute(f"PRAGMA table_info({table})")
+        cols = [r["name"] for r in cursor.fetchall()]
+        if "import_baseline" not in cols:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN import_baseline TEXT")
+
+
+MIGRATIONS = [
+    (1, "import_identity_and_baselines", _migration_001_import_identity),
+]
+
+
+def _create_schema(conn, cursor):
 
     # 0. Tabla de Control de Migraciones
     cursor.execute("""
@@ -374,9 +485,6 @@ def init_db(force=False):
         )
     """)
 
-    sync_code_sequences(cursor)
-    conn.commit()
-    conn.close()
 
 
 
@@ -431,8 +539,6 @@ def sync_code_sequences(cursor):
             elif max_val > seq_row[0]:
                 cursor.execute("UPDATE code_sequences SET last_value = ? WHERE entity_type = ? AND year = ?", (max_val, entity_type, yr))
 
-    _DB_INITIALIZED = True
-
 
 def add_history_log(entity_type, entity_id, user_name, description, cursor=None):
     close_at_end = False
@@ -470,142 +576,35 @@ def get_history_logs(entity_type=None, entity_id=None):
     return logs
 
 
-def save_relational_report_structure(report_data, findings_hierarchy, source_filename=""):
+def save_relational_report_structure(report_data, findings_hierarchy, source_filename="", mode="merge", target_report_id=None, file_hash=None, user_name=None):
     """
-    Guarda la relación Informe -> Hallazgos -> Propuestas -> Planes de manera atómica con rollback en caso de error.
-    Utiliza secuencias persistentes `generate_next_code`.
+    Guarda o actualiza la estructura relacional Informe -> Hallazgos -> Propuestas -> Planes
+    utilizando el motor de importación idempotente.
     """
-    init_db()
-    conn = get_db()
-    cursor = conn.cursor()
-
+    from import_engine import import_report_structure, ImportDecisionRequired
     try:
-        title = (report_data.get("title") or "Informe de Auditoría").strip()
-        process = (report_data.get("process") or "Proceso General").strip()
-        area = (report_data.get("area") or "Operaciones").strip()
-        period = (report_data.get("period") or "2026").strip()
-        auditor = (report_data.get("auditor") or "Auditoría Interna").strip()
-        summary = (report_data.get("summary") or "").strip()
+        res = import_report_structure(
+            report_data=report_data,
+            findings=findings_hierarchy,
+            source_filename=source_filename,
+            mode=mode,
+            target_report_id=target_report_id,
+            file_hash=file_hash,
+            user_name=user_name
+        )
+        return res["report_id"]
+    except ImportDecisionRequired:
+        res = import_report_structure(
+            report_data=report_data,
+            findings=findings_hierarchy,
+            source_filename=source_filename,
+            mode="merge",
+            target_report_id=target_report_id,
+            file_hash=file_hash,
+            user_name=user_name
+        )
+        return res["report_id"]
 
-        cursor.execute("SELECT id, code FROM reports WHERE title = ? OR (source_filename = ? AND source_filename != '')", (title, source_filename))
-        existing_rep = cursor.fetchone()
-        if existing_rep:
-            report_id = existing_rep[0]
-            rep_code = existing_rep[1]
-            cursor.execute("""
-                UPDATE reports SET process = ?, area = ?, period = ?, auditor = ?, summary = ? WHERE id = ?
-            """, (process, area, period, auditor, summary, report_id))
-            add_history_log("report", report_id, auditor, f"Actualización idempotente de informe {title} ({source_filename})", cursor=cursor)
-        else:
-            report_id = str(uuid.uuid4())
-            rep_code = generate_next_code("report", cursor=cursor)
-            cursor.execute("""
-                INSERT INTO reports (id, code, title, process, area, period, auditor, summary, source_filename)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (report_id, rep_code, title, process, area, period, auditor, summary, source_filename))
-            add_history_log("report", report_id, auditor, f"Carga inicial de informe {title} ({source_filename})", cursor=cursor)
-
-        for f_item in findings_hierarchy:
-            f_code = f_item.get("code") or generate_next_code("finding", cursor=cursor)
-
-            f_title = (f_item.get("title") or "Observación de Auditoría").strip()
-            situation = (f_item.get("situation") or f_title).strip()
-            risk = (f_item.get("risk") or "").strip()
-            severity = (f_item.get("severity") or "Medio").strip()
-            if severity.lower() in ("alto", "alta"):
-                severity = "Alto"
-            elif severity.lower() in ("bajo", "baja"):
-                severity = "Bajo"
-            else:
-                severity = "Medio"
-
-            responsible_area = (f_item.get("responsible_area") or area).strip()
-            action_owner = (f_item.get("action_owner") or "Pendiente de definir").strip()
-            status = normalize_status(f_item.get("status") or "En proceso")
-
-            cursor.execute("SELECT id FROM findings WHERE code = ? AND report_id = ?", (f_code, report_id))
-            existing_f = cursor.fetchone()
-            if existing_f:
-                finding_id = existing_f[0]
-                cursor.execute("""
-                    UPDATE findings SET title = ?, situation = ?, risk = ?, severity = ?, responsible_area = ?, action_owner = ?, status = ?, observations = ? WHERE id = ?
-                """, (f_title, situation, risk, severity, responsible_area, action_owner, status, f_item.get("observations", ""), finding_id))
-            else:
-                finding_id = str(uuid.uuid4())
-                cursor.execute("SELECT COUNT(*) FROM findings WHERE code = ?", (f_code,))
-                if cursor.fetchone()[0] > 0:
-                    f_code = generate_next_code("finding", cursor=cursor)
-
-                cursor.execute("""
-                    INSERT INTO findings (id, report_id, code, title, situation, risk, severity, responsible_area, action_owner, status, observations)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (finding_id, report_id, f_code, f_title, situation, risk, severity, responsible_area, action_owner, status, f_item.get("observations", "")))
-                add_history_log("finding", finding_id, auditor, f"Creación de hallazgo {f_code}: {f_title}", cursor=cursor)
-
-            proposals_list = f_item.get("proposals") or []
-            if not proposals_list and f_item.get("proposal"):
-                proposals_list = [{"title": f_item.get("title"), "proposal_text": f_item.get("proposal")}]
-
-            for p_item in proposals_list:
-                proposal_id = str(uuid.uuid4())
-                p_code = p_item.get("code") or generate_next_code("proposal", cursor=cursor)
-
-                cursor.execute("SELECT COUNT(*) FROM proposals WHERE code = ?", (p_code,))
-                if cursor.fetchone()[0] > 0:
-                    p_code = generate_next_code("proposal", cursor=cursor)
-
-                p_title = (p_item.get("title") or f"Propuesta para {f_title}").strip()
-                p_text = (p_item.get("proposal_text") or p_item.get("proposal") or p_title).strip()
-                p_target_date = parse_date_to_iso(p_item.get("target_date") or "")
-                p_status = normalize_status(p_item.get("status") or status)
-
-                cursor.execute("""
-                    INSERT INTO proposals (id, finding_id, code, title, proposal_text, severity, responsible_area, action_owner, target_date, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (proposal_id, finding_id, p_code, p_title, p_text, severity, responsible_area, action_owner, p_target_date, p_status))
-
-                add_history_log("proposal", proposal_id, auditor, f"Creación de propuesta {p_code} vinculada a {f_code}", cursor=cursor)
-
-                plans_list = p_item.get("action_plans") or []
-
-                for pa_item in plans_list:
-                    plan_id = str(uuid.uuid4())
-                    pa_code = pa_item.get("code") or generate_next_code("action_plan", cursor=cursor)
-
-                    cursor.execute("SELECT COUNT(*) FROM action_plans WHERE code = ?", (pa_code,))
-                    if cursor.fetchone()[0] > 0:
-                        pa_code = generate_next_code("action_plan", cursor=cursor)
-
-                    pa_title = (pa_item.get("title") or f"Acción para {p_code}").strip()
-                    pa_text = (pa_item.get("action_text") or pa_title).strip()
-                    pa_owner = (pa_item.get("action_owner") or action_owner).strip()
-                    pa_date = parse_date_to_iso(pa_item.get("target_date") or p_target_date)
-                    try:
-                        pa_pct = max(0, min(100, int(pa_item.get("progress_pct") or 0)))
-                    except Exception:
-                        pa_pct = 0
-                    pa_status = normalize_status(pa_item.get("status") or p_status)
-                    if pa_pct == 100 and pa_status not in ("En suspensión", "Finalizado"):
-                        pa_status = "Pendiente de validación"
-
-                    closed_dt = datetime.now().strftime("%Y-%m-%d") if pa_status == "Finalizado" else None
-                    pa_notes = (pa_item.get("notes") or "").strip()
-                    pa_evidence = (pa_item.get("evidence_file") or "").strip()
-
-                    cursor.execute("""
-                        INSERT INTO action_plans (id, proposal_id, code, title, action_text, action_owner, target_date, status, progress_pct, notes, evidence_file, closed_date)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (plan_id, proposal_id, pa_code, pa_title, pa_text, pa_owner, pa_date, pa_status, pa_pct, pa_notes, pa_evidence, closed_dt))
-
-                    add_history_log("action_plan", plan_id, pa_owner, f"Creación de plan de acción {pa_code} vinculado a propuesta {p_code}", cursor=cursor)
-
-        conn.commit()
-        return report_id
-    except Exception as exc:
-        conn.rollback()
-        raise exc
-    finally:
-        conn.close()
 
 
 def get_all_reports():
