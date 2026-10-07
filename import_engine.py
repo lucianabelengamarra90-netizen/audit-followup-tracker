@@ -278,7 +278,7 @@ def analyze_import(report_data, findings, cursor=None, file_hash=None):
 
 def _empty_counts():
     return {
-        "findings": {"created": 0, "updated": 0, "unchanged": 0},
+        "findings": {"created": 0, "updated": 0, "unchanged": 0, "rejected": 0},
         "proposals": {"created": 0, "updated": 0, "unchanged": 0, "rejected": 0},
         "plans": {"created": 0, "updated": 0, "unchanged": 0, "rejected": 0},
     }
@@ -468,10 +468,21 @@ def _import_finding(ctx, f, report_id, report_area, target_findings):
         if code:
             row = next((r for r in target_findings if norm_code(r.get("code")) == code and r["id"] not in ctx.used_ids), None)
             if not row and STRONG_CODE_RE.match(code):
-                ctx.cur.execute("SELECT * FROM findings WHERE UPPER(code) = ?", (code,))
-                row = _row_to_dict(ctx.cur.fetchone())
-                if row and row["id"] in ctx.used_ids:
-                    row = None
+                ctx.cur.execute("""
+                    SELECT f.id, f.code, r.code AS report_code, r.id AS report_id FROM findings f
+                    JOIN reports r ON r.id = f.report_id WHERE UPPER(f.code) = ?
+                """, (code,))
+                other = ctx.cur.fetchone()
+                if other:
+                    other_dict = _row_to_dict(other)
+                    if other_dict["report_id"] != report_id:
+                        ctx.conflicts.append(
+                            f"Hallazgo {code}: pertenece al informe {other_dict['report_code']}, no al informe seleccionado. Relación rechazada."
+                        )
+                        ctx.counts["findings"]["rejected"] += 1
+                        return
+                    elif other_dict["id"] in ctx.used_ids:
+                        row = None
         if not row:
             key = norm_key(values["situation"])
             row = next((r for r in target_findings if r["id"] not in ctx.used_ids

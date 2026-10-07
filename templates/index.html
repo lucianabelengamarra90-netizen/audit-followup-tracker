@@ -844,6 +844,7 @@
         </div>
         <div class="modal-body" style="padding: 16px; overflow-y: auto;">
             <div id="previewReportInfoBox" style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 12px;"></div>
+            <div id="previewAlertsBox"></div>
             
             <div style="overflow-x: auto; border: 1px solid #E2E8F0; border-radius: 8px; max-height: 50vh;">
                 <table class="audittrack-table" style="width: 100%; min-width: 900px;">
@@ -863,7 +864,7 @@
 
             <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 10px;">
                 <button type="button" class="btn btn-outlined" onclick="closePreviewValidationModal()">Descartar</button>
-                <button type="button" class="btn btn-primary" onclick="confirmSaveValidatedReport()">Aprobar e Ingestar en AuditTrack</button>
+                <button type="button" class="btn btn-primary" id="btnConfirmSavePreview" onclick="confirmSaveValidatedReport()">Aprobar e Ingestar en AuditTrack</button>
             </div>
         </div>
     </div>

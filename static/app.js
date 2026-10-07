@@ -782,11 +782,11 @@ async function inlineUpdateFindingRisk(el) {
             showToast(`Riesgo actualizado a "${value}"`, "success");
             await loadAllData();
         } else {
-            showToast("Error al actualizar riesgo", "error");
+            showToast("Error al actualizar riesgo en el servidor", "error");
             await loadAllData();
         }
     } catch (e) {
-        showToast("Error de conexión", "error");
+        showToast("Error de conexión al actualizar riesgo", "error");
         await loadAllData();
     }
 }
@@ -805,11 +805,11 @@ async function inlineUpdateFinding(el) {
             showToast("Registro actualizado", "success");
             await loadAllData();
         } else {
-            showToast("Error al actualizar", "error");
+            showToast("Error al actualizar registro en el servidor", "error");
             await loadAllData();
         }
     } catch (e) {
-        showToast("Error de conexión", "error");
+        showToast("Error de conexión al actualizar", "error");
         await loadAllData();
     }
 }
@@ -822,22 +822,29 @@ async function inlineUpdateStatus(el) {
     const dbValue = (value === "Vencido") ? "En proceso" : value;
 
     try {
-        await fetch(`/findings/${findingId}/update`, {
+        const res1 = await fetch(`/findings/${findingId}/update`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ status: dbValue })
         });
+        let res2Ok = true;
         if (proposalId) {
-            await fetch(`/proposals/${proposalId}/update`, {
+            const res2 = await fetch(`/proposals/${proposalId}/update`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ status: dbValue })
             });
+            res2Ok = res2.ok;
         }
-        showToast(`Estado actualizado a "${dbValue}"`, "success");
+
+        if (res1.ok && res2Ok) {
+            showToast(`Estado actualizado a "${dbValue}"`, "success");
+        } else {
+            showToast("Error al actualizar estado en el servidor", "error");
+        }
         await loadAllData();
     } catch (e) {
-        showToast("Error de conexión", "error");
+        showToast("Error de conexión al actualizar estado", "error");
         await loadAllData();
     }
 }
@@ -848,19 +855,26 @@ async function inlineUpdateOwner(el) {
     const value = el.value;
 
     try {
-        await fetch(`/findings/${findingId}/update`, {
+        const res1 = await fetch(`/findings/${findingId}/update`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action_owner: value })
         });
+        let res2Ok = true;
         if (proposalId) {
-            await fetch(`/proposals/${proposalId}/update`, {
+            const res2 = await fetch(`/proposals/${proposalId}/update`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ action_owner: value })
             });
+            res2Ok = res2.ok;
         }
-        showToast("Responsable actualizado", "success");
+
+        if (res1.ok && res2Ok) {
+            showToast("Responsable actualizado", "success");
+        } else {
+            showToast("Error al actualizar responsable en el servidor", "error");
+        }
         await loadAllData();
     } catch (e) {
         showToast("Error al actualizar responsable", "error");
@@ -889,14 +903,30 @@ async function inlineUpdateDate(el) {
     }
 
     try {
-        if (proposalId) {
-            await fetch(`/proposals/${proposalId}/update`, {
+        let res1Ok = true;
+        let res2Ok = true;
+        if (findingId) {
+            const res1 = await fetch(`/findings/${findingId}/update`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ target_date: value })
             });
+            res1Ok = res1.ok;
         }
-        showToast("Fecha actualizada", "success");
+        if (proposalId) {
+            const res2 = await fetch(`/proposals/${proposalId}/update`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ target_date: value })
+            });
+            res2Ok = res2.ok;
+        }
+
+        if (res1Ok && res2Ok) {
+            showToast("Fecha actualizada", "success");
+        } else {
+            showToast("Error al actualizar fecha en el servidor", "error");
+        }
         await loadAllData();
     } catch (e) {
         showToast("Error al actualizar fecha", "error");
@@ -2573,15 +2603,39 @@ async function uploadAuditReport(file) {
     }
 }
 
+function promptUserImportDecision(analysis) {
+    const cand = (analysis && analysis.candidates && analysis.candidates[0]) || {};
+    const title = cand.title || "Informe existente";
+    const code = cand.code || "";
+    const choice = prompt(
+        `El archivo contiene datos que coinciden con un informe existente en AuditTrack (${code} · ${title}).\n\n` +
+        `Seleccioná la acción a realizar:\n` +
+        `1. Actualizar conservando ediciones manuales en UI (Recomendado)\n` +
+        `2. Sobrescribir por completo todos los registros con el archivo\n` +
+        `3. Crear un nuevo informe separado`,
+        "1"
+    );
+    if (!choice) return null;
+    const modeMap = { "1": "merge", "2": "overwrite", "3": "new" };
+    return {
+        mode: modeMap[choice.trim()] || "merge",
+        target_report_id: cand.report_id
+    };
+}
+
 function openPreviewValidationModal(data) {
     const modal = el("previewValidationModal");
     const infoBox = el("previewReportInfoBox");
+    const alertsBox = el("previewAlertsBox");
+    const btnSave = el("btnConfirmSavePreview");
     const tbody = el("previewTableBody");
     const subtitle = el("previewModalSubtitle");
     if (!modal || !tbody) return;
 
     const rep = data.report || {};
     const findings = data.findings || [];
+    const errors = data.errors || [];
+    const warnings = data.warnings || [];
     let propCount = 0;
     findings.forEach(f => { propCount += (f.proposals || []).length; });
 
@@ -2596,6 +2650,45 @@ function openPreviewValidationModal(data) {
             <strong>Área:</strong> <span style="background:#EFF6FF; color:#0055D4; padding:2px 6px; border-radius:4px; font-weight:600;">${escapeHtml(rep.area || 'Pendiente de definir')}</span> | 
             <strong>Auditor:</strong> ${escapeHtml(rep.auditor || 'Auditoría Interna')}
         `;
+    }
+
+    if (alertsBox) {
+        let alertHtml = "";
+        if (errors.length > 0) {
+            alertHtml += `
+                <div style="background:#FEF2F2; border:1px solid #FCA5A5; color:#991B1B; border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:12px;">
+                    <strong>⚠️ Se detectaron ${errors.length} error(es) de relación o estructura en la planilla. Deben resolverse antes de poder ingestar:</strong>
+                    <ul style="margin:4px 0 0 16px; padding:0;">
+                        ${errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+        if (warnings.length > 0) {
+            alertHtml += `
+                <div style="background:#FFFBEB; border:1px solid #FCD34D; color:#92400E; border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:12px;">
+                    <strong>ℹ️ Advertencias detectadas:</strong>
+                    <ul style="margin:4px 0 0 16px; padding:0;">
+                        ${warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }
+        alertsBox.innerHTML = alertHtml;
+    }
+
+    if (btnSave) {
+        if (errors.length > 0) {
+            btnSave.disabled = true;
+            btnSave.style.opacity = "0.5";
+            btnSave.style.cursor = "not-allowed";
+            btnSave.title = "Resolvé los errores indicados antes de ingestar";
+        } else {
+            btnSave.disabled = false;
+            btnSave.style.opacity = "1";
+            btnSave.style.cursor = "pointer";
+            btnSave.title = "";
+        }
     }
 
     let html = "";
@@ -2689,18 +2782,36 @@ function deletePreviewProposal(fIdx, pIdx) {
     }
 }
 
-async function confirmSaveValidatedReport() {
+async function confirmSaveValidatedReport(overrideMode = null, overrideTargetId = null) {
     if (!currentPreviewData) return;
+
+    if (currentPreviewData.errors && currentPreviewData.errors.length > 0) {
+        showToast("Error: No se puede guardar. Resolvé los errores de relación antes de continuar.", "error");
+        return;
+    }
+
+    const payload = {
+        ...currentPreviewData,
+        mode: overrideMode || currentPreviewData.mode || null,
+        target_report_id: overrideTargetId || currentPreviewData.target_report_id || null
+    };
 
     try {
         showToast("Ingestando informe validado en AuditTrack...", "info");
         const res = await fetch("/save-validated-report", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(currentPreviewData)
+            body: JSON.stringify(payload)
         });
 
         const data = await res.json();
+
+        if (res.status === 409 && data.requires_decision) {
+            const decision = promptUserImportDecision(data.analysis);
+            if (!decision) return;
+            return confirmSaveValidatedReport(decision.mode, decision.target_report_id);
+        }
+
         if (!res.ok) throw new Error(data.error || "Error al guardar el informe.");
 
         showToast(data.message || "Informe ingresado exitosamente en AuditTrack.", "success");
@@ -2890,6 +3001,7 @@ async function saveFindingFromDrawer() {
     const observations = el("drawerTextObservations")?.value;
 
     try {
+        let allOk = true;
         const res = await fetch(`/findings/${currentDrawerFindingId}/update`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2903,6 +3015,7 @@ async function saveFindingFromDrawer() {
                 observations
             })
         });
+        if (!res.ok) allOk = false;
 
         // Guardar cambios en las propuestas existentes
         const propInputs = document.querySelectorAll(".drawer-prop-input");
@@ -2910,35 +3023,39 @@ async function saveFindingFromDrawer() {
             const propId = input.dataset.propId;
             const newText = input.value.trim();
             if (propId && newText) {
-                await fetch(`/proposals/${propId}/update`, {
+                const pres = await fetch(`/proposals/${propId}/update`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ proposal_text: newText, title: newText })
                 });
+                if (!pres.ok) allOk = false;
             }
         }
 
         // Agregar nueva propuesta si fue ingresada
         const newPropInput = el("drawerNewProposalText");
         if (newPropInput && newPropInput.value.trim()) {
-            await fetch(`/findings/${currentDrawerFindingId}/add-proposal`, {
+            const nres = await fetch(`/findings/${currentDrawerFindingId}/add-proposal`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ proposal_text: newPropInput.value.trim() })
             });
+            if (!nres.ok) allOk = false;
         }
 
-        if (res.ok) {
+        if (allOk) {
             showToast("Cambios guardados correctamente en AuditTrack.", "success");
             closeFindingDrawer();
             await loadAllData();
             await loadExecutiveDashboard();
         } else {
-            showToast("Error al guardar cambios del hallazgo.", "error");
+            showToast("Error al guardar cambios del hallazgo en el servidor.", "error");
+            await loadAllData();
         }
     } catch (e) {
         console.error(e);
         showToast("Error de conexión al guardar cambios.", "error");
+        await loadAllData();
     }
 }
 

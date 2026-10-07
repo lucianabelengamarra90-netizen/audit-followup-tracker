@@ -344,8 +344,16 @@ def save_validated_report():
     report_info = data.get("report", {})
     findings_hierarchy = data.get("findings", [])
     source_filename = data.get("report_file", "Informe.docx")
-    mode = data.get("mode") or "merge"
+    mode = data.get("mode") or "auto"
     target_report_id = data.get("target_report_id")
+    file_hash = data.get("file_hash")
+    errors = data.get("errors") or []
+
+    if errors:
+        return jsonify({
+            "error": "El informe contiene errores de validación de relaciones que deben resolverse antes de guardar.",
+            "errors": errors
+        }), 400
 
     if not report_info or not findings_hierarchy:
         return jsonify({"error": "No hay datos validados para guardar."}), 400
@@ -356,7 +364,7 @@ def save_validated_report():
     try:
         res = import_report_structure(
             report_info, findings_hierarchy, source_filename=source_filename,
-            mode=mode, target_report_id=target_report_id, user_name=user_name
+            mode=mode, target_report_id=target_report_id, file_hash=file_hash, user_name=user_name
         )
         return jsonify({
             "message": f"Informe '{report_info.get('title')}' guardado correctamente en AuditTrack.",
@@ -368,6 +376,12 @@ def save_validated_report():
             "overwritten_manual": res.get("overwritten_manual"),
             "conflicts": res.get("conflicts")
         })
+    except ImportDecisionRequired as idr:
+        return jsonify({
+            "requires_decision": True,
+            "message": str(idr),
+            "analysis": idr.analysis
+        }), 409
     except Exception as exc:
         print(f"Error guardando informe validado: {exc}")
         return jsonify({"error": f"No se pudo guardar el informe: {str(exc)}"}), 500
