@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-PERSISTED_STATUSES = ["En proceso", "En suspensión", "Finalizado"]
+PERSISTED_STATUSES = ["En proceso", "En suspensión", "Pendiente de validación", "Finalizado"]
 
 FINISHED_VARIANTS = {
     "finalizado", "finalizada", "completado", "completada", 
@@ -12,17 +12,23 @@ SUSPENDED_VARIANTS = {
     "en suspensión", "en suspension", "stand-by", "suspendida", "suspendido"
 }
 
+PENDING_VALIDATION_VARIANTS = {
+    "pendiente de validación", "pendiente de validacion", "pendiente validacion", "pendiente validación"
+}
+
 
 def normalize_status(raw_status: Optional[str]) -> str:
     """
-    Normaliza cualquier texto de estado a uno de los 3 estados persistidos oficiales:
-    'En proceso', 'En suspensión' o 'Finalizado'.
+    Normaliza cualquier texto de estado a uno de los estados persistidos oficiales:
+    'En proceso', 'En suspensión', 'Pendiente de validación' o 'Finalizado'.
     """
     if not raw_status:
         return "En proceso"
     
     clean = str(raw_status).strip().lower()
     
+    if clean in PENDING_VALIDATION_VARIANTS or "validación" in clean or "validacion" in clean:
+        return "Pendiente de validación"
     if clean in FINISHED_VARIANTS:
         return "Finalizado"
     if clean in SUSPENDED_VARIANTS:

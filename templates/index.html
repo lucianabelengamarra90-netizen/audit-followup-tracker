@@ -159,7 +159,7 @@
 
                     <div class="view-actions">
                         <button class="btn btn-primary" onclick="document.getElementById('reportInputMainTab').click()">📤 Subir Informe de Auditoría</button>
-                        <input type="file" id="reportInputMainTab" hidden accept=".pdf,.docx,.doc,.xlsx,.csv,.txt" onchange="uploadAuditReport(this.files[0])">
+                        <input type="file" id="reportInputMainTab" hidden accept=".pdf,.docx,.doc,.xlsx,.xls,.xlsm,.csv,.txt" onchange="uploadAuditReport(this.files[0])">
 
                         <!-- Menú Unificado Gestión Excel -->
                         <div style="position: relative; display: inline-block;">
@@ -176,7 +176,7 @@
                                 </button>
                             </div>
                         </div>
-                        <input type="file" id="importExcelInput" hidden accept=".xlsx" onchange="importExcelFile(this.files[0])">
+                        <input type="file" id="importExcelInput" hidden accept=".xlsx,.xls,.xlsm,.csv" onchange="importExcelFile(this.files[0])">
                     </div>
                 </div>
 

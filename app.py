@@ -41,7 +41,7 @@ from domain.auth import (
     get_current_user, login_user, logout_user, require_auth, require_role,
     ROLE_READER, ROLE_EDITOR, ROLE_VALIDATOR, DEMO_USERS
 )
-from report_parser import parse_audit_report, clean_text
+from report_parser import parse_audit_report, clean_text, parse_spreadsheet_data
 
 init_db()
 
@@ -140,6 +140,13 @@ def health():
     except Exception as exc:
         db_status = f"error: {str(exc)}"
 
+    commit_hash = "fea13fa"
+    try:
+        import subprocess
+        commit_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("utf-8").strip()
+    except Exception:
+        pass
+
     if is_render and db_engine == "sqlite":
         warning_msg = "ENTORNO RENDER DETECTADO EN MODO SQLITE. Los datos no se sincronizarán entre distintas PCs a menos que configures DATABASE_URL en el panel de Render."
 
@@ -147,7 +154,9 @@ def health():
     resp = {
         "status": "ok" if db_status == "connected" else "degraded",
         "app": "AuditTrack Relacional",
-        "version": "v1.5.1",
+        "version": "v1.5.2",
+        "commit": commit_hash,
+        "commit_hash": commit_hash,
         "base_tag": "v1.0.0-base-2026-10-02",
         "db_engine": db_engine,
         "db_status": db_status,
@@ -216,12 +225,7 @@ def upload_report():
 
     try:
         if ext in ("xlsx", "xls", "xlsm", "csv"):
-            try:
-                parsed_data = parse_excel_file_data(saved_path, safe_filename)
-                if not parsed_data.get("findings"):
-                    parsed_data = parse_audit_report(saved_path, safe_filename)
-            except Exception:
-                parsed_data = parse_audit_report(saved_path, safe_filename)
+            parsed_data = parse_spreadsheet_data(saved_path, safe_filename)
         else:
             parsed_data = parse_audit_report(saved_path, safe_filename)
 
@@ -275,7 +279,11 @@ def parse_preview():
     file.save(saved_path)
 
     try:
-        parsed_data = parse_audit_report(saved_path, safe_filename)
+        if ext in ("xlsx", "xls", "xlsm", "csv"):
+            parsed_data = parse_spreadsheet_data(saved_path, safe_filename)
+        else:
+            parsed_data = parse_audit_report(saved_path, safe_filename)
+
         return jsonify({
             "report_file": safe_filename,
             "report": parsed_data.get("report", {}),
@@ -1020,197 +1028,48 @@ def map_excel_columns(header_row):
 @require_role(ROLE_EDITOR, ROLE_VALIDATOR)
 def import_excel():
     if "file" not in request.files:
-        return jsonify({"error": "No se envió ningún archivo"}), 400
+        return jsonify({"error": "No se envió ningún archivo."}), 400
 
     file = request.files["file"]
+    if not file or not file.filename:
+        return jsonify({"error": "El archivo enviado no es válido."}), 400
+
     ext = file.filename.rsplit(".", 1)[1].lower() if "." in file.filename else ""
-    if not file or ext not in ("xlsx", "xls", "xlsm", "csv"):
-        return jsonify({"error": "Formato inválido. Debe ser un archivo Excel (.xlsx, .xls, .xlsm) o CSV (.csv)"}), 400
+    if ext not in ("xlsx", "xls", "xlsm", "csv"):
+        return jsonify({"error": "Formato inválido. Debe ser un archivo Excel (.xlsx, .xls, .xlsm) o CSV (.csv)."}), 400
+
+    safe_filename = clean_text(file.filename).replace(" ", "_")
+    unique_filename = f"{uuid.uuid4().hex}_{safe_filename}"
+    saved_path = os.path.join(app.config["UPLOAD_FOLDER"], unique_filename)
+    file.save(saved_path)
 
     try:
-        content_bytes = file.read()
-        wb = load_workbook(filename=BytesIO(content_bytes), data_only=True)
-        
-        ws1 = wb["Hallazgos y Propuestas"] if "Hallazgos y Propuestas" in wb.sheetnames else wb.active
-        ws3 = wb["Planes de Acción"] if "Planes de Acción" in wb.sheetnames else None
+        parsed_data = parse_spreadsheet_data(saved_path, safe_filename)
+        report_info = parsed_data.get("report", {})
+        findings_hierarchy = parsed_data.get("findings", [])
 
-        rows1 = list(ws1.iter_rows(values_only=True))
-        if len(rows1) < 2:
-            return jsonify({"error": "El archivo Excel está vacío o no contiene filas de datos"}), 400
+        if not findings_hierarchy:
+            return jsonify({"error": "No se encontraron filas válidas en la planilla."}), 400
 
-        col_map = map_excel_columns(rows1[0])
-
-        report_filename = file.filename
-        report_title = f"Importación Excel - {os.path.splitext(report_filename)[0]}"
-
-        findings_map = {}
-        findings_order = []
-
-        def get_cell_val(row_tuple, col_idx, default=""):
-            if col_idx < len(row_tuple) and row_tuple[col_idx] is not None:
-                val = row_tuple[col_idx]
-                if isinstance(val, (datetime, date)):
-                    return val.strftime("%Y-%m-%d")
-                return str(val).strip()
-            return default
-
-        for idx, row in enumerate(rows1[1:], start=1):
-            if not row or not any(row):
-                continue
-
-            area = get_cell_val(row, col_map["area"])
-            h_code = get_cell_val(row, col_map["h_code"])
-            situation = get_cell_val(row, col_map["situation"])
-            p_code = get_cell_val(row, col_map["p_code"])
-            prop_text = get_cell_val(row, col_map["prop_text"])
-            risk = get_cell_val(row, col_map["risk"], "Medio")
-            owner = get_cell_val(row, col_map["owner"])
-            target_date = get_cell_val(row, col_map["target_date"])
-            status = get_cell_val(row, col_map["status"], "En proceso")
-            pct_raw = row[col_map["pct"]] if col_map["pct"] < len(row) else 0
-            pct = parse_excel_pct(pct_raw)
-            actions = get_cell_val(row, col_map["actions"])
-            obs = get_cell_val(row, col_map["obs"])
-
-            if not h_code and not situation and not prop_text:
-                continue
-
-            if not h_code:
-                h_code = f"H-IMP-{idx:03d}"
-            if not p_code:
-                p_code = f"PM-IMP-{idx:03d}"
-
-            clean_status = "En proceso"
-            if "suspensión" in status.lower() or "suspension" in status.lower():
-                clean_status = "En suspensión"
-            elif any(w in status.lower() for w in ["finalizado", "finalizada", "completada", "completado", "cerrado"]):
-                clean_status = "Finalizado"
-
-            clean_risk = "Medio"
-            if "alto" in risk.lower():
-                clean_risk = "Alto"
-            elif "bajo" in risk.lower():
-                clean_risk = "Bajo"
-
-            if h_code not in findings_map:
-                finding_item = {
-                    "code": h_code,
-                    "title": situation[:100] if situation else f"Hallazgo {h_code}",
-                    "situation": situation or "Sin detalle",
-                    "risk": clean_risk,
-                    "severity": clean_risk,
-                    "responsible_area": area or "Operaciones",
-                    "action_owner": owner or "Auditoría",
-                    "status": clean_status,
-                    "observations": obs,
-                    "proposals": []
-                }
-                findings_map[h_code] = finding_item
-                findings_order.append(h_code)
-
-            finding_item = findings_map[h_code]
-
-            existing_prop = next((p for p in finding_item["proposals"] if p["code"] == p_code), None)
-            if not existing_prop:
-                prop_item = {
-                    "code": p_code,
-                    "title": prop_text[:100] if prop_text else f"Propuesta {p_code}",
-                    "proposal_text": prop_text or "Sin detalle de propuesta",
-                    "severity": clean_risk,
-                    "responsible_area": area or "Operaciones",
-                    "action_owner": owner or "Auditoría",
-                    "target_date": target_date,
-                    "status": clean_status,
-                    "action_plans": []
-                }
-                finding_item["proposals"].append(prop_item)
-                existing_prop = prop_item
-
-            if not ws3 and (actions or pct > 0):
-                pa_code = f"PA-IMP-{idx:03d}"
-                plan_item = {
-                    "code": pa_code,
-                    "title": actions or prop_text[:100] or "Plan de Acción",
-                    "action_text": actions or prop_text or "Plan de Acción",
-                    "action_owner": owner or "Auditoría",
-                    "target_date": target_date,
-                    "status": clean_status,
-                    "progress_pct": pct,
-                    "notes": obs
-                }
-                existing_prop["action_plans"].append(plan_item)
-
-        if ws3:
-            rows3 = list(ws3.iter_rows(values_only=True))
-            if len(rows3) >= 2:
-                for idx, r3 in enumerate(rows3[1:], start=1):
-                    if not r3 or not any(r3):
-                        continue
-                    pa_code = str(r3[0] or "").strip()
-                    pa_text = str(r3[1] or "").strip()
-                    p_code_link = str(r3[2] or "").strip()
-                    h_code_link = str(r3[3] or "").strip()
-                    pa_owner = str(r3[5] or "").strip()
-                    pa_target = str(r3[6] or "").strip()
-                    pa_pct = parse_excel_pct(r3[7] if len(r3) > 7 else 0)
-                    pa_status = str(r3[8] or "En proceso").strip() if len(r3) > 8 else "En proceso"
-                    pa_notes = str(r3[9] or "").strip() if len(r3) > 9 else ""
-
-                    if not pa_text and not pa_code:
-                        continue
-
-                    clean_pa_status = "En proceso"
-                    if "suspensión" in pa_status.lower() or "suspension" in pa_status.lower():
-                        clean_pa_status = "En suspensión"
-                    elif any(w in pa_status.lower() for w in ["finalizado", "completada", "completado", "cerrado"]):
-                        clean_pa_status = "Finalizado"
-
-                    matched_prop = None
-                    for f in findings_map.values():
-                        for p in f["proposals"]:
-                            if p["code"] == p_code_link or (h_code_link and f["code"] == h_code_link):
-                                matched_prop = p
-                                break
-                        if matched_prop:
-                            break
-
-                    if matched_prop:
-                        if not any(plan["code"] == pa_code for plan in matched_prop["action_plans"] if pa_code):
-                            plan_item = {
-                                "code": pa_code or f"PA-IMP3-{idx:03d}",
-                                "title": pa_text[:100] if pa_text else f"Plan {pa_code}",
-                                "action_text": pa_text or "Plan de Acción",
-                                "action_owner": pa_owner or matched_prop["action_owner"],
-                                "target_date": pa_target or matched_prop["target_date"],
-                                "status": clean_pa_status,
-                                "progress_pct": pa_pct,
-                                "notes": pa_notes
-                            }
-                            matched_prop["action_plans"].append(plan_item)
-
-        findings_to_insert = [findings_map[h] for h in findings_order]
-
-        if not findings_to_insert:
-            return jsonify({"error": "No se encontraron filas válidas en la planilla Excel"}), 400
-
-        report_data = {
-            "title": report_title,
-            "filename": report_filename,
-            "summary": f"Importación relacional desde planilla Excel ({len(findings_to_insert)} hallazgos)."
-        }
-
-        report_id = save_relational_report_structure(report_data, findings_to_insert, report_filename)
+        report_id = save_relational_report_structure(report_info, findings_hierarchy, safe_filename)
 
         return jsonify({
             "success": True,
-            "message": f"Se importaron exitosamente {len(findings_to_insert)} hallazgos agrupados con sus propuestas y planes desde Excel.",
+            "message": f"Se importaron exitosamente {len(findings_hierarchy)} hallazgos agrupados con sus propuestas y planes desde la planilla.",
             "report_id": report_id,
-            "imported_count": len(findings_to_insert)
+            "imported_count": len(findings_hierarchy)
         })
-
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 422
     except Exception as exc:
-        print(f"Error procesando importación Excel: {exc}")
-        return jsonify({"error": f"No se pudo procesar la planilla Excel: {str(exc)}"}), 500
+        print(f"Error procesando importación de planilla: {exc}")
+        return jsonify({"error": f"No se pudo procesar la planilla: {str(exc)}"}), 500
+    finally:
+        if os.path.exists(saved_path):
+            try:
+                os.remove(saved_path)
+            except Exception as e:
+                print(f"Error eliminando archivo temporal: {e}")
 
 
 @app.route("/api/proposals/<proposal_id>/validate", methods=["POST"])

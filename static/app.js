@@ -188,11 +188,22 @@ async function downloadExcelTemplate() {
     try {
         const dropdown = el("excelMenuDropdown");
         if (dropdown) dropdown.style.display = "none";
-        
+
         showToast("Descargando plantilla modelo...", "info");
         const response = await fetch("/download-template");
         if (!response.ok) {
-            showToast("Error al descargar plantilla modelo", "error");
+            if (response.status === 401) {
+                showLoginModal();
+                showToast("Sesión requerida para descargar la plantilla.", "warning");
+                return;
+            }
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+                const errData = await response.json();
+                showToast(errData.error || "Error al descargar plantilla modelo", "error");
+            } else {
+                showToast(`Error servidor (${response.status}) al descargar plantilla`, "error");
+            }
             return;
         }
         const blob = await response.blob();
@@ -203,7 +214,8 @@ async function downloadExcelTemplate() {
         a.download = "Plantilla_Importacion_AuditTrack.xlsx";
         document.body.appendChild(a);
         a.click();
-        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        setTimeout(() => window.URL.revokeObjectURL(url), 1000);
         showToast("Plantilla modelo descargada", "success");
     } catch (e) {
         console.error("Error al descargar plantilla:", e);
@@ -217,7 +229,7 @@ async function importExcelFile(file) {
     if (dropdown) dropdown.style.display = "none";
 
     try {
-        showToast("Procesando e importando planilla Excel...", "info");
+        showToast("Procesando e importando planilla...", "info");
         const formData = new FormData();
         formData.append("file", file);
 
@@ -231,15 +243,15 @@ async function importExcelFile(file) {
         if (input) input.value = "";
 
         if (!response.ok || data.error) {
-            showToast(data.error || "Error al importar el archivo Excel", "error");
+            showToast(data.error || "Error al importar el archivo", "error");
             return;
         }
 
-        showToast(data.message || "Excel importado exitosamente", "success");
+        showToast(data.message || "Planilla importada exitosamente", "success");
         await loadAllData();
     } catch (e) {
-        console.error("Error al importar Excel:", e);
-        showToast("Error de conexión al importar Excel", "error");
+        console.error("Error al importar planilla:", e);
+        showToast("Error de conexión al importar planilla", "error");
         const input = el("importExcelInput");
         if (input) input.value = "";
     }
@@ -255,7 +267,18 @@ async function exportExcelReport() {
             method: "POST"
         });
         if (!response.ok) {
-            showToast("Error al exportar reporte Excel", "error");
+            if (response.status === 401) {
+                showLoginModal();
+                showToast("Sesión requerida para exportar el reporte.", "warning");
+                return;
+            }
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+                const errData = await response.json();
+                showToast(errData.error || "Error al exportar reporte Excel", "error");
+            } else {
+                showToast(`Error servidor (${response.status}) al exportar reporte Excel`, "error");
+            }
             return;
         }
         const blob = await response.blob();
@@ -266,7 +289,8 @@ async function exportExcelReport() {
         a.download = `Reporte_AuditTrack_${new Date().toISOString().slice(0,10)}.xlsx`;
         document.body.appendChild(a);
         a.click();
-        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        setTimeout(() => window.URL.revokeObjectURL(url), 1000);
         showToast("Excel exportado exitosamente", "success");
     } catch (e) {
         console.error("Error al exportar Excel:", e);
@@ -346,10 +370,14 @@ async function loadAllData(silent = false) {
             fetch("/reports")
         ]);
 
-        if (resF.ok) currentFindings = (await resF.json()).findings || [];
-        if (resP.ok) currentProposals = (await resP.json()).proposals || [];
-        if (resPA.ok) currentActionPlans = (await resPA.json()).action_plans || [];
-        if (resR.ok) currentReports = (await resR.json()).reports || [];
+        if (!resF.ok || !resP.ok || !resPA.ok || !resR.ok) {
+            throw new Error(`Error al consultar servidor: F:${resF.status} P:${resP.status} PA:${resPA.status} R:${resR.status}`);
+        }
+
+        currentFindings = (await resF.json()).findings || [];
+        currentProposals = (await resP.json()).proposals || [];
+        currentActionPlans = (await resPA.json()).action_plans || [];
+        currentReports = (await resR.json()).reports || [];
 
         populateFilterDropdowns();
         populateExecutiveFilterDropdowns();

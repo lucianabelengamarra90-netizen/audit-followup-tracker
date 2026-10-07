@@ -120,6 +120,31 @@ class ExcelRoundTripTestCase(unittest.TestCase):
         self.assertEqual(len(action_plans), 1)
         self.assertEqual(action_plans[0]["progress_pct"], 50)
 
+    def test_csv_import_support(self):
+        csv_content = (
+            "Área;ID Hallazgo;Hallazgo;ID Propuesta;Propuesta;Riesgo;Responsable;Fecha compromiso;Estado;% Avance;Acciones;Observaciones\n"
+            "Operaciones;H-2026-99;Control de acceso;PM-2026-99;Reforzar claves;Alto;Juan Pérez;2026-12-15;En proceso;100%;Plan clave;Nota CSV\n"
+        ).encode("utf-8")
+
+        response = self.client.post(
+            "/import-excel",
+            content_type="multipart/form-data",
+            data={"file": (BytesIO(csv_content), "reporte_test.csv")}
+        )
+        self.assertEqual(response.status_code, 200)
+        json_resp = json.loads(response.data)
+        self.assertTrue(json_resp.get("success"))
+
+        findings = database.get_all_findings()
+        self.assertGreaterEqual(len(findings), 1)
+        f = next(f for f in findings if f["code"] == "H-2026-99")
+        self.assertEqual(f["severity"], "Alto")
+
+        # Check action plan with 100% progress has status Pendiente de validación
+        plans = database.get_all_action_plans()
+        p = next(p for p in plans if p["code"] == "PA-IMP-001" or p["progress_pct"] == 100)
+        self.assertEqual(p["status"], "Pendiente de validación")
+
 
 if __name__ == "__main__":
     unittest.main()

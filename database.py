@@ -564,8 +564,8 @@ def save_relational_report_structure(report_data, findings_hierarchy, source_fil
                     except Exception:
                         pa_pct = 0
                     pa_status = normalize_status(pa_item.get("status") or p_status)
-                    if pa_pct == 100 and pa_status != "En suspensión":
-                        pa_status = "Finalizado"
+                    if pa_pct == 100 and pa_status not in ("En suspensión", "Finalizado"):
+                        pa_status = "Pendiente de validación"
 
                     closed_dt = datetime.now().strftime("%Y-%m-%d") if pa_status == "Finalizado" else None
                     pa_notes = (pa_item.get("notes") or "").strip()
@@ -2060,7 +2060,7 @@ def get_executive_drilldown(metric_key, filters=None):
                 JOIN reports r ON f.report_id = r.id
                 {where_ov}
                 ORDER BY pa.target_date ASC
-            """, [today_str] + params)
+            """, params + [today_str])
             for r in cursor.fetchall():
                 t_str = r["target_date"]
                 days_ov = 0

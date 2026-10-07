@@ -2164,3 +2164,427 @@ def parse_audit_report(
         "findings": relational_findings,
         "proposals": parsed_proposals_list
     }
+
+
+# ============================================================
+# PROCESADOR UNIFICADO TABULAR (EXCEL XLSX/XLSM/XLS / CSV)
+# ============================================================
+
+def normalize_severity(sev):
+    if not sev:
+        return "Medio"
+    s = str(sev).strip().lower()
+    if s in ("alto", "alta", "high", "crítico", "critico", "crítica", "critica", "elevado", "elevada"):
+        return "Alto"
+    if s in ("bajo", "baja", "low", "leve", "menor"):
+        return "Bajo"
+    return "Medio"
+
+
+def parse_excel_pct_val(val):
+    if val is None:
+        return 0
+    if isinstance(val, (int, float)):
+        if isinstance(val, float) and 0.0 < val <= 1.0:
+            return int(round(val * 100))
+        return max(0, min(100, int(round(val))))
+
+    raw_str = str(val).strip()
+    if not raw_str:
+        return 0
+
+    has_percent = "%" in raw_str
+    clean_str = raw_str.replace("%", "").strip()
+
+    try:
+        f = float(clean_str)
+        if has_percent:
+            return max(0, min(100, int(round(f))))
+        else:
+            if 0.0 < f < 1.0:
+                return int(round(f * 100))
+            return max(0, min(100, int(round(f))))
+    except Exception:
+        return 0
+
+
+def map_spreadsheet_columns(header_row):
+    col_map = {
+        "area": None, "h_code": None, "situation": None, "p_code": None,
+        "prop_text": None, "risk": None, "owner": None, "target_date": None,
+        "status": None, "pct": None, "actions": None, "obs": None
+    }
+    if not header_row:
+        return {
+            "area": 0, "h_code": 1, "situation": 2, "p_code": 3,
+            "prop_text": 4, "risk": 5, "owner": 6, "target_date": 7,
+            "status": 8, "pct": 9, "actions": 10, "obs": 11
+        }
+
+    matched_count = 0
+    for idx, cell in enumerate(header_row):
+        if cell is None:
+            continue
+        h_str = str(cell).strip().lower()
+        if not h_str:
+            continue
+
+        if any(k in h_str for k in ["observaciones", "comentarios", "notas", "evidencia"]):
+            if col_map["obs"] is None: col_map["obs"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["id hallazgo", "cod hallazgo", "código hallazgo", "codigo hallazgo"]):
+            if col_map["h_code"] is None: col_map["h_code"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["id propuesta", "cod propuesta", "código propuesta", "codigo propuesta"]):
+            if col_map["p_code"] is None: col_map["p_code"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["área", "area", "proceso", "sector", "gerencia"]):
+            if col_map["area"] is None: col_map["area"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["hallazgo", "situación", "situacion", "desviación", "desviacion"]):
+            if col_map["situation"] is None: col_map["situation"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["propuesta", "recomendación", "recomendacion", "medida"]):
+            if col_map["prop_text"] is None: col_map["prop_text"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["riesgo", "severidad", "criticidad"]):
+            if col_map["risk"] is None: col_map["risk"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["responsable", "propietario", "lider", "líder", "owner"]):
+            if col_map["owner"] is None: col_map["owner"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["fecha", "compromiso", "vencimiento", "plazo"]):
+            if col_map["target_date"] is None: col_map["target_date"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["estado", "estatus", "status"]):
+            if col_map["status"] is None: col_map["status"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["avance", "progreso", "%"]):
+            if col_map["pct"] is None: col_map["pct"] = idx; matched_count += 1
+        elif any(k in h_str for k in ["acciones", "acción", "accion", "plan"]):
+            if col_map["actions"] is None: col_map["actions"] = idx; matched_count += 1
+
+    if matched_count == 0:
+        return {
+            "area": 0, "h_code": 1, "situation": 2, "p_code": 3,
+            "prop_text": 4, "risk": 5, "owner": 6, "target_date": 7,
+            "status": 8, "pct": 9, "actions": 10, "obs": 11
+        }
+
+    return col_map
+
+
+def read_spreadsheet_sheets(file_path, ext):
+    sheets_dict = {}
+
+    if ext == "csv":
+        lines = []
+        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                with open(file_path, "r", encoding=encoding) as f:
+                    content = f.read()
+                    lines = content.splitlines()
+                break
+            except Exception:
+                continue
+        if lines:
+            sample = "\n".join(lines[:5])
+            delim = ";" if sample.count(";") > sample.count(",") else ","
+            reader = csv.reader(lines, delimiter=delim)
+            sheets_dict["Sheet1"] = [row for row in reader if row]
+
+    elif ext == "xls":
+        try:
+            import xlrd
+            wb = xlrd.open_workbook(file_path)
+            for sheet_name in wb.sheet_names():
+                sh = wb.sheet_by_name(sheet_name)
+                rows = []
+                for r in range(sh.nrows):
+                    row_vals = []
+                    for c in range(sh.ncols):
+                        val = sh.cell_value(r, c)
+                        if sh.cell_type(r, c) == xlrd.XL_CELL_DATE:
+                            try:
+                                dt_tuple = xlrd.xldate_as_tuple(val, wb.datemode)
+                                val = f"{dt_tuple[0]:04d}-{dt_tuple[1]:02d}-{dt_tuple[2]:02d}"
+                            except Exception:
+                                pass
+                        row_vals.append(val)
+                    rows.append(row_vals)
+                sheets_dict[sheet_name] = rows
+        except Exception as e:
+            print(f"[Parser] Error leyendo .xls con xlrd: {e}")
+
+    else:
+        wb = load_workbook(filename=file_path, data_only=True)
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            merged_map = {}
+            for rng in ws.merged_cells.ranges:
+                top_left_val = ws.cell(row=rng.min_row, column=rng.min_col).value
+                for r in range(rng.min_row, rng.max_row + 1):
+                    for c in range(rng.min_col, rng.max_col + 1):
+                        merged_map[(r, c)] = top_left_val
+
+            rows = []
+            for r_idx, row in enumerate(ws.iter_rows(values_only=False), start=1):
+                row_vals = []
+                for c_idx, cell in enumerate(row, start=1):
+                    val = cell.value
+                    if val is None and (r_idx, c_idx) in merged_map:
+                        val = merged_map[(r_idx, c_idx)]
+                    row_vals.append(val)
+                rows.append(row_vals)
+            sheets_dict[sheet_name] = rows
+
+    return sheets_dict
+
+
+def parse_spreadsheet_data(file_path, filename):
+    ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
+    if ext not in ("xlsx", "xls", "xlsm", "csv"):
+        raise ValueError("Formato de archivo no soportado para importación tabular (.xlsx, .xls, .xlsm, .csv).")
+
+    sheets_dict = read_spreadsheet_sheets(file_path, ext)
+    if not sheets_dict:
+        raise ValueError("El archivo está vacío o no contiene hojas de datos válidas.")
+
+    sheet_names = list(sheets_dict.keys())
+    ws1_name = next((s for s in sheet_names if "hallazgo" in s.lower()), sheet_names[0])
+    rows1 = sheets_dict.get(ws1_name, [])
+
+    ws2_name = next((s for s in sheet_names if "propuesta" in s.lower() and s != ws1_name), None)
+    rows2 = sheets_dict.get(ws2_name, []) if ws2_name else []
+
+    ws3_name = next((s for s in sheet_names if "plan" in s.lower() and s != ws1_name and s != ws2_name), None)
+    rows3 = sheets_dict.get(ws3_name, []) if ws3_name else []
+
+    if len(rows1) < 2 and not rows2 and not rows3:
+        raise ValueError("La planilla no contiene filas de datos suficientes.")
+
+    col_map1 = map_spreadsheet_columns(rows1[0] if rows1 else [])
+
+    report_title = f"Importación Excel - {os.path.splitext(filename)[0]}"
+    findings_map = {}
+    findings_order = []
+    proposals_map = {}
+
+    def get_cell_val(row_tuple, col_idx, default=""):
+        if col_idx is not None and col_idx < len(row_tuple) and row_tuple[col_idx] is not None:
+            v = row_tuple[col_idx]
+            if isinstance(v, (datetime, date)):
+                return v.strftime("%Y-%m-%d")
+            v_str = str(v).strip()
+            return v_str
+        return default
+
+    last_seen_h_code = None
+    last_seen_area = "Operaciones"
+    last_seen_situation = ""
+
+    # 1. PARSE SHEET 1 (Hallazgos y Propuestas)
+    for idx, row in enumerate(rows1[1:], start=1):
+        if not row or not any(row):
+            continue
+
+        area = get_cell_val(row, col_map1.get("area"))
+        h_code = get_cell_val(row, col_map1.get("h_code"))
+        situation = get_cell_val(row, col_map1.get("situation"))
+        p_code = get_cell_val(row, col_map1.get("p_code"))
+        prop_text = get_cell_val(row, col_map1.get("prop_text"))
+        risk = get_cell_val(row, col_map1.get("risk"), "Medio")
+        owner = get_cell_val(row, col_map1.get("owner"))
+        target_date = get_cell_val(row, col_map1.get("target_date"))
+        status = get_cell_val(row, col_map1.get("status"), "En proceso")
+        pct_raw = row[col_map1["pct"]] if (col_map1.get("pct") is not None and col_map1["pct"] < len(row)) else 0
+        pct = parse_excel_pct_val(pct_raw)
+        actions = get_cell_val(row, col_map1.get("actions"))
+        obs = get_cell_val(row, col_map1.get("obs"))
+
+        if not h_code and not situation and not prop_text and not actions:
+            continue
+
+        if not h_code and last_seen_h_code and (prop_text or actions or p_code):
+            h_code = last_seen_h_code
+            if not area: area = last_seen_area
+            if not situation: situation = last_seen_situation
+
+        if not h_code:
+            h_code = f"H-IMP-{idx:03d}"
+        if not p_code and prop_text:
+            p_code = f"PM-IMP-{idx:03d}"
+
+        last_seen_h_code = h_code
+        if area: last_seen_area = area
+        if situation: last_seen_situation = situation
+
+        clean_risk = normalize_severity(risk)
+
+        clean_status = "En proceso"
+        if pct == 100 or "pendiente" in status.lower():
+            clean_status = "Pendiente de validación"
+        elif "suspensión" in status.lower() or "suspension" in status.lower() or "stand-by" in status.lower():
+            clean_status = "En suspensión"
+        elif any(w in status.lower() for w in ["finalizado", "finalizada", "completada", "completado", "cerrado"]):
+            clean_status = "Finalizado"
+
+        if h_code not in findings_map:
+            findings_map[h_code] = {
+                "code": h_code,
+                "title": situation[:100] if situation else f"Hallazgo {h_code}",
+                "situation": situation or "Sin detalle",
+                "risk": clean_risk,
+                "severity": clean_risk,
+                "responsible_area": area or "Operaciones",
+                "action_owner": owner or "Auditoría",
+                "status": clean_status,
+                "observations": obs,
+                "proposals": []
+            }
+            findings_order.append(h_code)
+
+        finding_item = findings_map[h_code]
+
+        if p_code or prop_text:
+            p_code_final = p_code or f"PM-IMP-{idx:03d}"
+            existing_prop = next((p for p in finding_item["proposals"] if p["code"] == p_code_final), None)
+            if not existing_prop:
+                prop_item = {
+                    "code": p_code_final,
+                    "title": prop_text[:100] if prop_text else f"Propuesta {p_code_final}",
+                    "proposal_text": prop_text or "Sin detalle de propuesta",
+                    "severity": clean_risk,
+                    "responsible_area": area or "Operaciones",
+                    "action_owner": owner or "Auditoría",
+                    "target_date": target_date,
+                    "status": clean_status,
+                    "action_plans": []
+                }
+                finding_item["proposals"].append(prop_item)
+                existing_prop = prop_item
+                proposals_map[p_code_final] = (existing_prop, finding_item)
+
+            if not rows3 and (actions or pct > 0):
+                pa_code = f"PA-IMP-{idx:03d}"
+                existing_prop["action_plans"].append({
+                    "code": pa_code,
+                    "title": actions or prop_text[:100] or "Plan de Acción",
+                    "action_text": actions or prop_text or "Plan de Acción",
+                    "action_owner": owner or "Auditoría",
+                    "target_date": target_date,
+                    "status": "Pendiente de validación" if pct == 100 else clean_status,
+                    "progress_pct": pct,
+                    "notes": obs
+                })
+
+    # 2. PARSE SHEET 2 (Propuestas de Mejora)
+    if rows2:
+        col_map2 = map_spreadsheet_columns(rows2[0])
+        for idx, row in enumerate(rows2[1:], start=1):
+            if not row or not any(row): continue
+            p_code = get_cell_val(row, col_map2.get("p_code"))
+            prop_text = get_cell_val(row, col_map2.get("prop_text"))
+            h_code = get_cell_val(row, col_map2.get("h_code"))
+            area = get_cell_val(row, col_map2.get("area"))
+            status = get_cell_val(row, col_map2.get("status"), "En proceso")
+            owner = get_cell_val(row, col_map2.get("owner"))
+            target_date = get_cell_val(row, col_map2.get("target_date"))
+
+            if not p_code and not prop_text: continue
+
+            if p_code and p_code in proposals_map:
+                p_item, f_item = proposals_map[p_code]
+                if prop_text: p_item["proposal_text"] = prop_text
+                if owner: p_item["action_owner"] = owner
+                if target_date: p_item["target_date"] = target_date
+            elif h_code and h_code in findings_map:
+                f_item = findings_map[h_code]
+                p_code_final = p_code or f"PM-IMP-S2-{idx:03d}"
+                p_item = {
+                    "code": p_code_final,
+                    "title": prop_text[:100] if prop_text else f"Propuesta {p_code_final}",
+                    "proposal_text": prop_text or "Sin detalle",
+                    "severity": f_item["severity"],
+                    "responsible_area": area or f_item["responsible_area"],
+                    "action_owner": owner or f_item["action_owner"],
+                    "target_date": target_date,
+                    "status": status,
+                    "action_plans": []
+                }
+                f_item["proposals"].append(p_item)
+                proposals_map[p_code_final] = (p_item, f_item)
+
+    # 3. PARSE SHEET 3 (Planes de Acción)
+    if rows3:
+        col_map3 = map_spreadsheet_columns(rows3[0])
+        for idx, row in enumerate(rows3[1:], start=1):
+            if not row or not any(row): continue
+            pa_code = get_cell_val(row, col_map3.get("actions"))
+            if not pa_code or pa_code.startswith("PA-") is False:
+                pa_code = get_cell_val(row, 0)
+            if not pa_code:
+                pa_code = f"PA-IMP-{idx:03d}"
+
+            action_text = get_cell_val(row, col_map3.get("situation")) or get_cell_val(row, col_map3.get("prop_text")) or get_cell_val(row, 1)
+            p_code = get_cell_val(row, col_map3.get("p_code")) or get_cell_val(row, 2)
+            h_code = get_cell_val(row, col_map3.get("h_code")) or get_cell_val(row, 3)
+            owner = get_cell_val(row, col_map3.get("owner")) or get_cell_val(row, 5)
+            target_date = get_cell_val(row, col_map3.get("target_date")) or get_cell_val(row, 6)
+            pct_raw = row[col_map3["pct"]] if (col_map3.get("pct") is not None and col_map3["pct"] < len(row)) else (row[7] if len(row) > 7 else 0)
+            pct = parse_excel_pct_val(pct_raw)
+            status = get_cell_val(row, col_map3.get("status")) or (row[8] if len(row) > 8 else "En proceso")
+            obs = get_cell_val(row, col_map3.get("obs")) or (row[9] if len(row) > 9 else "")
+
+            if not action_text and not p_code: continue
+
+            target_prop = None
+            if p_code and p_code in proposals_map:
+                target_prop, target_finding = proposals_map[p_code]
+            elif h_code and h_code in findings_map:
+                target_finding = findings_map[h_code]
+                if target_finding["proposals"]:
+                    target_prop = target_finding["proposals"][0]
+
+            if not target_prop and findings_order:
+                target_finding = findings_map[findings_order[0]]
+                if not target_finding["proposals"]:
+                    p_item = {
+                        "code": p_code or "PM-IMP-001",
+                        "title": "Propuesta General",
+                        "proposal_text": "Propuesta de Mejora General",
+                        "severity": target_finding["severity"],
+                        "responsible_area": target_finding["responsible_area"],
+                        "action_owner": owner or target_finding["action_owner"],
+                        "target_date": target_date,
+                        "status": "En proceso",
+                        "action_plans": []
+                    }
+                    target_finding["proposals"].append(p_item)
+                    proposals_map[p_item["code"]] = (p_item, target_finding)
+                target_prop = target_finding["proposals"][0]
+
+            if target_prop:
+                clean_pa_status = "En proceso"
+                if pct == 100 or "pendiente" in str(status).lower():
+                    clean_pa_status = "Pendiente de validación"
+                elif "suspensión" in str(status).lower() or "suspension" in str(status).lower():
+                    clean_pa_status = "En suspensión"
+                elif any(w in str(status).lower() for w in ["finalizado", "completado", "cerrado"]):
+                    clean_pa_status = "Finalizado"
+
+                existing_pa = next((pa for pa in target_prop["action_plans"] if pa["code"] == pa_code), None)
+                if not existing_pa:
+                    target_prop["action_plans"].append({
+                        "code": pa_code,
+                        "title": action_text or f"Plan {pa_code}",
+                        "action_text": action_text or f"Plan {pa_code}",
+                        "action_owner": owner or target_prop.get("action_owner", "Auditoría"),
+                        "target_date": target_date,
+                        "status": clean_pa_status,
+                        "progress_pct": pct,
+                        "notes": obs
+                    })
+
+    findings_list = [findings_map[h] for h in findings_order]
+    report_dict = {
+        "title": report_title,
+        "process": "Importación Tabular Excel/CSV",
+        "area": findings_list[0]["responsible_area"] if findings_list else "Operaciones",
+        "period": "2026",
+        "auditor": "Auditoría Interna",
+        "summary": f"Importación relacional desde planilla ({len(findings_list)} hallazgos).",
+        "source_filename": filename
+    }
+    return {"report": report_dict, "findings": findings_list}
+
