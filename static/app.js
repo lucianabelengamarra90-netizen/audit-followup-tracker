@@ -421,10 +421,17 @@ async function loadAllData(silent = false) {
 
         if (seq !== globalDataSeq) return;
 
-        currentFindings = dataF.findings || [];
-        currentProposals = dataP.proposals || [];
-        currentActionPlans = dataPA.action_plans || [];
-        currentReports = dataR.reports || [];
+        // Never erase an already displayed dataset because of malformed or transient responses.
+        if (![dataF.findings, dataP.proposals, dataPA.action_plans, dataR.reports].every(Array.isArray)) {
+            throw new Error("La sincronización devolvió datos incompletos; se conserva la última vista válida.");
+        }
+        if (currentFindings.length > 0 && dataF.findings.length === 0) {
+            throw new Error("El servidor devolvió inesperadamente cero hallazgos; se conserva la última vista. Recargá para confirmar una eliminación intencional.");
+        }
+        currentFindings = dataF.findings;
+        currentProposals = dataP.proposals;
+        currentActionPlans = dataPA.action_plans;
+        currentReports = dataR.reports;
 
         populateFilterDropdowns();
         populateExecutiveFilterDropdowns();
@@ -746,11 +753,15 @@ function renderAuditTrackTable(items) {
     });
 
     if (countSpan) {
-        countSpan.textContent = `Mostrando ${renderedRowCount} de ${currentFindings.length} hallazgos`;
+        const filtersActive = Object.values(activeFilters).some(Boolean);
+        countSpan.textContent = `Mostrando ${renderedRowCount} filas de ${currentFindings.length} hallazgos guardados` + (filtersActive ? " (vista filtrada)" : "");
     }
 
     if (!renderedRowCount) {
-        tbody.innerHTML = `<tr><td colspan="13" style="text-align: center; color: #64748b; padding: 36px;">No hay hallazgos con los filtros aplicados. Cargar informe arriba.</td></tr>`;
+        const filtersActive = Object.values(activeFilters).some(Boolean);
+        tbody.innerHTML = filtersActive && currentFindings.length
+            ? `<tr><td colspan="13" style="text-align:center; padding:36px;">Hay ${currentFindings.length} hallazgos guardados, pero ninguno coincide con los filtros activos. <button type="button" class="btn btn-outlined" onclick="clearFilters()">Mostrar todos los hallazgos</button></td></tr>`
+            : `<tr><td colspan="13" style="text-align:center; color:#64748b; padding:36px;">No hay hallazgos disponibles.</td></tr>`;
         return;
     }
 
