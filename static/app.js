@@ -3190,6 +3190,11 @@ function applyRolePermissions() {
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", () => {
+    // This is a findings keyword filter, NOT a username field.
+    // Never apply browser-restored credentials as a hidden filter on page load.
+    const keywordFilter = el("globalSearchInput");
+    if (keywordFilter) keywordFilter.value = "";
+    activeFilters.search = "";
     switchTab("hallazgos");
     initUserSession();
     syncDataWithServer(true);
