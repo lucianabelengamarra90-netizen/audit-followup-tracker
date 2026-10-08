@@ -898,7 +898,7 @@ def update_finding(finding_id, data, user_name="Auditoría Interna"):
                         UPDATE action_plans SET status = 'En proceso', progress_pct = 0, closed_date = NULL, validated_at = NULL, validated_by = NULL
                         WHERE proposal_id IN (SELECT id FROM proposals WHERE finding_id = ?)
                           AND status != 'En suspensión'
-                          AND (status IN ('Finalizado', 'Pendiente de validación') OR progress_pct = 100)
+                          -- Explicitly reopening the parent resets progress for every active child plan.
                     """, (actual_finding_id,))
 
         conn.commit()
@@ -977,7 +977,7 @@ def update_proposal(proposal_id, data, user_name="Auditoría Interna"):
                         UPDATE action_plans 
                         SET status = 'En proceso', progress_pct = 0, closed_date = NULL, validated_at = NULL, validated_by = NULL
                         WHERE proposal_id = ? AND status != 'En suspensión'
-                          AND (status IN ('Finalizado', 'Pendiente de validación') OR progress_pct = 100)
+                          -- Explicitly reopening the parent resets progress for every active child plan.
                     """, (actual_proposal_id,))
 
                 if finding_id:
