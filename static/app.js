@@ -1003,6 +1003,7 @@ function toggleTraceRow(rowId, findingId) {
 // ============================================================
 
 let currentProposalViewMode = "all"; // "all" or "repo"
+let proposalKpiFilter = "all"; // all, in_process, completed, no_plan
 let proposalFilters = {
     report_id: "",
     area: "",
@@ -1012,6 +1013,7 @@ let proposalFilters = {
 
 function switchProposalView(mode) {
     currentProposalViewMode = mode;
+    proposalKpiFilter = mode === "repo" ? "completed" : "all";
     const btnAll = el("subtabAllProp");
     const btnRepo = el("subtabRepoProp");
 
@@ -1050,6 +1052,14 @@ function populateProposalFilterDropdowns() {
     }
 }
 
+function selectProposalKpiFilter(kind) {
+    // Clicking the same KPI again returns to the complete list.
+    proposalKpiFilter = proposalKpiFilter === kind ? "all" : kind;
+    switchProposalView("all");
+    proposalKpiFilter = kind;
+    renderProposalsTab();
+}
+
 function applyProposalFilters() {
     proposalFilters.report_id = el("filterPropReportSelect")?.value || "";
     proposalFilters.area = el("filterPropAreaSelect")?.value || "";
@@ -1064,7 +1074,8 @@ function clearProposalFilters() {
     if (el("filterPropStatusSelect")) el("filterPropStatusSelect").value = "";
     if (el("filterPropRiskSelect")) el("filterPropRiskSelect").value = "";
     proposalFilters = { report_id: "", area: "", status: "", risk: "" };
-    renderProposalsTab();
+    proposalKpiFilter = "all";
+    switchProposalView("all");
 }
 
 async function archiveProposal(proposalId) {
@@ -1119,8 +1130,7 @@ function isOpenProposalWithoutPlan(proposal) {
 }
 
 function showProposalsWithoutPlans() {
-    proposalFilters.no_plan = !proposalFilters.no_plan;
-    switchProposalView("all");
+    selectProposalKpiFilter("no_plan");
 }
 
 function renderProposalsTab() {
@@ -1129,26 +1139,40 @@ function renderProposalsTab() {
 
     populateProposalFilterDropdowns();
 
-    // Filter proposals based on active filters & mode
-    let filtered = currentProposals.filter(p => {
-        const effStatus = getRowEffectiveStatus(p, p);
-        if (currentProposalViewMode === "repo") {
-            const isFinished = isFinalized(p);
-            if (!isFinished) return false;
-        }
+    // KPI counts are calculated from the common report/area/status/risk scope,
+    // before the selected KPI detail filter is applied.
+    const baseFiltered = currentProposals.filter(p => {
+        const effStatus = p.effective_status || getRowEffectiveStatus(p, p);
         if (proposalFilters.report_id && p.report_id !== proposalFilters.report_id) return false;
         if (proposalFilters.area && p.responsible_area !== proposalFilters.area) return false;
         if (proposalFilters.status && !isStatusEqual(effStatus, proposalFilters.status)) return false;
         if (proposalFilters.risk && (p.finding_severity || p.severity) !== proposalFilters.risk) return false;
-        if (proposalFilters.no_plan && !isOpenProposalWithoutPlan(p)) return false;
         return true;
     });
-
-    if (el("propKpiTotal")) el("propKpiTotal").textContent = filtered.length;
-    if (el("propKpiNoPlan")) el("propKpiNoPlan").textContent = filtered.filter(isOpenProposalWithoutPlan).length;
-    if (el("propKpiInProcess")) el("propKpiInProcess").textContent = filtered.filter(p => ["En proceso", "Vencido"].includes(getRowEffectiveStatus(p, p))).length;
-    if (el("propKpiCompleted")) el("propKpiCompleted").textContent = filtered.filter(isFinalized).length;
-    if (el("propNoPlanLabel")) el("propNoPlanLabel").textContent = proposalFilters.no_plan ? "Abiertas sin plan · Quitar filtro" : "Abiertas sin plan · Ver detalle";
+    const inProcess = p => ["En proceso", "Vencido"].includes(p.effective_status || getRowEffectiveStatus(p, p));
+    const completed = p => isFinalized(p);
+    if (el("propKpiTotal")) el("propKpiTotal").textContent = baseFiltered.length;
+    if (el("propKpiNoPlan")) el("propKpiNoPlan").textContent = baseFiltered.filter(isOpenProposalWithoutPlan).length;
+    if (el("propKpiInProcess")) el("propKpiInProcess").textContent = baseFiltered.filter(inProcess).length;
+    if (el("propKpiCompleted")) el("propKpiCompleted").textContent = baseFiltered.filter(completed).length;
+    const activeKpi = currentProposalViewMode === "repo" ? "completed" : proposalKpiFilter;
+    const matchesKpi = p => activeKpi === "all" ||
+        (activeKpi === "no_plan" && isOpenProposalWithoutPlan(p)) ||
+        (activeKpi === "in_process" && inProcess(p)) ||
+        (activeKpi === "completed" && completed(p));
+    const filtered = baseFiltered.filter(matchesKpi);
+    const labels = { all: "Total Propuestas", no_plan: "Abiertas sin plan", in_process: "En Implementación", completed: "Finalizadas / Archivadas" };
+    if (el("propNoPlanLabel")) el("propNoPlanLabel").textContent = "Abiertas sin plan · Ver detalle";
+    ["all", "no_plan", "in_process", "completed"].forEach(k => {
+        const card = el("propKpiCard_" + k);
+        if (card) {
+            card.setAttribute("aria-pressed", String(activeKpi === k));
+            card.style.outline = activeKpi === k ? "2px solid #0055D4" : "none";
+            card.style.outlineOffset = "-2px";
+        }
+    });
+    const detailTitle = el("proposalKpiDetailTitle");
+    if (detailTitle) detailTitle.textContent = labels[activeKpi] + " · " + filtered.length + " propuestas";
 
     if (!filtered.length) {
         const msg = currentProposalViewMode === "repo"
