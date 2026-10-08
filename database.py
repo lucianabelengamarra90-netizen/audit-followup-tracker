@@ -891,12 +891,14 @@ def update_finding(finding_id, data, user_name="Auditoría Interna"):
                     """, (today_str, actual_finding_id))
                 elif st_clean == "En proceso":
                     cursor.execute("""
-                        UPDATE proposals SET status = 'En proceso'
+                        UPDATE proposals SET status = 'En proceso', validated_at = NULL, validated_by = NULL
                         WHERE finding_id = ? AND status = 'Finalizado'
                     """, (actual_finding_id,))
                     cursor.execute("""
-                        UPDATE action_plans SET status = 'En proceso', closed_date = NULL
-                        WHERE proposal_id IN (SELECT id FROM proposals WHERE finding_id = ?) AND status = 'Finalizado'
+                        UPDATE action_plans SET status = 'En proceso', progress_pct = 0, closed_date = NULL, validated_at = NULL, validated_by = NULL
+                        WHERE proposal_id IN (SELECT id FROM proposals WHERE finding_id = ?)
+                          AND status != 'En suspensión'
+                          AND (status IN ('Finalizado', 'Pendiente de validación') OR progress_pct = 100)
                     """, (actual_finding_id,))
 
         conn.commit()
@@ -948,6 +950,9 @@ def update_proposal(proposal_id, data, user_name="Auditoría Interna"):
         if len(fields) <= 1:
             return False
 
+        if data.get("status") is not None and normalize_status(data["status"]) == "En proceso":
+            fields.extend(["validated_at = NULL", "validated_by = NULL"])
+
         params.append(actual_proposal_id)
         params.append(actual_proposal_id)
         sql = f"UPDATE proposals SET {', '.join(fields)} WHERE id = ? OR code = ?"
@@ -970,8 +975,9 @@ def update_proposal(proposal_id, data, user_name="Auditoría Interna"):
                 elif st_clean == "En proceso":
                     cursor.execute("""
                         UPDATE action_plans 
-                        SET status = 'En proceso', closed_date = NULL
-                        WHERE proposal_id = ? AND status = 'Finalizado'
+                        SET status = 'En proceso', progress_pct = 0, closed_date = NULL, validated_at = NULL, validated_by = NULL
+                        WHERE proposal_id = ? AND status != 'En suspensión'
+                          AND (status IN ('Finalizado', 'Pendiente de validación') OR progress_pct = 100)
                     """, (actual_proposal_id,))
 
                 if finding_id:
@@ -1023,7 +1029,7 @@ def get_all_proposals(filters=None):
     cursor = conn.cursor()
     query = """
         SELECT p.*, f.code as finding_code, f.title as finding_title, f.severity as finding_severity,
-               r.code as report_code, r.title as report_title, r.source_filename
+               r.id as report_id, r.code as report_code, r.title as report_title, r.source_filename
         FROM proposals p
         JOIN findings f ON p.finding_id = f.id
         JOIN reports r ON f.report_id = r.id
@@ -1283,6 +1289,12 @@ def update_action_plan(plan_id, status=None, progress_pct=None, notes=None, targ
         if status is not None:
             req_status = normalize_status(status)
 
+        # Explicit reopening clears the completed percentage, including stale modal values.
+        if status is not None and req_status == "En proceso" and (
+            curr_status in ("Finalizado", "Pendiente de validación") or curr_pct == 100
+        ):
+            target_pct = 0
+
         if req_status == "Finalizado":
             target_pct = 100
 
@@ -1409,7 +1421,10 @@ def get_dashboard_stats():
         risk_breakdown[sev] = risk_breakdown.get(sev, 0) + r["cnt"]
 
     cursor.execute("SELECT status, COUNT(*) as cnt FROM findings GROUP BY status")
-    status_breakdown = {normalize_status(r["status"]): r["cnt"] for r in cursor.fetchall()}
+    status_breakdown = {}
+    for row in cursor.fetchall():
+        state = normalize_status(row["status"])
+        status_breakdown[state] = status_breakdown.get(state, 0) + row["cnt"]
 
     cursor.execute("""
         SELECT responsible_area, COUNT(*) as total,
@@ -1619,6 +1634,21 @@ def get_executive_kpis(filters=None):
         """, w_susp)
         suspended_overdue_cnt = cursor.fetchone()[0] or 0
 
+        # Count proposal states independently of formal validation and child plan count.
+        cursor.execute(f"""
+            SELECT DISTINCT p.id, p.status
+            FROM proposals p
+            JOIN findings f ON p.finding_id = f.id
+            JOIN reports r ON f.report_id = r.id
+            LEFT JOIN action_plans pa ON pa.proposal_id = p.id
+            {where_str}
+        """, params)
+        proposal_states = {state: 0 for state in (
+            "En proceso", "En suspensión", "Pendiente de validación", "Finalizado"
+        )}
+        for row in cursor.fetchall():
+            proposal_states[normalize_status(row["status"])] += 1
+
         # 3. Implementación Validada
         cursor.execute(f"""
             SELECT COUNT(DISTINCT p.id)
@@ -1791,12 +1821,8 @@ def get_executive_kpis(filters=None):
             JOIN proposals p ON pa.proposal_id = p.id
             JOIN findings f ON p.finding_id = f.id
             JOIN reports r ON f.report_id = r.id
-            WHERE (
-               (pa.target_date IS NOT NULL AND pa.target_date != '' AND pa.target_date < ? AND LOWER(pa.status) NOT IN ('finalizado', 'completado', 'cerrado', 'en suspensión', 'en suspension', 'stand-by'))
-               OR (pa.progress_pct = 100 OR LOWER(pa.status) = 'pendiente de validación') AND LOWER(pa.status) NOT IN ('finalizado', 'validado', 'cerrado')
-            )
-            {" AND " + " AND ".join(w_clauses) if w_clauses else ""}
-        """, [today_str] + params)
+            {where_overdue}
+        """, w_overdue)
 
         agenda_items = []
         for r in cursor.fetchall():
@@ -1810,9 +1836,12 @@ def get_executive_kpis(filters=None):
                 except Exception:
                     pass
 
+            if days_ov <= 0:
+                continue
+
             p_pct = r["progress_pct"] or 0
             p_stat = r["plan_status"]
-            sev = r["finding_severity"] or r["proposal_severity"] or "Medio"
+            sev = normalize_severity(r["finding_severity"] or r["proposal_severity"])
 
             if p_pct == 100 or str(p_stat).lower() == "pendiente de validación":
                 next_act = "Validación formal por auditoría"
@@ -1905,6 +1934,7 @@ def get_executive_kpis(filters=None):
             })
 
         formatted_charts = {
+            "proposal_states": proposal_states,
             "by_area": area_chart_list,
             "aging": {
                 "1_30": aging_counts.get("1-30 días", 0),

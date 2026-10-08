@@ -128,7 +128,7 @@ function getRowEffectiveStatus(item, prop) {
     const clean = raw.toString().trim().toLowerCase();
 
     // 1. Si estado = Finalizado -> estado efectivo = Finalizado
-    if (["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"].includes(clean)) {
+    if (["finalizado", "finalizada", "completada", "completado", "cerrado", "cerrada", "implementado", "implementada", "archivada"].includes(clean)) {
         return "Finalizado";
     }
 
@@ -157,8 +157,8 @@ function isStatusEqual(s1, s2) {
     const clean2 = s2.toString().trim().toLowerCase();
     if (clean1 === clean2) return true;
 
-    const isFinished1 = ["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"].includes(clean1);
-    const isFinished2 = ["finalizado", "finalizada", "completada", "completado", "implementada", "archivada"].includes(clean2);
+    const isFinished1 = ["finalizado", "finalizada", "completada", "completado", "cerrado", "cerrada", "implementado", "implementada", "archivada"].includes(clean1);
+    const isFinished2 = ["finalizado", "finalizada", "completada", "completado", "cerrado", "cerrada", "implementado", "implementada", "archivada"].includes(clean2);
     if (isFinished1 && isFinished2) return true;
 
     const isSuspended1 = ["en suspensión", "en suspension", "stand-by"].includes(clean1);
@@ -637,7 +637,7 @@ function filterAndRenderAll() {
         );
     }
     if (activeFilters.no_plan) {
-        filteredF = filteredF.filter(i => (i.action_plans_count || 0) === 0);
+        filteredF = filteredF.filter(i => (i.action_plans_count || 0) === 0 && !isFinalized(i));
     }
 
     renderAuditTrackTable(filteredF);
@@ -1099,34 +1099,45 @@ async function inlineUpdateProposalStatus(el) {
     }
 }
 
+function isFinalized(item) {
+    return getRowEffectiveStatus(item, item) === "Finalizado";
+}
+
+function isOpenProposalWithoutPlan(proposal) {
+    return !isFinalized(proposal) && Number(proposal.action_plans_count ?? proposal.action_plans?.length ?? 0) === 0;
+}
+
+function showProposalsWithoutPlans() {
+    proposalFilters.no_plan = !proposalFilters.no_plan;
+    switchProposalView("all");
+}
+
 function renderProposalsTab() {
     const tbody = el("proposalsTableBody");
     if (!tbody) return;
 
     populateProposalFilterDropdowns();
 
-    const total = currentProposals.length;
-    const noPlan = currentProposals.filter(p => (p.action_plans_count || 0) === 0).length;
-    const inProcess = currentProposals.filter(p => (p.status || "").toLowerCase() === "en proceso").length;
-    const completed = currentProposals.filter(p => ["finalizado", "completada", "implementada", "archivada"].includes((p.status || "").toLowerCase())).length;
-
-    if (el("propKpiTotal")) el("propKpiTotal").textContent = total;
-    if (el("propKpiNoPlan")) el("propKpiNoPlan").textContent = noPlan;
-    if (el("propKpiInProcess")) el("propKpiInProcess").textContent = inProcess;
-    if (el("propKpiCompleted")) el("propKpiCompleted").textContent = completed;
-
     // Filter proposals based on active filters & mode
     let filtered = currentProposals.filter(p => {
         const effStatus = getRowEffectiveStatus(p, p);
         if (currentProposalViewMode === "repo") {
-            const isFinished = ["finalizado", "completada", "implementada", "archivada"].includes(effStatus.toLowerCase());
+            const isFinished = isFinalized(p);
             if (!isFinished) return false;
         }
         if (proposalFilters.report_id && p.report_id !== proposalFilters.report_id) return false;
         if (proposalFilters.area && p.responsible_area !== proposalFilters.area) return false;
         if (proposalFilters.status && !isStatusEqual(effStatus, proposalFilters.status)) return false;
+        if (proposalFilters.risk && (p.finding_severity || p.severity) !== proposalFilters.risk) return false;
+        if (proposalFilters.no_plan && !isOpenProposalWithoutPlan(p)) return false;
         return true;
     });
+
+    if (el("propKpiTotal")) el("propKpiTotal").textContent = filtered.length;
+    if (el("propKpiNoPlan")) el("propKpiNoPlan").textContent = filtered.filter(isOpenProposalWithoutPlan).length;
+    if (el("propKpiInProcess")) el("propKpiInProcess").textContent = filtered.filter(p => ["En proceso", "Vencido"].includes(getRowEffectiveStatus(p, p))).length;
+    if (el("propKpiCompleted")) el("propKpiCompleted").textContent = filtered.filter(isFinalized).length;
+    if (el("propNoPlanLabel")) el("propNoPlanLabel").textContent = proposalFilters.no_plan ? "Abiertas sin plan · Quitar filtro" : "Abiertas sin plan · Ver detalle";
 
     if (!filtered.length) {
         const msg = currentProposalViewMode === "repo"
@@ -1456,7 +1467,9 @@ function onEditPlanStatusChange(val) {
         if (progressInput) progressInput.value = 100;
         if (alertBox) alertBox.style.display = "block";
     } else {
-        // Al reabrir o cambiar de estado, se conserva el porcentaje de avance existente (sin forzar 50%)
+        if (val === "En proceso" && progressInput && Number(progressInput.value) === 100) {
+            progressInput.value = 0;
+        }
         if (alertBox) alertBox.style.display = "none";
     }
 }
@@ -1538,7 +1551,7 @@ async function loadExecutiveDashboard() {
         renderExecutiveKpis(execData.kpis);
         renderExecutiveAreaChart(execData.charts ? execData.charts.by_area : []);
         renderExecutiveAgingChart(execData.charts ? execData.charts.aging : {});
-        renderExecutiveEffectivenessChart(execData.kpis);
+        renderExecutiveEffectivenessChart(execData.charts?.proposal_states || {});
         renderExecutiveAgendaTable(execData.agenda || []);
     } catch (err) {
         console.error("Error cargando Tablero Ejecutivo:", err);
@@ -1835,27 +1848,23 @@ function renderExecutiveAgingChart(agingData) {
     });
 }
 
-function renderExecutiveEffectivenessChart(kpis) {
+function renderExecutiveEffectivenessChart(states) {
     const canvas = el("execChartEffectiveness");
     const ctx = canvas?.getContext("2d");
     if (!ctx) return;
     if (chartInstances.execEffectiveness) chartInstances.execEffectiveness.destroy();
 
-    const validatedObj = kpis ? kpis.validated_implementation : null;
-    const countVal = validatedObj ? validatedObj.count || 0 : 0;
-    const totalVal = validatedObj ? validatedObj.total || 0 : 0;
-    const pendingVal = Math.max(0, totalVal - countVal);
-    const pendingValidationVal = kpis && kpis.pending_validation ? kpis.pending_validation.count || 0 : 0;
+    const labels = ["Finalizado", "Pendiente de validación", "En proceso", "En suspensión"];
 
     chartInstances.execEffectiveness = new Chart(ctx, {
         type: "bar",
         data: {
-            labels: ["Validadas", "Al 100% (Pend. Val.)", "En Proceso / Pend."],
+            labels,
             datasets: [
                 {
-                    label: "Propuestas / Compromisos",
-                    data: [countVal, pendingValidationVal, Math.max(0, pendingVal - pendingValidationVal)],
-                    backgroundColor: ["#10B981", "#2563EB", "#94A3B8"],
+                    label: "Propuestas",
+                    data: labels.map(label => states[label] || 0),
+                    backgroundColor: ["#10B981", "#2563EB", "#94A3B8", "#D97706"],
                     borderRadius: 6,
                     borderSkipped: false,
                     barPercentage: 0.6
@@ -1899,7 +1908,7 @@ function renderExecutiveAgendaTable(agendaItems) {
         tbody.innerHTML = `
             <tr>
                 <td colspan="7" class="text-center py-4 text-slate-500">
-                    <i class="fas fa-check-circle text-green-500 mr-2"></i>No hay compromisos vencidos ni pendientes de validación requeridos.
+                    <i class="fas fa-check-circle text-green-500 mr-2"></i>No hay compromisos vencidos para los filtros seleccionados.
                 </td>
             </tr>
         `;
@@ -3055,10 +3064,10 @@ function updateSidebarMetrics() {
         return;
     }
 
-    const openCount = currentFindings.filter(i => (i.status || "").toLowerCase() !== "completada").length;
+    const openCount = currentFindings.filter(i => !isFinalized(i)).length;
 
     let totalPlans = currentActionPlans.length;
-    let completedPlans = currentActionPlans.filter(pa => ["completada", "completado"].includes((pa.status||"").toLowerCase())).length;
+    let completedPlans = currentActionPlans.filter(isFinalized).length;
     let pct = totalPlans > 0 ? Math.round((completedPlans / totalPlans) * 100) : 0;
 
     if (openCountEl) openCountEl.textContent = openCount;

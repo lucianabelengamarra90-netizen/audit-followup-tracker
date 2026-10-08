@@ -254,7 +254,7 @@
                 <!-- 4 KPI Cards -->
                 <div class="kpi-grid">
                     <div class="kpi-card"><div class="kpi-label">Total Propuestas</div><div class="kpi-value" id="propKpiTotal">0</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Sin Plan de Acción</div><div class="kpi-value" style="color: #991B1B;" id="propKpiNoPlan">0</div></div>
+                    <button type="button" class="kpi-card" style="text-align:left; cursor:pointer;" onclick="showProposalsWithoutPlans()" title="Ver solo propuestas abiertas sin planes de acción; volver a pulsar para quitar el filtro"><div class="kpi-label" id="propNoPlanLabel">Abiertas sin plan · Ver detalle</div><div class="kpi-value" style="color: #991B1B;" id="propKpiNoPlan">0</div></button>
                     <div class="kpi-card"><div class="kpi-label">En Implementación</div><div class="kpi-value" style="color: #D97706;" id="propKpiInProcess">0</div></div>
                     <div class="kpi-card"><div class="kpi-label">Finalizadas / Archivadas</div><div class="kpi-value" style="color: #16A34A;" id="propKpiCompleted">0</div></div>
                 </div>
@@ -506,8 +506,8 @@
                     <!-- Gráfico 3: Estado de Implementación de Propuestas (Barras Horizontales) -->
                     <div class="card" style="padding: 18px; border-radius: 12px; box-shadow: 0 4px 20px -2px rgba(0,0,0,0.05); background: #FFFFFF;">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 14px;">
-                            <h3 style="font-size: 14px; color: #0F172A; font-weight: 700; margin:0;">📈 Estado de Implementación</h3>
-                            <span style="font-size: 11px; background: #DCFCE7; color: #166534; padding: 2px 8px; border-radius: 6px; font-weight:600;">Efectividad Cierres</span>
+                            <h3 style="font-size: 14px; color: #0F172A; font-weight: 700; margin:0;">📈 Propuestas por estado</h3>
+                            <span style="font-size: 11px; background: #DCFCE7; color: #166534; padding: 2px 8px; border-radius: 6px; font-weight:600;">Cantidad de propuestas</span>
                         </div>
                         <div style="position: relative; height: 260px;">
                             <canvas id="execChartEffectiveness"></canvas>
@@ -520,7 +520,7 @@
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
                         <div>
                             <h3 style="font-size: 15px; color: #0F172A; margin: 0;">Agenda de Seguimiento y Próximas Acciones</h3>
-                            <p style="font-size: 12px; color: #64748B; margin: 2px 0 0 0;">Compromisos vencidos y pendientes de validación ordenados por criticidad</p>
+                            <p style="font-size: 12px; color: #64748B; margin: 2px 0 0 0;">Solo compromisos vencidos: riesgo alto, medio y bajo; a igual riesgo, mayor atraso primero.</p>
                         </div>
                         <div style="display: flex; gap: 8px;">
                             <button class="btn btn-outlined" style="font-size: 11px;" onclick="loadExecutiveDashboard()">🔄 Actualizar</button>
@@ -531,12 +531,12 @@
                         <table class="audittrack-table" id="execAgendaTable">
                             <thead>
                                 <tr>
-                                    <th>Informe / Hallazgo</th>
+                                    <th>Código del plan</th>
                                     <th>Compromiso (Propuesta / Plan)</th>
-                                    <th>Área / Responsable</th>
-                                    <th>Fecha Compromiso</th>
+                                    <th>Área</th>
+                                    <th>Criticidad</th>
                                     <th>Días Atraso</th>
-                                    <th>Estado / Avance</th>
+                                    <th>Estado</th>
                                     <th>Próxima Acción</th>
                                 </tr>
                             </thead>
