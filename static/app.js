@@ -687,6 +687,10 @@ function renderAuditTrackTable(items) {
             let owner = (prop && prop.action_owner) ? prop.action_owner : (firstAction ? firstAction.action_owner : (item.action_owner || "Sin asignar"));
             let targetDate = (prop && prop.target_date) ? prop.target_date : (firstAction ? firstAction.target_date : "");
             let pct = firstAction ? (firstAction.progress_pct || 0) : 0;
+            const needsProgressReset = pct === 100 && (prop ? (prop.status === "En proceso") : (item.status === "En proceso"));
+            const resetProgressButton = needsProgressReset
+                ? `<button type="button" class="btn btn-outlined" style="font-size:10px;padding:2px 5px;margin-left:4px;" title="El estado está En proceso pero el plan conserva 100%. Guardar 0% en la base de datos." onclick="resetStaleProgress('${item.id}', '${prop ? prop.id : ''}')">Reiniciar a 0%</button>`
+                : "";
             let observations = item.observations || "";
 
             const currentRisk = item.severity || "Medio";
@@ -736,7 +740,7 @@ function renderAuditTrackTable(items) {
                             <div style="background:#CBD5E1; border-radius:4px; height:6px; flex:1; overflow:hidden;">
                                 <div style="background:#16A34A; width:${pct}%; height:100%;"></div>
                             </div>
-                            <span style="font-size:10px;">${pct}%</span>
+                            <span style="font-size:10px;">${pct}%</span>${resetProgressButton}
                         </div>
                     </td>
                     <td>
@@ -822,6 +826,26 @@ async function inlineUpdateFinding(el) {
     } catch (e) {
         showToast("Error de conexión al actualizar", "error");
         await loadAllData();
+    }
+}
+
+async function resetStaleProgress(findingId, proposalId) {
+    // Explicitly save a reopened state even when the dropdown already reads "En proceso".
+    const url = proposalId ? `/proposals/${encodeURIComponent(proposalId)}/update` : `/findings/${encodeURIComponent(findingId)}/update`;
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "En proceso" })
+        });
+        if (!res.ok) {
+            showToast("No se pudo reiniciar el avance.", "error");
+            return;
+        }
+        await loadAllData();
+        showToast("Avance reiniciado y guardado en 0%.", "success");
+    } catch (err) {
+        showToast("Error de conexión al reiniciar el avance.", "error");
     }
 }
 
