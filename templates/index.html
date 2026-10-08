@@ -253,10 +253,10 @@
 
                 <!-- 4 KPI Cards -->
                 <div class="kpi-grid">
-                    <div class="kpi-card"><div class="kpi-label">Total Propuestas</div><div class="kpi-value" id="propKpiTotal">0</div></div>
-                    <button type="button" class="kpi-card" style="text-align:left; cursor:pointer;" onclick="showProposalsWithoutPlans()" title="Ver solo propuestas abiertas sin planes de acción; volver a pulsar para quitar el filtro"><div class="kpi-label" id="propNoPlanLabel">Abiertas sin plan · Ver detalle</div><div class="kpi-value" style="color: #991B1B;" id="propKpiNoPlan">0</div></button>
-                    <div class="kpi-card"><div class="kpi-label">En Implementación</div><div class="kpi-value" style="color: #D97706;" id="propKpiInProcess">0</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Finalizadas / Archivadas</div><div class="kpi-value" style="color: #16A34A;" id="propKpiCompleted">0</div></div>
+                    <button type="button" class="kpi-card" id="propKpiCard_all" aria-pressed="true" style="text-align:left;cursor:pointer;" onclick="selectProposalKpiFilter('all')" title="Ver todas las propuestas"><div class="kpi-label">Total Propuestas · Ver detalle</div><div class="kpi-value" id="propKpiTotal">0</div></button>
+                    <button type="button" class="kpi-card" id="propKpiCard_no_plan" aria-pressed="false" style="text-align:left;cursor:pointer;" onclick="showProposalsWithoutPlans()" title="Ver propuestas abiertas sin planes"><div class="kpi-label" id="propNoPlanLabel">Abiertas sin plan · Ver detalle</div><div class="kpi-value" style="color:#991B1B;" id="propKpiNoPlan">0</div></button>
+                    <button type="button" class="kpi-card" id="propKpiCard_in_process" aria-pressed="false" style="text-align:left;cursor:pointer;" onclick="selectProposalKpiFilter('in_process')" title="Ver propuestas en implementación y vencidas"><div class="kpi-label">En Implementación · Ver detalle</div><div class="kpi-value" style="color:#D97706;" id="propKpiInProcess">0</div></button>
+                    <button type="button" class="kpi-card" id="propKpiCard_completed" aria-pressed="false" style="text-align:left;cursor:pointer;" onclick="selectProposalKpiFilter('completed')" title="Ver propuestas finalizadas y archivadas"><div class="kpi-label">Finalizadas / Archivadas · Ver detalle</div><div class="kpi-value" style="color:#16A34A;" id="propKpiCompleted">0</div></button>
                 </div>
 
                 <!-- Sub-toggle Tabs for All vs Repository -->
@@ -293,6 +293,7 @@
                     <button type="button" class="btn-link" onclick="clearProposalFilters()">Limpiar filtros</button>
                 </div>
 
+                <div id="proposalKpiDetailTitle" style="font-weight:600;margin-bottom:10px;" aria-live="polite">Total Propuestas</div>
                 <div class="table-card">
                     <table class="audittrack-table">
                         <thead>
