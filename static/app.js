@@ -1053,10 +1053,10 @@ function populateProposalFilterDropdowns() {
 }
 
 function selectProposalKpiFilter(kind) {
-    // Clicking the same KPI again returns to the complete list.
-    proposalKpiFilter = proposalKpiFilter === kind ? "all" : kind;
+    // Clicking the same selected card clears the detail filter.
+    const nextFilter = proposalKpiFilter === kind && kind !== "all" ? "all" : kind;
     switchProposalView("all");
-    proposalKpiFilter = kind;
+    proposalKpiFilter = nextFilter;
     renderProposalsTab();
 }
 
